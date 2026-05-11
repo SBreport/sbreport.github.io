@@ -352,6 +352,14 @@ html, body {
 .site-footer .dot {
   opacity: 0.5;
 }
+.site-footer .footer-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color .12s;
+}
+.site-footer .footer-link:hover {
+  color: var(--accent);
+}
 
 /* ===== Responsive ===== */
 @media (max-width: 720px) {
