@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>스마트브랜딩 — 페이지 모음</title>
+  <meta name="description" content="스마트브랜딩에서 운영하는 마케팅 실무자용 자료·도구 모음" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <h1>스마트브랜딩 페이지 모음</h1>
+      <p class="hero-sub">마케팅 실무자를 위한 자료·도구 아카이브</p>
+    </div>
+    <div class="hero-controls">
+      <button id="theme-toggle" aria-label="다크모드 전환">
+        <span class="theme-icon">🌙</span>
+        <span class="theme-label">다크</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="cards" aria-label="프로젝트 목록">
+
+      <a class="card" href="./naver-ai/" target="_self">
+        <div class="card-tags">
+          <span class="tag tag-doc">강의 자료</span>
+        </div>
+        <h2 class="card-title">네이버 AI 검색 대응 강의 메모</h2>
+        <p class="card-desc">
+          네이버 검색이 AI 기반으로 바뀌면서 무엇이 달라졌는지, 블로그 콘텐츠를 어떻게 설계해야 하는지 정리한 강의 메모입니다.
+          쉬운 버전·현업 버전·실행 가이드 3종으로 구성.
+        </p>
+        <div class="card-footer">
+          <span class="card-meta">5 PART · 부록 3종</span>
+          <span class="card-cta">열기 →</span>
+        </div>
+      </a>
+
+      <a class="card" href="https://sbreport.github.io/Report/" target="_blank" rel="noopener">
+        <div class="card-tags">
+          <span class="tag tag-tool">도구</span>
+          <span class="tag tag-ext">외부 링크</span>
+        </div>
+        <h2 class="card-title">유튜브 월간 보고서 생성기</h2>
+        <p class="card-desc">
+          YouTube Data API + AI 분석으로 채널의 월간 성과를 자동 정리해 보고서로 만드는 웹 도구입니다.
+          영상 단위 데이터 수집, 유입·유지율 분석, 전략 제안, HTML/노션 출력 지원.
+        </p>
+        <div class="card-footer">
+          <span class="card-meta">SPA · YouTube API · Anthropic API</span>
+          <span class="card-cta">열기 →</span>
+        </div>
+      </a>
+
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>스마트브랜딩</span>
+    <span class="dot">·</span>
+    <span>최종 업데이트 2026-05-11</span>
+  </footer>
+
+  <script>
+    function applyTheme(theme) {
+      document.documentElement.dataset.theme = theme;
+      const icon = document.querySelector('#theme-toggle .theme-icon');
+      const label = document.querySelector('#theme-toggle .theme-label');
+      if (icon && label) {
+        icon.textContent = theme === 'dark' ? '☀' : '🌙';
+        label.textContent = theme === 'dark' ? '라이트' : '다크';
+      }
+    }
+    applyTheme(localStorage.getItem('theme') || 'light');
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+      applyTheme(next);
+      localStorage.setItem('theme', next);
+    });
+  </script>
+</body>
+</html>

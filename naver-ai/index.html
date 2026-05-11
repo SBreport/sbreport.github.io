@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>네이버 AI 검색 대응 강의 메모</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+</head>
+<body>
+  <button id="toc-toggle" aria-label="목차 열기/닫기">☰ 목차</button>
+
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div id="version-switch" role="tablist" aria-label="버전 선택">
+        <button type="button" data-src="lecture-easy.md" class="ver-btn active">쉬운 버전</button>
+        <button type="button" data-src="playbook.md" class="ver-btn">실행 가이드</button>
+      </div>
+      <h2>목차</h2>
+      <input type="search" id="toc-search" placeholder="섹션 검색..." />
+    </div>
+    <nav id="toc"></nav>
+  </aside>
+
+  <main id="content-wrapper">
+    <article id="content">
+      <p class="loading">콘텐츠를 불러오는 중...</p>
+    </article>
+    <footer>
+      <button type="button" data-src="lecture.md" class="ver-btn-hidden" id="pro-version-link" title="현업 버전 (전문가용)">현업 버전</button>
+      <button id="theme-toggle" aria-label="다크모드 전환"><span class="theme-icon">🌙</span> <span class="theme-label">다크</span></button>
+      <button id="print-btn" aria-label="인쇄">🖨 인쇄</button>
+      <button id="top-btn" aria-label="맨 위로">↑ Top</button>
+    </footer>
+  </main>
+
+  <script>
+    // ===== 1. 마크다운 로드 & 렌더링 =====
+    async function loadLecture(src) {
+      src = src || localStorage.getItem('version') || 'lecture-easy.md';
+      document.getElementById('content').innerHTML = '<p class="loading">콘텐츠를 불러오는 중...</p>';
+      document.getElementById('toc').innerHTML = '';
+      try {
+        const res = await fetch(src + '?t=' + Date.now());
+        if (!res.ok) throw new Error('파일을 찾을 수 없습니다 (' + src + ')');
+        const md = await res.text();
+
+        marked.setOptions({ gfm: true, breaks: false, headerIds: true });
+
+        // 헤딩에 id 부여 (TOC용) — Pandoc 스타일 {#anchor} 처리 + slug fallback
+        const renderer = new marked.Renderer();
+        const slugify = (text) => {
+          const stripped = String(text).replace(/<[^>]+>/g, '');
+          return 'h-' + stripped.trim().replace(/\s+/g, '-').replace(/[^\w가-힣\-]/g, '');
+        };
+        renderer.heading = (text, level) => {
+          // {#xxx} 형식 앵커가 있으면 그것을 id로 사용하고 텍스트에서 제거
+          let displayText = text;
+          let id = '';
+          const m = text.match(/\s*\{#([^}]+)\}\s*$/);
+          if (m) {
+            id = m[1];
+            displayText = text.replace(/\s*\{#[^}]+\}\s*$/, '');
+          } else {
+            id = slugify(text);
+          }
+          return `<h${level} id="${id}">${displayText}</h${level}>`;
+        };
+
+        const html = marked.parse(md, { renderer });
+        document.getElementById('content').innerHTML = html;
+        buildTOC();
+      } catch (err) {
+        document.getElementById('content').innerHTML =
+          `<div class="error">⚠ 로드 실패: ${err.message}<br><br>` +
+          `브라우저에서 직접 열면 fetch가 차단됩니다.<br>` +
+          `이 폴더에서 <code>python -m http.server 8000</code> 실행 후 ` +
+          `<code>http://localhost:8000</code> 접속하세요.</div>`;
+      }
+    }
+
+    // ===== 2. 사이드바 TOC 자동 생성 (h2, h3) =====
+    // 카드 마커 헤딩(💡 WHY / 🎯 ACTION / 🔍 CHECK / ⚠ WATCH OUT / ➡ DECIDE)은 TOC에서 제외
+    const CARD_MARKERS = /^(💡|🎯|🔍|⚠|➡)/;
+    function buildTOC() {
+      const headings = document.querySelectorAll('#content h2, #content h3');
+      const toc = document.getElementById('toc');
+      const ul = document.createElement('ul');
+      headings.forEach(h => {
+        const text = h.textContent.trim();
+        if (CARD_MARKERS.test(text)) {
+          h.classList.add('card-marker');
+          return; // TOC에서 제외
+        }
+        const li = document.createElement('li');
+        li.className = 'toc-' + h.tagName.toLowerCase();
+        const a = document.createElement('a');
+        a.href = '#' + h.id;
+        a.textContent = text;
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', '#' + h.id);
+          if (window.innerWidth < 900) document.body.classList.remove('sidebar-open');
+        });
+        li.appendChild(a);
+        ul.appendChild(li);
+      });
+      toc.innerHTML = '';
+      toc.appendChild(ul);
+    }
+
+    // ===== 3. 검색 필터 =====
+    document.getElementById('toc-search').addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase();
+      document.querySelectorAll('#toc li').forEach(li => {
+        const match = li.textContent.toLowerCase().includes(q);
+        li.style.display = match ? '' : 'none';
+      });
+    });
+
+    // ===== 4. 사이드바 토글 (모바일) =====
+    document.getElementById('toc-toggle').addEventListener('click', () => {
+      document.body.classList.toggle('sidebar-open');
+    });
+
+    // ===== 5. 다크모드 =====
+    function applyTheme(theme) {
+      document.documentElement.dataset.theme = theme;
+      const icon = document.querySelector('#theme-toggle .theme-icon');
+      const label = document.querySelector('#theme-toggle .theme-label');
+      if (icon && label) {
+        if (theme === 'dark') {
+          icon.textContent = '☀';
+          label.textContent = '라이트';
+        } else {
+          icon.textContent = '🌙';
+          label.textContent = '다크';
+        }
+      }
+    }
+    applyTheme(localStorage.getItem('theme') || 'light');
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      const cur = document.documentElement.dataset.theme;
+      const next = cur === 'light' ? 'dark' : 'light';
+      applyTheme(next);
+      localStorage.setItem('theme', next);
+    });
+
+    // ===== 6. 인쇄 =====
+    document.getElementById('print-btn').addEventListener('click', () => window.print());
+
+    // ===== 7. 맨 위로 =====
+    document.getElementById('top-btn').addEventListener('click', () => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    // ===== 8. 스크롤 시 현재 섹션 하이라이트 =====
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const id = entry.target.id;
+          document.querySelectorAll('#toc a').forEach(a => {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + id);
+          });
+        }
+      });
+    }, { rootMargin: '-30% 0px -60% 0px' });
+
+    // 콘텐츠 로드 후 옵저버 연결
+    const reobserve = () => {
+      document.querySelectorAll('#content h2, #content h3').forEach(h => observer.observe(h));
+    };
+
+    // ===== 9. 버전 선택기 =====
+    // 기본값을 lecture-easy로 전환하면서 기존 사용자 한 번 리셋
+    if (!localStorage.getItem('default-migrated-v2')) {
+      localStorage.removeItem('version');
+      localStorage.setItem('default-migrated-v2', '1');
+    }
+    const savedVersion = localStorage.getItem('version') || 'lecture-easy.md';
+    // .ver-btn (메인 토글) + #pro-version-link (숨겨진 현업 버전) 모두 처리
+    document.querySelectorAll('[data-src]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.src === savedVersion);
+      btn.addEventListener('click', async () => {
+        const src = btn.dataset.src;
+        document.querySelectorAll('[data-src]').forEach(b => b.classList.toggle('active', b === btn));
+        localStorage.setItem('version', src);
+        await loadLecture(src);
+        reobserve();
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      });
+    });
+
+    loadLecture(savedVersion).then(reobserve);
+  </script>
+</body>
+</html>
