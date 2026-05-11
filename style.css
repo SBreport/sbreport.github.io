@@ -14,17 +14,24 @@
   --border-soft: #eaeef2;
   --accent: #0969da;
   --accent-soft: #dbeafe;
-  /* 카테고리별 색상 시스템 — 좌측 보더 + 태그 컬러 동기화 */
-  --cat-doc-bg: #ddf4ff;       /* 강의·자료 (파랑) */
-  --cat-doc-fg: #0969da;
-  --cat-tool-bg: #dafbe1;      /* 실무 도구 (초록) */
-  --cat-tool-fg: #1a7f37;
-  --cat-internal-bg: #fff8c5;  /* 내부 자료·온보딩 (앰버) */
-  --cat-internal-fg: #9a6700;
-  --cat-ext-bg: #d9eef5;       /* 확장 프로그램 (티얼) */
-  --cat-ext-fg: #1f6f8c;
-  --cat-misc-bg: #ffe4d6;      /* 기타 (코랄) */
-  --cat-misc-fg: #b8410e;
+
+  /* === 플랫폼 색상 (data-platform) === */
+  --plat-naver: #1a7f37;        /* 네이버 — 녹색 */
+  --plat-youtube: #cf222e;      /* 유튜브 — 빨강 */
+  --plat-onboarding: #0969da;   /* 온보딩(내부) — 파랑 */
+  --plat-default: #6e7781;      /* 미지정 — 회색 */
+
+  /* === 유형 색상 (data-type) === */
+  --type-doc: #d4a72c;          /* 문서 — 노랑 */
+  --type-tool: #8250df;         /* 도구 — 보라 */
+  --type-default: #6e7781;      /* 미지정 — 회색 */
+
+  /* === 태그 색상 (배경+글씨, 플랫폼/유형 색상 기반) === */
+  --tag-naver-bg: #dafbe1;    --tag-naver-fg: #1a7f37;
+  --tag-youtube-bg: #ffe4e6;  --tag-youtube-fg: #cf222e;
+  --tag-onboarding-bg: #ddf4ff; --tag-onboarding-fg: #0969da;
+  --tag-doc-bg: #fff8c5;      --tag-doc-fg: #9a6700;
+  --tag-tool-bg: #ece4ff;     --tag-tool-fg: #6639b6;
   --shadow: 0 1px 3px rgba(0,0,0,.06);
   --shadow-hover: 0 4px 12px rgba(0,0,0,.08);
 
@@ -41,16 +48,21 @@
   --border-soft: #21262d;
   --accent: #58a6ff;
   --accent-soft: #1f3a5f;
-  --cat-doc-bg: #1f3a5f;
-  --cat-doc-fg: #79c0ff;
-  --cat-tool-bg: #1a3a26;
-  --cat-tool-fg: #56d364;
-  --cat-internal-bg: #3a3000;
-  --cat-internal-fg: #e3b341;
-  --cat-ext-bg: #14334a;
-  --cat-ext-fg: #6cb6cf;
-  --cat-misc-bg: #3d1a0c;
-  --cat-misc-fg: #ff9f7a;
+
+  /* 다크모드 플랫폼/유형 색상 */
+  --plat-naver: #3fb950;
+  --plat-youtube: #ff7b72;
+  --plat-onboarding: #58a6ff;
+  --plat-default: #8b949e;
+  --type-doc: #e3b341;
+  --type-tool: #b87aff;
+  --type-default: #8b949e;
+
+  --tag-naver-bg: #1a3a26;    --tag-naver-fg: #56d364;
+  --tag-youtube-bg: #3d1a1f;  --tag-youtube-fg: #ff7b72;
+  --tag-onboarding-bg: #1f3a5f; --tag-onboarding-fg: #79c0ff;
+  --tag-doc-bg: #3a3000;      --tag-doc-fg: #e3b341;
+  --tag-tool-bg: #2a1a4f;     --tag-tool-fg: #b87aff;
   --shadow: 0 1px 3px rgba(0,0,0,.4);
   --shadow-hover: 0 4px 12px rgba(0,0,0,.5);
 }
@@ -77,21 +89,24 @@ html, body {
 .hero {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  padding: 28px 32px 20px;
+  align-items: center;
+  padding: 16px 32px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--bg);
+  max-width: 1280px;
+  margin: 0 auto;
+  width: 100%;
 }
 .hero-inner h1 {
-  margin: 0 0 6px;
-  font-size: 22px;
+  margin: 0 0 2px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: -.3px;
 }
 .hero-sub {
   margin: 0;
   color: var(--text-muted);
-  font-size: 13.5px;
+  font-size: 12.5px;
 }
 
 .hero-controls button {
@@ -119,9 +134,9 @@ html, body {
 .container {
   flex: 1;
   width: 100%;
-  max-width: 960px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 32px;
+  padding: 24px 32px 48px;
 }
 
 /* ===== Search Bar ===== */
@@ -180,98 +195,130 @@ html, body {
   font-size: 14px;
 }
 
-/* ===== Card Grid ===== */
+/* ===== Card Grid — 5열 자동 적응 ===== */
 .cards {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
 }
 
 .card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 20px 22px 20px 22px;
+  gap: 8px;
+  padding: 14px 14px 14px 20px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-left: 5px solid var(--border);  /* 카테고리별 컬러 보더 */
   border-radius: 8px;
   text-decoration: none;
   color: var(--text);
   box-shadow: var(--shadow);
-  transition: transform .14s, box-shadow .14s, border-left-width .14s;
+  transition: transform .14s, box-shadow .14s;
   position: relative;
+  min-height: 160px;
+  /* 플랫폼+유형 그라데이션 좌측 스트라이프 */
+  background-image: linear-gradient(
+    to bottom,
+    var(--card-plat, var(--plat-default)),
+    var(--card-type, var(--type-default))
+  );
+  background-size: 6px 100%;
+  background-repeat: no-repeat;
+  background-position: left top;
+  background-clip: border-box;
+  background-color: var(--bg-card);
 }
 .card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-hover);
-  border-left-width: 8px;
-  padding-left: 19px;  /* 보더 두꺼워진 만큼 보정 */
+  background-size: 9px 100%;
+  padding-left: 23px;
 }
+
+/* 플랫폼 컬러 매핑 */
+.card[data-platform="naver"]     { --card-plat: var(--plat-naver); }
+.card[data-platform="youtube"]   { --card-plat: var(--plat-youtube); }
+.card[data-platform="onboarding"]{ --card-plat: var(--plat-onboarding); }
+
+/* 유형 컬러 매핑 */
+.card[data-type="doc"]  { --card-type: var(--type-doc); }
+.card[data-type="tool"] { --card-type: var(--type-tool); }
 
 .card-tags {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 .tag {
   display: inline-block;
-  padding: 3px 10px;
-  border-radius: 4px;
-  font-size: 12px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: .3px;
+  letter-spacing: .2px;
   cursor: pointer;
   transition: filter .12s;
+  white-space: nowrap;
 }
 .tag:hover {
   filter: brightness(0.9);
 }
 
-/* 카테고리별 카드 컬러 (좌측 보더 + 태그 동기화) */
-.card:has(.tag-doc) { border-left-color: var(--cat-doc-fg); }
-.card:has(.tag-tool) { border-left-color: var(--cat-tool-fg); }
-.card:has(.tag-internal) { border-left-color: var(--cat-internal-fg); }
-.card:has(.tag-ext) { border-left-color: var(--cat-ext-fg); }
-.card:has(.tag-misc) { border-left-color: var(--cat-misc-fg); }
-
-.tag-doc { background: var(--cat-doc-bg); color: var(--cat-doc-fg); }
-.tag-tool { background: var(--cat-tool-bg); color: var(--cat-tool-fg); }
-.tag-internal { background: var(--cat-internal-bg); color: var(--cat-internal-fg); }
-.tag-ext { background: var(--cat-ext-bg); color: var(--cat-ext-fg); }
-.tag-misc { background: var(--cat-misc-bg); color: var(--cat-misc-fg); }
+/* 태그 컬러 — 플랫폼/유형 매핑 */
+.tag-naver      { background: var(--tag-naver-bg);      color: var(--tag-naver-fg); }
+.tag-youtube    { background: var(--tag-youtube-bg);    color: var(--tag-youtube-fg); }
+.tag-onboarding { background: var(--tag-onboarding-bg); color: var(--tag-onboarding-fg); }
+.tag-doc        { background: var(--tag-doc-bg);        color: var(--tag-doc-fg); }
+.tag-tool       { background: var(--tag-tool-bg);       color: var(--tag-tool-fg); }
+/* 기존 호환용 */
+.tag-internal   { background: var(--tag-onboarding-bg); color: var(--tag-onboarding-fg); }
+.tag-ext        { background: var(--tag-tool-bg);       color: var(--tag-tool-fg); }
+.tag-misc       { background: var(--tag-doc-bg);        color: var(--tag-doc-fg); }
 
 .card-title {
-  margin: 2px 0 0;
-  font-size: 18px;
-  font-weight: 800;
+  margin: 1px 0 0;
+  font-size: 14.5px;
+  font-weight: 700;
   line-height: 1.35;
   letter-spacing: -.2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .card-desc {
   margin: 0;
-  font-size: 13.5px;
+  font-size: 12px;
   color: var(--text-muted);
-  line-height: 1.55;
+  line-height: 1.5;
   flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .card-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 4px;
-  padding-top: 10px;
+  margin-top: 2px;
+  padding-top: 8px;
   border-top: 1px solid var(--border-soft);
-  font-size: 12.5px;
+  font-size: 11px;
+  gap: 4px;
 }
 .card-meta {
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .card-cta {
   color: var(--accent);
   font-weight: 700;
+  white-space: nowrap;
 }
 
 /* ===== Footer ===== */
@@ -292,19 +339,20 @@ html, body {
 /* ===== Responsive ===== */
 @media (max-width: 720px) {
   .hero {
-    padding: 20px 18px 16px;
+    padding: 14px 18px;
   }
   .hero-inner h1 {
-    font-size: 19px;
+    font-size: 16px;
   }
   .container {
-    padding: 20px 18px;
+    padding: 20px 18px 40px;
   }
   .cards {
-    grid-template-columns: 1fr;
-    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
   }
   .card {
-    padding: 16px 18px;
+    padding: 12px 12px 12px 18px;
+    min-height: 140px;
   }
 }
