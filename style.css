@@ -23,6 +23,7 @@
 
   /* === 유형 색상 (data-type) — 톤다운 === */
   --type-doc: #d4b86c;          /* 문서 — 톤다운 노랑(머스타드) */
+  --type-deploy: #e0834d;       /* 배포용 — 톤다운 코랄 */
   --type-tool: #9b87cb;         /* 도구 — 톤다운 보라(라벤더) */
   --type-default: #9da7b1;      /* 미지정 — 회색 */
 
@@ -31,6 +32,7 @@
   --tag-youtube-bg: #ffe4e6;  --tag-youtube-fg: #cf222e;
   --tag-onboarding-bg: #ddf4ff; --tag-onboarding-fg: #0969da;
   --tag-doc-bg: #fff8c5;      --tag-doc-fg: #9a6700;
+  --tag-deploy-bg: #ffe7d6;   --tag-deploy-fg: #b8410e;
   --tag-tool-bg: #ece4ff;     --tag-tool-fg: #6639b6;
   --shadow: 0 1px 3px rgba(0,0,0,.06);
   --shadow-hover: 0 4px 12px rgba(0,0,0,.08);
@@ -55,6 +57,7 @@
   --plat-onboarding: #7ab5e6;
   --plat-default: #8b949e;
   --type-doc: #d4b86c;
+  --type-deploy: #ff9b6e;
   --type-tool: #b39de0;
   --type-default: #8b949e;
 
@@ -62,6 +65,7 @@
   --tag-youtube-bg: #3d1a1f;  --tag-youtube-fg: #ff7b72;
   --tag-onboarding-bg: #1f3a5f; --tag-onboarding-fg: #79c0ff;
   --tag-doc-bg: #3a3000;      --tag-doc-fg: #e3b341;
+  --tag-deploy-bg: #3d1a08;   --tag-deploy-fg: #ff9b6e;
   --tag-tool-bg: #2a1a4f;     --tag-tool-fg: #b87aff;
   --shadow: 0 1px 3px rgba(0,0,0,.4);
   --shadow-hover: 0 4px 12px rgba(0,0,0,.5);
@@ -258,8 +262,9 @@ html, body {
 .card[data-platform="onboarding"]{ --card-plat: var(--plat-onboarding); }
 
 /* 유형 컬러 매핑 */
-.card[data-type="doc"]  { --card-type: var(--type-doc); }
-.card[data-type="tool"] { --card-type: var(--type-tool); }
+.card[data-type="doc"]    { --card-type: var(--type-doc); }
+.card[data-type="deploy"] { --card-type: var(--type-deploy); }
+.card[data-type="tool"]   { --card-type: var(--type-tool); }
 
 .card-tags {
   display: flex;
@@ -286,6 +291,7 @@ html, body {
 .tag-youtube    { background: var(--tag-youtube-bg);    color: var(--tag-youtube-fg); }
 .tag-onboarding { background: var(--tag-onboarding-bg); color: var(--tag-onboarding-fg); }
 .tag-doc        { background: var(--tag-doc-bg);        color: var(--tag-doc-fg); }
+.tag-deploy     { background: var(--tag-deploy-bg);     color: var(--tag-deploy-fg); }
 .tag-tool       { background: var(--tag-tool-bg);       color: var(--tag-tool-fg); }
 /* 기존 호환용 */
 .tag-internal   { background: var(--tag-onboarding-bg); color: var(--tag-onboarding-fg); }

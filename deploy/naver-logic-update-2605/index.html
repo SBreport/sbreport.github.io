@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>네이버 AI 검색, 의료 마케팅은 어떻게 대응해야 하는가 — 스마트브랜딩</title>
+  <meta name="description" content="네이버 AI 검색의 본질 변화와 의료 마케팅의 대응 전략. 검색자 의도 × 콘텐츠 타입 매트릭스 기반 보고서." />
+  <meta property="og:title" content="네이버 AI 검색, 의료 마케팅은 어떻게 대응해야 하는가" />
+  <meta property="og:description" content="검색자 의도에 따라 콘텐츠 타입이 결정됩니다. 키워드별 진입 가능성 진단부터 시작하세요." />
+  <meta property="og:type" content="article" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+</head>
+<body>
+  <a id="home-link" href="../../" title="홈으로">← 홈</a>
+  <button id="toc-toggle" aria-label="목차 열기/닫기">☰ 목차</button>
+
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div class="hb-meta">
+        <span class="hb-tag">스마트브랜딩 보고서</span>
+        <span class="hb-date">2026.05</span>
+      </div>
+      <h2 class="hb-title">네이버 AI 검색<br />의료 마케팅 대응 가이드</h2>
+      <input type="search" id="toc-search" placeholder="섹션 검색..." />
+    </div>
+    <nav id="toc"></nav>
+    <div class="sidebar-footer">
+      <button id="theme-toggle">
+        <span class="theme-icon">🌙</span> <span class="theme-label">다크</span>
+      </button>
+      <button id="print-btn">🖨 인쇄</button>
+    </div>
+  </aside>
+
+  <main id="content-wrapper">
+    <article id="content" class="report">
+      <p class="loading">보고서 불러오는 중...</p>
+    </article>
+  </main>
+
+  <script>
+    async function loadReport() {
+      try {
+        const res = await fetch('report.md?t=' + Date.now());
+        if (!res.ok) throw new Error('보고서 파일 로드 실패 (' + res.status + ')');
+        const md = await res.text();
+
+        marked.setOptions({ gfm: true, breaks: false });
+        const renderer = new marked.Renderer();
+        const slugify = (text) => {
+          const stripped = String(text).replace(/<[^>]+>/g, '');
+          return 'h-' + stripped.trim().replace(/\s+/g, '-').replace(/[^\w가-힣\-]/g, '');
+        };
+        renderer.heading = (text, level) => {
+          const id = slugify(text);
+          return `<h${level} id="${id}">${text}</h${level}>`;
+        };
+
+        document.getElementById('content').innerHTML = marked.parse(md, { renderer });
+        buildTOC();
+        observeHeadings();
+      } catch (err) {
+        document.getElementById('content').innerHTML =
+          `<div class="error">⚠ ${err.message}<br><br>` +
+          `report.md 파일이 아직 준비되지 않았거나 fetch가 차단된 상태입니다.<br>` +
+          `리포 루트에서 <code>python -m http.server 8000</code> 실행 후 접속하세요.</div>`;
+      }
+    }
+
+    function buildTOC() {
+      // h2, h3만 목차에 노출 (h4는 너무 세부)
+      const headings = document.querySelectorAll('#content h2, #content h3');
+      const toc = document.getElementById('toc');
+      const ul = document.createElement('ul');
+      headings.forEach(h => {
+        const li = document.createElement('li');
+        li.className = 'toc-' + h.tagName.toLowerCase();
+        const a = document.createElement('a');
+        a.href = '#' + h.id;
+        a.textContent = h.textContent;
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', '#' + h.id);
+          if (window.innerWidth < 900) document.body.classList.remove('sidebar-open');
+        });
+        li.appendChild(a);
+        ul.appendChild(li);
+      });
+      toc.innerHTML = '';
+      toc.appendChild(ul);
+    }
+
+    document.getElementById('toc-search').addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase();
+      document.querySelectorAll('#toc li').forEach(li => {
+        const match = li.textContent.toLowerCase().includes(q);
+        li.style.display = match ? '' : 'none';
+      });
+    });
+
+    document.getElementById('toc-toggle').addEventListener('click', () => {
+      document.body.classList.toggle('sidebar-open');
+    });
+
+    function applyTheme(theme) {
+      document.documentElement.dataset.theme = theme;
+      const icon = document.querySelector('#theme-toggle .theme-icon');
+      const label = document.querySelector('#theme-toggle .theme-label');
+      if (icon && label) {
+        icon.textContent = theme === 'dark' ? '☀' : '🌙';
+        label.textContent = theme === 'dark' ? '라이트' : '다크';
+      }
+    }
+    applyTheme(localStorage.getItem('theme') || 'light');
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+      applyTheme(next);
+      localStorage.setItem('theme', next);
+    });
+
+    document.getElementById('print-btn').addEventListener('click', () => window.print());
+
+    let observer = null;
+    function observeHeadings() {
+      if (observer) observer.disconnect();
+      observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const id = entry.target.id;
+            document.querySelectorAll('#toc a').forEach(a => {
+              a.classList.toggle('active', a.getAttribute('href') === '#' + id);
+            });
+          }
+        });
+      }, { rootMargin: '-30% 0px -60% 0px' });
+      document.querySelectorAll('#content h2, #content h3').forEach(h => observer.observe(h));
+    }
+
+    loadReport();
+  </script>
+</body>
+</html>
