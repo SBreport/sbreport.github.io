@@ -230,6 +230,20 @@ html, body {
   margin: 0 auto;
 }
 
+/* PART별 컬러 시스템 */
+:root {
+  --part1-color: #d97706;  /* WHY = 앰버/오렌지 */
+  --part2-color: #0969da;  /* WHAT = 블루 */
+  --part3-color: #1a7f37;  /* 인정받은 채널 = 그린 */
+  --part4-color: #8250df;  /* HOW = 퍼플 */
+}
+[data-theme="dark"] {
+  --part1-color: #f59e0b;
+  --part2-color: #58a6ff;
+  --part3-color: #3fb950;
+  --part4-color: #b87aff;
+}
+
 .loading, .error {
   padding: 24px;
   background: var(--bg-soft);
@@ -261,11 +275,51 @@ html, body {
   font-size: 22px;
   font-weight: 800;
   margin: 56px 0 20px;
-  padding-bottom: 10px;
+  padding: 8px 0 10px 16px;
   border-bottom: 2px solid var(--border);
+  border-left: 5px solid var(--border);
   line-height: 1.35;
   scroll-margin-top: 24px;
   color: var(--text);
+  background: linear-gradient(to right, var(--bg-soft) 0%, transparent 60%);
+}
+#content h2[id*="PART-1"] { border-left-color: var(--part1-color); }
+#content h2[id*="PART-2"] { border-left-color: var(--part2-color); }
+#content h2[id*="PART-3"] { border-left-color: var(--part3-color); }
+#content h2[id*="PART-4"] { border-left-color: var(--part4-color); }
+
+/* TL;DR (핵심요약) + 결론 박스 — 본문 핵심 메시지 강조 */
+#content h2[id*="TL"] + ol,
+#content h2[id*="핵심요약"] + ol,
+#content h2[id*="결론"] + p {
+  margin: 0 0 16px;
+  padding: 18px 22px;
+  background: var(--accent-soft);
+  border-left: 5px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  font-size: 15.5px;
+  font-weight: 500;
+  list-style-position: inside;
+}
+#content h2[id*="TL"] + ol li,
+#content h2[id*="핵심요약"] + ol li {
+  margin: 6px 0;
+}
+#content h2[id*="결론"] + p {
+  font-weight: 700;
+  font-size: 17px;
+  line-height: 1.6;
+}
+
+/* 4.2 진입 자리 수별 우선순위 — h4 박스 강조 */
+#content h4[id*="여러-개"],
+#content h4[id*="1개-있는"],
+#content h4[id*="0자리"] {
+  margin-top: 32px;
+  padding: 10px 14px;
+  background: var(--bg-soft);
+  border-left: 4px solid var(--accent);
+  border-radius: 0 6px 6px 0;
 }
 #content h3 {
   font-size: 18px;
@@ -289,7 +343,7 @@ html, body {
 
 #content strong {
   font-weight: 700;
-  color: var(--text);
+  color: var(--accent);
 }
 
 #content a {
@@ -314,11 +368,15 @@ html, body {
 
 #content blockquote {
   margin: 20px 0;
-  padding: 14px 18px;
+  padding: 16px 20px;
   background: var(--bg-callout);
-  border-left: 4px solid var(--accent);
+  border-left: 5px solid var(--accent);
   border-radius: 0 8px 8px 0;
   color: var(--text);
+  font-size: 15px;
+}
+#content blockquote strong {
+  color: var(--accent);
 }
 #content blockquote p:last-child {
   margin-bottom: 0;
@@ -359,8 +417,10 @@ html, body {
   vertical-align: top;
 }
 #content th {
-  background: var(--bg-soft);
+  background: var(--accent-soft);
   font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -.2px;
 }
 #content tr:nth-child(even) td {
   background: var(--table-stripe);
