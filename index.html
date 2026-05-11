@@ -26,6 +26,11 @@
     <div class="search-bar">
       <input type="search" id="hash-search" placeholder="#해시태그 검색 (예: 네이버, 유튜브, 온보딩)" autocomplete="off" />
       <button type="button" id="search-clear" aria-label="검색 지우기">×</button>
+      <select id="sort-select" aria-label="정렬">
+        <option value="platform">플랫폼순</option>
+        <option value="type">유형순</option>
+        <option value="default">기본순</option>
+      </select>
       <span id="search-count" class="search-count"></span>
     </div>
 
@@ -150,12 +155,42 @@
       localStorage.setItem('theme', next);
     });
 
-    // ===== 해시태그 검색 =====
+    // ===== 검색 + 정렬 =====
     const searchInput = document.getElementById('hash-search');
     const clearBtn = document.getElementById('search-clear');
+    const sortSelect = document.getElementById('sort-select');
     const countEl = document.getElementById('search-count');
     const emptyEl = document.getElementById('empty-state');
+    const cardContainer = document.querySelector('.cards');
     const cards = Array.from(document.querySelectorAll('.card'));
+    const originalOrder = [...cards]; // 기본순 보존
+
+    // 정렬 우선순위 정의 — 새 카테고리 추가 시 이 두 객체에만 추가
+    const PLATFORM_ORDER = { naver: 1, youtube: 2, onboarding: 3 };
+    const TYPE_ORDER = { doc: 1, tool: 2 };
+
+    function applySort(mode) {
+      let sorted;
+      if (mode === 'platform') {
+        sorted = [...originalOrder].sort((a, b) => {
+          const pa = PLATFORM_ORDER[a.dataset.platform] || 99;
+          const pb = PLATFORM_ORDER[b.dataset.platform] || 99;
+          if (pa !== pb) return pa - pb;
+          // 동일 플랫폼 내에서는 유형순(문서 → 도구)
+          return (TYPE_ORDER[a.dataset.type] || 99) - (TYPE_ORDER[b.dataset.type] || 99);
+        });
+      } else if (mode === 'type') {
+        sorted = [...originalOrder].sort((a, b) => {
+          const ta = TYPE_ORDER[a.dataset.type] || 99;
+          const tb = TYPE_ORDER[b.dataset.type] || 99;
+          if (ta !== tb) return ta - tb;
+          return (PLATFORM_ORDER[a.dataset.platform] || 99) - (PLATFORM_ORDER[b.dataset.platform] || 99);
+        });
+      } else {
+        sorted = originalOrder;
+      }
+      sorted.forEach(card => cardContainer.appendChild(card));
+    }
 
     function applySearch(query) {
       const q = query.replace(/^#/, '').trim().toLowerCase();
@@ -180,6 +215,11 @@
       searchInput.focus();
     });
 
+    sortSelect.addEventListener('change', e => {
+      localStorage.setItem('sortMode', e.target.value);
+      applySort(e.target.value);
+    });
+
     // 태그 클릭으로 검색
     document.querySelectorAll('.tag').forEach(tag => {
       tag.addEventListener('click', e => {
@@ -192,6 +232,10 @@
       });
     });
 
+    // 초기 적용 — 기본은 플랫폼순
+    const savedSort = localStorage.getItem('sortMode') || 'platform';
+    sortSelect.value = savedSort;
+    applySort(savedSort);
     applySearch('');
   </script>
 </body>

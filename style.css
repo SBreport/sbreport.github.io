@@ -15,16 +15,16 @@
   --accent: #0969da;
   --accent-soft: #dbeafe;
 
-  /* === 플랫폼 색상 (data-platform) === */
-  --plat-naver: #1a7f37;        /* 네이버 — 녹색 */
-  --plat-youtube: #cf222e;      /* 유튜브 — 빨강 */
-  --plat-onboarding: #0969da;   /* 온보딩(내부) — 파랑 */
-  --plat-default: #6e7781;      /* 미지정 — 회색 */
+  /* === 플랫폼 색상 (data-platform) — 톤다운 ===  */
+  --plat-naver: #4caf6e;        /* 네이버 — 톤다운 녹색 */
+  --plat-youtube: #e57373;      /* 유튜브 — 톤다운 빨강 */
+  --plat-onboarding: #5b9bd5;   /* 온보딩(내부) — 톤다운 파랑 */
+  --plat-default: #9da7b1;      /* 미지정 — 회색 */
 
-  /* === 유형 색상 (data-type) === */
-  --type-doc: #d4a72c;          /* 문서 — 노랑 */
-  --type-tool: #8250df;         /* 도구 — 보라 */
-  --type-default: #6e7781;      /* 미지정 — 회색 */
+  /* === 유형 색상 (data-type) — 톤다운 === */
+  --type-doc: #d4b86c;          /* 문서 — 톤다운 노랑(머스타드) */
+  --type-tool: #9b87cb;         /* 도구 — 톤다운 보라(라벤더) */
+  --type-default: #9da7b1;      /* 미지정 — 회색 */
 
   /* === 태그 색상 (배경+글씨, 플랫폼/유형 색상 기반) === */
   --tag-naver-bg: #dafbe1;    --tag-naver-fg: #1a7f37;
@@ -49,13 +49,13 @@
   --accent: #58a6ff;
   --accent-soft: #1f3a5f;
 
-  /* 다크모드 플랫폼/유형 색상 */
-  --plat-naver: #3fb950;
-  --plat-youtube: #ff7b72;
-  --plat-onboarding: #58a6ff;
+  /* 다크모드 플랫폼/유형 색상 — 톤다운 */
+  --plat-naver: #58c777;
+  --plat-youtube: #ff9b94;
+  --plat-onboarding: #7ab5e6;
   --plat-default: #8b949e;
-  --type-doc: #e3b341;
-  --type-tool: #b87aff;
+  --type-doc: #d4b86c;
+  --type-tool: #b39de0;
   --type-default: #8b949e;
 
   --tag-naver-bg: #1a3a26;    --tag-naver-fg: #56d364;
@@ -93,7 +93,7 @@ html, body {
   padding: 16px 32px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--bg);
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   width: 100%;
 }
@@ -134,7 +134,7 @@ html, body {
 .container {
   flex: 1;
   width: 100%;
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 24px 32px 48px;
 }
@@ -166,7 +166,7 @@ html, body {
 }
 #search-clear {
   position: absolute;
-  right: 78px;
+  right: 220px;
   top: 50%;
   transform: translateY(-50%);
   width: 22px;
@@ -180,6 +180,23 @@ html, body {
   line-height: 1;
   cursor: pointer;
   display: none;
+}
+#sort-select {
+  padding: 9px 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  min-width: 110px;
+}
+#sort-select:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 .search-count {
   font-size: 12.5px;
@@ -195,11 +212,11 @@ html, body {
   font-size: 14px;
 }
 
-/* ===== Card Grid — 5열 자동 적응 ===== */
+/* ===== Card Grid — 와이드 5열, 화면 축소 시 자동 적응 ===== */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
 }
 
 .card {
