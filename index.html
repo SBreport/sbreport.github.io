@@ -22,16 +22,25 @@
   </header>
 
   <main class="container">
+
+    <div class="search-bar">
+      <input type="search" id="hash-search" placeholder="#해시태그 검색 (예: 네이버, 유튜브, 온보딩)" autocomplete="off" />
+      <button type="button" id="search-clear" aria-label="검색 지우기">×</button>
+      <span id="search-count" class="search-count"></span>
+    </div>
+
     <section class="cards" aria-label="프로젝트 목록">
 
-      <a class="card" href="./naver-ai/" target="_self">
+      <a class="card" href="./docu/naverlogic2605/playbook/" target="_self" data-tags="네이버 SEO 블로그 검색 강의">
         <div class="card-tags">
-          <span class="tag tag-doc">강의 자료</span>
+          <span class="tag tag-doc">#네이버</span>
+          <span class="tag tag-doc">#SEO</span>
+          <span class="tag tag-doc">#블로그</span>
         </div>
         <h2 class="card-title">네이버 AI 검색 대응 강의 메모</h2>
         <p class="card-desc">
           네이버 검색이 AI 기반으로 바뀌면서 무엇이 달라졌는지, 블로그 콘텐츠를 어떻게 설계해야 하는지 정리한 강의 메모입니다.
-          쉬운 버전·현업 버전·실행 가이드 3종으로 구성.
+          실행 가이드·원리 설명·현업 버전 3종으로 구성.
         </p>
         <div class="card-footer">
           <span class="card-meta">5 PART · 부록 3종</span>
@@ -39,9 +48,11 @@
         </div>
       </a>
 
-      <a class="card" href="./youtube-report/" target="_self">
+      <a class="card" href="./youtube-report/" target="_self" data-tags="유튜브 분석 보고서 채널 도구">
         <div class="card-tags">
-          <span class="tag tag-tool">도구</span>
+          <span class="tag tag-tool">#유튜브</span>
+          <span class="tag tag-tool">#월간보고서</span>
+          <span class="tag tag-tool">#채널분석</span>
         </div>
         <h2 class="card-title">유튜브 월간 보고서 생성기</h2>
         <p class="card-desc">
@@ -54,9 +65,11 @@
         </div>
       </a>
 
-      <a class="card" href="./onboarding/" target="_self">
+      <a class="card" href="./onboarding/" target="_self" data-tags="온보딩 신입 회사소개 입사">
         <div class="card-tags">
-          <span class="tag tag-doc">온보딩</span>
+          <span class="tag tag-internal">#온보딩</span>
+          <span class="tag tag-internal">#신입</span>
+          <span class="tag tag-internal">#회사소개</span>
         </div>
         <h2 class="card-title">신규 직원 온보딩 자료</h2>
         <p class="card-desc">
@@ -69,6 +82,8 @@
       </a>
 
     </section>
+
+    <p id="empty-state" class="empty-state" hidden>검색 결과가 없습니다.</p>
   </main>
 
   <footer class="site-footer">
@@ -78,6 +93,7 @@
   </footer>
 
   <script>
+    // ===== 다크모드 =====
     function applyTheme(theme) {
       document.documentElement.dataset.theme = theme;
       const icon = document.querySelector('#theme-toggle .theme-icon');
@@ -93,6 +109,50 @@
       applyTheme(next);
       localStorage.setItem('theme', next);
     });
+
+    // ===== 해시태그 검색 =====
+    const searchInput = document.getElementById('hash-search');
+    const clearBtn = document.getElementById('search-clear');
+    const countEl = document.getElementById('search-count');
+    const emptyEl = document.getElementById('empty-state');
+    const cards = Array.from(document.querySelectorAll('.card'));
+
+    function applySearch(query) {
+      const q = query.replace(/^#/, '').trim().toLowerCase();
+      let shown = 0;
+      cards.forEach(card => {
+        const tags = (card.dataset.tags || '').toLowerCase();
+        const title = card.querySelector('.card-title').textContent.toLowerCase();
+        const desc = card.querySelector('.card-desc').textContent.toLowerCase();
+        const match = !q || tags.includes(q) || title.includes(q) || desc.includes(q);
+        card.style.display = match ? '' : 'none';
+        if (match) shown++;
+      });
+      emptyEl.hidden = shown !== 0;
+      countEl.textContent = q ? `${shown}건` : '';
+      clearBtn.style.display = q ? '' : 'none';
+    }
+
+    searchInput.addEventListener('input', e => applySearch(e.target.value));
+    clearBtn.addEventListener('click', () => {
+      searchInput.value = '';
+      applySearch('');
+      searchInput.focus();
+    });
+
+    // 태그 클릭으로 검색
+    document.querySelectorAll('.tag').forEach(tag => {
+      tag.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const q = tag.textContent.replace(/^#/, '');
+        searchInput.value = q;
+        applySearch(q);
+        searchInput.focus();
+      });
+    });
+
+    applySearch('');
   </script>
 </body>
 </html>

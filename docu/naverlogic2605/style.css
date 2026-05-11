@@ -181,6 +181,36 @@ html, body {
   font-size: 12.5px;
 }
 
+/* ===== 홈 링크 (모든 탭 우상단) ===== */
+#home-link {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 60;
+  padding: 7px 12px;
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: var(--shadow);
+  transition: background .12s, color .12s;
+}
+#home-link:hover {
+  background: var(--bg-soft);
+  color: var(--accent);
+}
+
+/* ===== 탭 버튼이 a 태그가 됐으니 링크 스타일 정리 ===== */
+#version-switch a.ver-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 /* ===== 토글 버튼 (모바일) ===== */
 #toc-toggle {
   display: none;

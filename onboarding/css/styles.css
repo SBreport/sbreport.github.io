@@ -6,6 +6,30 @@
 /* ---- Reset & Base ---- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* ---- 홈 링크 (우상단) ---- */
+#home-link {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 1000;
+  padding: 7px 14px;
+  background: rgba(255,255,255,0.95);
+  color: #051E4F;
+  border: 1px solid rgba(5,30,79,0.15);
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-decoration: none;
+  font-family: 'Pretendard', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  box-shadow: 0 2px 8px rgba(5,30,79,0.12);
+  transition: background .12s, transform .12s;
+}
+#home-link:hover {
+  background: #fff;
+  transform: translateY(-1px);
+  color: #0A3D91;
+}
+
 body {
   font-family: 'Pretendard', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
   font-size: 16px;

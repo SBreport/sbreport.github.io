@@ -13,6 +13,29 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 홈 링크 (우상단 floating) */
+#home-link {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 1000;
+  padding: 7px 14px;
+  background: rgba(255,255,255,0.95);
+  color: #1a1a1a;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  transition: background .12s, transform .12s;
+}
+#home-link:hover {
+  background: #fff;
+  transform: translateY(-1px);
+  color: #0066cc;
+}
+
 /* ══════════════════════════════════
    TOP NAVIGATION
    ══════════════════════════════════ */
