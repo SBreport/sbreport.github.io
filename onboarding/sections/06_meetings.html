@@ -1,0 +1,96 @@
+  <!-- =====================================================
+       CHAPTER 6: 회의 & 보고 (2개 슬라이드)
+  ====================================================== -->
+
+  <!-- 6-1: 내부 회의 + 클라이언트 보고 -->
+  <template id="tpl-meetings-1">
+    <section class="slide-page" id="page-meetings-1">
+      <div class="slide-header">
+        <h1 class="slide-title">회의 &amp; 보고</h1>
+        <span class="slide-subtitle">내부 회의 &amp; 클라이언트 보고</span>
+      </div>
+      <div class="slide-body">
+
+        <div style="display:flex;flex-direction:column;gap:12px;">
+
+        <div class="content-card">
+          <h2 class="section-heading">내부 회의</h2>
+          <table class="data-table">
+            <tbody>
+              <tr><td class="td-label">정기 회의</td><td>없음 — 사안 발생 시 별도 미팅 진행</td></tr>
+              <tr><td class="td-label">미팅 요청</td><td>사수 또는 이사에게 요청</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="content-card">
+          <h2 class="section-heading">클라이언트 보고</h2>
+          <table class="data-table" style="margin-bottom:10px;">
+            <thead><tr><th>구분</th><th>주기</th><th>형식</th></tr></thead>
+            <tbody>
+              <tr><td>주간 보고</td><td>주 1회</td><td>노션 온라인 서면</td></tr>
+              <tr><td>월간 보고</td><td>월 1회</td><td>노션 온라인 서면</td></tr>
+            </tbody>
+          </table>
+          <div class="placeholder-block">보고 템플릿·양식: 내부 노션 링크 — 삽입 예정</div>
+        </div>
+
+        </div><!-- /.flex-col gap wrapper -->
+
+        <div class="notion-link-group">
+          <a class="notion-link-btn" href="#" target="_blank" rel="noopener">회의 &amp; 보고 가이드 →</a>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 6-2: 보고 라인 -->
+  <template id="tpl-meetings-2">
+    <section class="slide-page" id="page-meetings-2">
+      <div class="slide-header">
+        <h1 class="slide-title">회의 &amp; 보고</h1>
+        <span class="slide-subtitle">보고 라인</span>
+      </div>
+      <div class="slide-body">
+
+        <div class="two-col">
+          <!-- 수직 플로우 -->
+          <div class="content-card">
+            <h2 class="section-heading">보고 흐름</h2>
+            <div class="flow-diagram vertical mt-2">
+              <div class="flow-node-v">
+                <div class="flow-vnode">부사수</div>
+                <div class="flow-vnode-desc">원고 작성 완료</div>
+              </div>
+              <div class="flow-varrow">
+                <svg width="16" height="28" viewBox="0 0 16 28"><path d="M8 0 V22 M2 16 L8 22 L14 16" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              </div>
+              <div class="flow-node-v">
+                <div class="flow-vnode primary">사수 컨펌</div>
+                <div class="flow-vnode-desc">피드백 · 수정 지시</div>
+              </div>
+              <div class="flow-varrow">
+                <svg width="16" height="28" viewBox="0 0 16 28"><path d="M8 0 V22 M2 16 L8 22 L14 16" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              </div>
+              <div class="flow-node-v">
+                <div class="flow-vnode">진행</div>
+                <div class="flow-vnode-desc">클라이언트에 발송</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 규칙 설명 -->
+          <div class="content-card">
+            <h2 class="section-heading">보고 원칙</h2>
+            <ul class="bullet-list" style="margin-top:8px;">
+              <li>부사수는 작성 후 반드시 <strong>사수 컨펌</strong>을 거친 뒤 진행</li>
+              <li>사수는 컨펌 과정에서 피드백 및 수정 지시</li>
+              <li>사안에 따라 이사/대표까지 에스컬레이션</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </template>

@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>스마트브랜딩 온보딩</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+  <!-- 16:9 App Shell -->
+  <div id="app-shell" class="app-shell">
+
+    <!-- Sidebar Navigation -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark">SB</div>
+        <div class="logo-text">
+          <span class="logo-title">스마트브랜딩</span>
+          <span class="logo-sub">온보딩 가이드</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="tab-btn active" data-tab="welcome">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <span>Welcome</span>
+        </button>
+        <button class="tab-btn" data-tab="industry">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" x2="22" y1="12" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span>업계 &amp; 포지셔닝</span>
+        </button>
+        <button class="tab-btn" data-tab="company">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="20" x="4" y="2" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M12 6h.01"/><path d="M12 10h.01"/><path d="M12 14h.01"/><path d="M16 10h.01"/><path d="M16 14h.01"/><path d="M8 10h.01"/><path d="M8 14h.01"/></svg>
+          <span>회사 소개</span>
+        </button>
+        <button class="tab-btn" data-tab="organization">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span>조직도</span>
+        </button>
+        <button class="tab-btn" data-tab="culture">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg>
+          <span>일하는 방식</span>
+        </button>
+        <button class="tab-btn" data-tab="meetings">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>
+          <span>회의 &amp; 보고</span>
+        </button>
+        <button class="tab-btn" data-tab="operations">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Operations</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span>스마트브랜딩 © 2025</span>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main id="main-content" class="main-content">
+      <div id="content-area" class="content-area">
+        <div id="loading-state" class="state-loading">
+          <div class="loading-spinner"></div>
+          <span>로딩 중...</span>
+        </div>
+      </div>
+
+      <!-- 슬라이드 네비게이션 바 (하단) -->
+      <div class="slide-nav-bar">
+        <button id="btn-prev" class="slide-nav-btn" title="이전 슬라이드 (←)" disabled>
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span id="slide-indicator" class="slide-indicator"></span>
+        <button id="btn-next" class="slide-nav-btn" title="다음 슬라이드 (→)">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+    </main>
+  </div>
+
+  <!-- =====================================================
+       CHAPTER 1: Welcome (슬라이드 1개)
+  ====================================================== -->
+
+  <template id="tpl-welcome-1">
+    <section class="slide-page" id="page-welcome-1">
+      <div class="slide-header">
+        <h1 class="slide-title">Welcome</h1>
+        <span class="slide-subtitle">스마트브랜딩에 오신 것을 환영합니다</span>
+      </div>
+      <div class="slide-body">
+
+        <!-- 브랜드 + 환영 메시지 -->
+        <div class="content-card" style="margin-bottom:18px;">
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+            <div style="width:56px;height:56px;background:#051E4F;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:20px;color:#fff;flex-shrink:0;">SB</div>
+            <div>
+              <div style="font-size:clamp(22px,2.8vw,36px);font-weight:900;color:#051E4F;line-height:1.1;">스마트브랜딩</div>
+              <div style="font-size:clamp(12px,1.1vw,15px);color:#6b7a99;margin-top:2px;">병의원 전문 온라인 마케팅 대행사</div>
+            </div>
+          </div>
+          <p class="big-quote" style="margin-bottom:0;">
+            스마트브랜딩은 <strong>마케팅이 어려운 병원 원장님들의 마케팅 파트너</strong>로서,<br />
+            네이버 플랫폼을 주력으로 병의원 온라인 마케팅을 전문으로 하는 대행사입니다.
+          </p>
+        </div>
+
+        <!-- 사훈 / 비전 / 플랫폼 -->
+        <div class="stat-grid stat-grid-3">
+          <div class="content-card" style="text-align:center;">
+            <div style="font-size:clamp(10px,0.9vw,12px);font-weight:600;color:#4A9EFF;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:8px;">사훈</div>
+            <div style="font-size:clamp(17px,2vw,26px);font-weight:800;color:#051E4F;">받은 만큼, 그 이상으로</div>
+          </div>
+          <div class="content-card" style="text-align:center;">
+            <div style="font-size:clamp(10px,0.9vw,12px);font-weight:600;color:#4A9EFF;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:8px;">비전</div>
+            <div style="font-size:clamp(13px,1.3vw,17px);font-weight:600;color:#051E4F;line-height:1.4;">클라이언트와 내부 직원이<br/>함께 성장하는 회사</div>
+          </div>
+          <div class="content-card" style="text-align:center;">
+            <div style="font-size:clamp(10px,0.9vw,12px);font-weight:600;color:#4A9EFF;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:8px;">주력 플랫폼</div>
+            <div style="font-size:clamp(13px,1.3vw,17px);font-weight:600;color:#051E4F;">네이버<br/>(블로그 · 광고 · 플레이스)</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- =====================================================
+       CHAPTER 2: 업계 & 포지셔닝 (3개 슬라이드)
+  ====================================================== -->
+
+  <!-- 2-1: 대행사 정의 + 구조 -->
+  <template id="tpl-industry-1">
+    <section class="slide-page" id="page-industry-1">
+      <div class="slide-header">
+        <h1 class="slide-title">업계 &amp; 포지셔닝</h1>
+        <span class="slide-subtitle">온라인 광고 대행사란 무엇인가</span>
+      </div>
+      <div class="slide-body">
+
+        <div class="content-card" style="margin-bottom:14px;">
+          <h2 class="section-heading">온라인 광고 대행사란?</h2>
+          <p class="body-text" style="margin-bottom:14px;">클라이언트가 필요로 하는 마케팅을 맞춤형으로 제공하는 일.</p>
+
+          <!-- 흐름 다이어그램 -->
+          <div class="flow-diagram">
+            <div class="flow-node client">
+              <div class="flow-node-label">클라이언트</div>
+              <div class="flow-node-sub">병의원 원장님</div>
+            </div>
+            <div class="flow-arrow">
+              <svg width="28" height="16" viewBox="0 0 28 16"><path d="M0 8 H22 M16 2 L22 8 L16 14" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+            </div>
+            <div class="flow-node active">
+              <div class="flow-node-label">대행사</div>
+              <div class="flow-node-sub">컨트롤 타워</div>
+            </div>
+            <div class="flow-arrow">
+              <svg width="28" height="16" viewBox="0 0 28 16"><path d="M0 8 H22 M16 2 L22 8 L16 14" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+            </div>
+            <div class="flow-node">
+              <div class="flow-node-label">실행사 / 프리랜서</div>
+              <div class="flow-node-sub">콘텐츠 제작 · 배포</div>
+            </div>
+          </div>
+        </div>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>역할</th><th>설명</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="td-label">클라이언트</td><td>서비스 구매자 (병의원 원장님)</td></tr>
+            <tr><td class="td-label">대행사</td><td>문제를 해석하고 자원을 조합해 결과를 만드는 컨트롤 타워</td></tr>
+            <tr><td class="td-label">실행사 · 프리랜서</td><td>콘텐츠 제작 · 외주 · 배포 등 세부 실행 담당</td></tr>
+          </tbody>
+        </table>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 2-2: 대행사 본질 (인테리어 예시 + 핵심 인용) -->
+  <template id="tpl-industry-2">
+    <section class="slide-page" id="page-industry-2">
+      <div class="slide-header">
+        <h1 class="slide-title">업계 &amp; 포지셔닝</h1>
+        <span class="slide-subtitle">대행사의 본질</span>
+      </div>
+      <div class="slide-body">
+
+        <!-- 핵심 인용 — 히어로 텍스트 -->
+        <div class="big-quote" style="margin-bottom:18px;">
+          모든 일을 직접 실행하지 않더라도 결국 클라이언트가 원하는 답을 주는 것이 대행사의 목표.<br /><br />
+          <strong>"우리가 직접 하는가"</strong>보다 <strong>"클라이언트의 성과가 나오는가"</strong>가 판단 기준.
+        </div>
+
+        <!-- 키워드 강조 블록 -->
+        <div class="stat-grid stat-grid-2" style="margin-bottom:18px;">
+          <div class="keyword-block">
+            <div class="hero-text" style="color:#4A9EFF;">문제 해결 능력</div>
+            <div class="hero-label" style="color:rgba(255,255,255,0.6);">핵심 역량 1</div>
+          </div>
+          <div class="keyword-block">
+            <div class="hero-text" style="color:#4A9EFF;">조합 능력</div>
+            <div class="hero-label" style="color:rgba(255,255,255,0.6);">핵심 역량 2</div>
+          </div>
+        </div>
+
+        <!-- 인테리어 예시 -->
+        <div class="content-card">
+          <h2 class="section-heading">유사 예시 — 인테리어 대행사</h2>
+          <p class="body-text">
+            인테리어 대행사는 직접 나무를 썰고 전선을 깔지 않습니다. 대신 <strong>"어떤 자재가, 어느 공간에, 왜 필요한지"</strong>를 알고 그것을 컨트롤해서 클라이언트가 원하는 결과물로 완성시킵니다.<br /><br />
+            온라인 광고 대행사도 본질적으로 동일합니다.
+          </p>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 2-3: 스마트브랜딩 포지셔닝 + 성장 스토리 -->
+  <template id="tpl-industry-3">
+    <section class="slide-page" id="page-industry-3">
+      <div class="slide-header">
+        <h1 class="slide-title">업계 &amp; 포지셔닝</h1>
+        <span class="slide-subtitle">스마트브랜딩의 위치</span>
+      </div>
+      <div class="slide-body">
+
+        <!-- 포지셔닝 선언 -->
+        <div class="highlight-banner" style="margin-bottom:18px;">
+          병원 원장님께 필요한 모든 마케팅 과정을<br />
+          <span style="font-size:clamp(18px,2.2vw,28px);font-weight:900;">하나의 창구에서 통합 지원합니다.</span>
+        </div>
+
+        <!-- 포지셔닝 서술 메시지 -->
+        <div class="keyword-block" style="margin-bottom:18px;">
+          <div style="font-size:clamp(10px,0.9vw,12px);font-weight:600;color:rgba(255,255,255,0.5);letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">스마트브랜딩의 성장</div>
+          <div class="hero-text" style="color:#fff;font-size:clamp(16px,2vw,26px);line-height:1.4;">
+            동종 업체들이 폐업하는 어려운 시장에서도<br />
+            <span style="color:#4A9EFF;">빠르게 성장한 병원 마케팅 대행사</span>
+          </div>
+        </div>
+
+        <div class="content-card">
+          <h2 class="section-heading">우리가 하는 일</h2>
+          <ul class="bullet-list">
+            <li>병원이 필요로 하는 온라인 광고의 모든 과정을 찾아서, 연결하고, 책임지고 문제를 해결하는 대행사</li>
+            <li>많은 동종 업체가 폐업하는 어려운 시장 환경에서도 빠르게 성장하며 입지를 굳힌 전문 대행사</li>
+            <li>네트워크 피부과 및 로컬 병원을 아우르는 다수의 클라이언트와 함께하고 있습니다</li>
+          </ul>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- =====================================================
+       CHAPTER 3: 회사 소개 (3개 슬라이드)
+  ====================================================== -->
+
+  <!-- 3-1: 회사 정보 + 사훈 + 비전 (큰 카드 형태) -->
+  <template id="tpl-company-1">
+    <section class="slide-page" id="page-company-1">
+      <div class="slide-header">
+        <h1 class="slide-title">회사 소개</h1>
+        <span class="slide-subtitle">스마트브랜딩의 핵심 정보</span>
+      </div>
+      <div class="slide-body">
+
+        <!-- 큰 숫자 카드 4개 -->
+        <div class="stat-grid stat-grid-4" style="margin-bottom:14px;">
+          <div class="stat-card">
+            <div class="hero-number">2023</div>
+            <div class="hero-label">설립 연도</div>
+          </div>
+          <div class="stat-card">
+            <div class="hero-number">4억</div>
+            <div class="hero-label">연 매출</div>
+          </div>
+          <div class="stat-card">
+            <div class="hero-number">43</div>
+            <div class="hero-label">네트워크 병원</div>
+          </div>
+          <div class="stat-card">
+            <div class="hero-number">31</div>
+            <div class="hero-label">로컬 병원</div>
+          </div>
+        </div>
+
+        <!-- 사훈 강조 -->
+        <div class="keyword-block" style="margin-bottom:14px;">
+          <div style="font-size:clamp(10px,0.9vw,13px);color:rgba(255,255,255,0.5);font-weight:600;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:6px;">사훈</div>
+          <div class="hero-text" style="color:#4A9EFF;">받은 만큼, 그 이상으로</div>
+        </div>
+
+        <!-- 비전 + 플랫폼 -->
+        <div class="stat-grid stat-grid-2">
+          <div class="content-card">
+            <div class="card-title">비전</div>
+            <p class="body-text">클라이언트와 내부 직원이 함께 성장하는 회사</p>
+          </div>
+          <div class="content-card">
+            <div class="card-title">주력 플랫폼</div>
+            <p class="body-text">네이버 (블로그, 광고, 플레이스 등)</p>
+          </div>
+        </div>
+
+        <div class="notion-link-group">
+          <a class="notion-link-btn" href="#" target="_blank" rel="noopener">회사 소개 &amp; 비전 →</a>
+          <a class="notion-link-btn" href="#" target="_blank" rel="noopener">주요 클라이언트 &amp; 포트폴리오 →</a>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 3-2: 주요 서비스 표 -->
+  <template id="tpl-company-2">
+    <section class="slide-page" id="page-company-2">
+      <div class="slide-header">
+        <h1 class="slide-title">회사 소개</h1>
+        <span class="slide-subtitle">주요 서비스</span>
+      </div>
+      <div class="slide-body">
+
+        <table class="data-table">
+          <thead><tr><th>서비스</th><th>내용</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="td-service">네이버 블로그 마케팅</td>
+              <td>병원 원장님 맞춤형 브랜드 블로그 원고 기획·작성·배포, 상위노출 원고 기획</td>
+            </tr>
+            <tr>
+              <td class="td-service">네이버 카페 마케팅</td>
+              <td>바이럴 마케팅 콘텐츠 제작 및 배포</td>
+            </tr>
+            <tr>
+              <td class="td-service">네이버 플레이스</td>
+              <td>지도 상위 노출 최적화</td>
+            </tr>
+            <tr>
+              <td class="td-service">채널 배포</td>
+              <td>네이버 카페 콘텐츠 배포, 카카오톡 채널, 당근마켓, 스레드</td>
+            </tr>
+            <tr>
+              <td class="td-service">디자인 지원</td>
+              <td>카드뉴스, 블로그 배너, 휴무일 등 디자인 콘텐츠 제작</td>
+            </tr>
+            <tr>
+              <td class="td-service">외주 연계</td>
+              <td>유튜브 콘텐츠 제작, 병의원 홈페이지 구축 지원 등</td>
+            </tr>
+          </tbody>
+        </table>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 3-3: 확장 예정 + 유튜브 -->
+  <template id="tpl-company-3">
+    <section class="slide-page" id="page-company-3">
+      <div class="slide-header">
+        <h1 class="slide-title">회사 소개</h1>
+        <span class="slide-subtitle">확장 예정 서비스 &amp; 유튜브 채널</span>
+      </div>
+      <div class="slide-body">
+
+        <div style="display:flex;flex-direction:column;gap:12px;">
+
+        <div class="content-card">
+          <h2 class="section-heading">확장 예정 서비스</h2>
+          <table class="data-table">
+            <thead><tr><th>서비스</th><th>내용</th></tr></thead>
+            <tbody>
+              <tr>
+                <td class="td-service">SEO / AEO / GEO</td>
+                <td>네이버를 넘어 구글 등 멀티 플랫폼 노출 지원 — 준비 중</td>
+              </tr>
+              <tr>
+                <td class="td-service">자사 브랜딩 · 유통</td>
+                <td>스마트브랜딩 자체 브랜드 콘텐츠 기획 · 배포 및 유통 파트 신설 예정</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="content-card">
+          <h2 class="section-heading">유튜브 채널</h2>
+          <p class="body-text" style="margin-bottom:12px;">스마트브랜딩의 마케팅 노하우와 인사이트를 공유하는 공식 유튜브 채널입니다.</p>
+          <a href="https://www.youtube.com/@%EC%8A%A4%EB%A7%88%ED%8A%B8%EB%B8%8C%EB%9E%9C%EB%94%A9" target="_blank" class="yt-link">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17"/><polygon points="10 15 15 12 10 9"/></svg>
+            스마트브랜딩 유튜브 채널 바로가기
+          </a>
+        </div>
+
+        </div><!-- /.flex-col gap wrapper -->
+
+      </div>
+    </section>
+  </template>
+
+  <!-- =====================================================
+       CHAPTER 4: 조직도 (1개 슬라이드 — 좌우 통합)
+  ====================================================== -->
+
+  <!-- 4-1: 조직 구조 + 좌석 배치도 통합 -->
+  <template id="tpl-org-1">
+    <section class="slide-page" id="page-org-1">
+      <div class="slide-header slide-header-notion">
+        <div class="slide-header-titles">
+          <h1 class="slide-title">조직도</h1>
+          <span class="slide-subtitle">조직 구조 &amp; 팀별 역할</span>
+        </div>
+        <a class="notion-link-btn sm" href="#" target="_blank" rel="noopener">조직도 &amp; 팀 소개 →</a>
+      </div>
+      <div class="slide-body" style="overflow:hidden;min-height:0;display:grid;grid-template-columns:65fr 35fr;gap:0;padding:14px 18px;">
+
+        <!-- 좌측 65%: 임원 + 3팀 그리드 -->
+        <div style="display:flex;flex-direction:column;gap:12px;padding-right:16px;border-right:1px solid #dce3ef;min-height:0;">
+
+          <!-- 상단: 임원 2카드 가로 배치 -->
+          <div style="display:flex;gap:12px;flex-shrink:0;">
+            <div class="content-card" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px 16px;gap:2px;">
+              <div style="font-size:clamp(10px,0.85vw,12px);font-weight:600;color:#6b7a99;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;">대표</div>
+              <div style="font-size:clamp(18px,2vw,26px);font-weight:800;color:#051E4F;white-space:nowrap;">최형기</div>
+            </div>
+            <div class="content-card" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px 16px;gap:2px;margin-top:0;">
+              <div style="font-size:clamp(10px,0.85vw,12px);font-weight:600;color:#6b7a99;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;">이사</div>
+              <div style="font-size:clamp(18px,2vw,26px);font-weight:800;color:#051E4F;white-space:nowrap;">이OO</div>
+            </div>
+          </div>
+
+          <!-- 하단: 3개 팀 그리드 -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1.6fr;gap:12px;flex:1;min-height:0;">
+
+            <!-- 컬럼 1: 경영지원 -->
+            <div class="content-card" style="display:flex;flex-direction:column;gap:8px;min-height:0;">
+              <h2 class="section-heading" style="flex-shrink:0;margin-bottom:0;">경영지원</h2>
+              <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;">인사 · 총무 · 재무 등 경영 전반</div>
+              <div style="display:flex;flex-direction:column;gap:6px;flex:1;">
+                <!-- 김OO -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">경영지원</div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">김OO</div>
+                </div>
+                <!-- 양OO -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">경영지원</div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">양OO <span class="badge-new">신입</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 컬럼 2: 사업팀 -->
+            <div class="content-card" style="display:flex;flex-direction:column;gap:8px;min-height:0;margin-top:0;">
+              <h2 class="section-heading" style="flex-shrink:0;margin-bottom:0;">사업팀</h2>
+              <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;">네트워크 병원 + 로컬 병원</div>
+              <div style="display:flex;flex-direction:column;gap:6px;flex:1;">
+                <!-- 신OO -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">총괄 팀장</div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">신OO</div>
+                </div>
+                <!-- 정OO -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">블로그 담당</div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">정OO <span class="badge-new">신입</span></div>
+                </div>
+                <!-- 사수 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">사수 <span style="font-size:9px;background:#9ca3af;color:#fff;padding:1px 4px;border-radius:2px;font-weight:700;vertical-align:middle;">프리랜서</span></div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">6명</div>
+                </div>
+                <!-- 부사수 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">부사수 <span style="font-size:9px;background:#9ca3af;color:#fff;padding:1px 4px;border-radius:2px;font-weight:700;vertical-align:middle;">프리랜서</span></div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">8명</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 컬럼 3: 지원팀 (내부 2열 4행) -->
+            <div class="content-card" style="display:flex;flex-direction:column;gap:8px;min-height:0;margin-top:0;">
+              <h2 class="section-heading" style="flex-shrink:0;margin-bottom:0;">지원팀</h2>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;flex:1;min-height:0;">
+                <!-- PM -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">PM</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">조OO</div>
+                </div>
+                <!-- 디자인 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">디자인</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">최OO</div>
+                </div>
+                <!-- 상위노출 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">상위노출</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">신OO</div>
+                </div>
+                <!-- 채널 배포 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">채널 배포</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">김OO</div>
+                </div>
+                <!-- 카페 리드 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">카페 리드</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">김OO</div>
+                </div>
+                <!-- 카페 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">카페</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">이OO</div>
+                </div>
+                <!-- 외주관리 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">외주관리</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#9ca3af;white-space:nowrap;line-height:1.3;font-style:italic;">(미정)</div>
+                </div>
+                <!-- 빈칸 -->
+                <div style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:4px;padding:8px 12px;opacity:0.4;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#9ca3af;white-space:nowrap;line-height:1.2;">&nbsp;</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#9ca3af;white-space:nowrap;line-height:1.3;">—</div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- 우측 35%: 좌석 배치도 (compact) -->
+        <div style="display:flex;flex-direction:column;padding-left:16px;min-height:0;overflow:hidden;">
+          <h2 class="section-heading" style="flex-shrink:0;margin-bottom:4px;">좌석 배치도</h2>
+          <p class="seat-desc" style="margin-bottom:6px;">14석 · 2열 · 7행 구조</p>
+
+          <div class="seat-grid-wrapper" style="flex:1;min-height:0;justify-content:flex-start;">
+            <div class="seat-grid seat-grid--compact">
+              <!-- 행 1 -->
+              <div class="seat seat--compact vacant">
+                <div class="seat-role">공석</div>
+                <div class="seat-name">—</div>
+              </div>
+              <div class="seat seat--compact exec">
+                <div class="seat-role">대표</div>
+                <div class="seat-name">최형기</div>
+              </div>
+              <!-- 행 2 -->
+              <div class="seat seat--compact mgmt">
+                <div class="seat-role">경영지원</div>
+                <div class="seat-name">김OO</div>
+              </div>
+              <div class="seat seat--compact mgmt">
+                <div class="seat-role">경영지원 <span class="seat-badge">신입</span></div>
+                <div class="seat-name">양OO</div>
+              </div>
+              <!-- 행 3 -->
+              <div class="seat seat--compact vacant">
+                <div class="seat-role">공석</div>
+                <div class="seat-name">—</div>
+              </div>
+              <div class="seat seat--compact exec">
+                <div class="seat-role">이사</div>
+                <div class="seat-name">이OO</div>
+              </div>
+              <!-- 행 4 -->
+              <div class="seat seat--compact biz1">
+                <div class="seat-role">블로그 담당 <span class="seat-badge">신입</span></div>
+                <div class="seat-name">정OO</div>
+              </div>
+              <div class="seat seat--compact biz1">
+                <div class="seat-role">총괄 팀장</div>
+                <div class="seat-name">신OO</div>
+              </div>
+              <!-- 행 5 -->
+              <div class="seat seat--compact support">
+                <div class="seat-role">PM</div>
+                <div class="seat-name">조OO</div>
+              </div>
+              <div class="seat seat--compact support">
+                <div class="seat-role">디자인</div>
+                <div class="seat-name">최OO</div>
+              </div>
+              <!-- 행 6 -->
+              <div class="seat seat--compact support">
+                <div class="seat-role">상위노출</div>
+                <div class="seat-name">신OO</div>
+              </div>
+              <div class="seat seat--compact support">
+                <div class="seat-role">채널 배포</div>
+                <div class="seat-name">김OO</div>
+              </div>
+              <!-- 행 7 -->
+              <div class="seat seat--compact support">
+                <div class="seat-role">카페 리드</div>
+                <div class="seat-name">김OO</div>
+              </div>
+              <div class="seat seat--compact support">
+                <div class="seat-role">카페</div>
+                <div class="seat-name">이OO</div>
+              </div>
+            </div>
+
+            <!-- 출입문 -->
+            <div class="seat-door seat-door--compact">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4h3a2 2 0 0 1 2 2v14"/><path d="M2 20h3"/><path d="M13 20h9"/><path d="M10 12v.01"/><path d="M13 4.562v16.157a1 1 0 0 1-1.242.97L5 20V5.562a2 2 0 0 1 1.515-1.94l4-1A2 2 0 0 1 13 4.561z"/></svg>
+              출입문
+            </div>
+          </div>
+
+          <!-- 범례 -->
+          <div class="seat-legend" style="margin-top:6px;padding-top:6px;">
+            <div class="legend-item"><div class="legend-dot exec"></div>임원</div>
+            <div class="legend-item"><div class="legend-dot mgmt"></div>경영지원</div>
+            <div class="legend-item"><div class="legend-dot biz1"></div>마케팅 1팀</div>
+            <div class="legend-item"><div class="legend-dot support"></div>지원팀</div>
+            <div class="legend-item"><div class="legend-dot vacant"></div>공석</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- =====================================================
+       CHAPTER 5: 일하는 방식 (2개 슬라이드)
+  ====================================================== -->
+
+  <!-- 5-1: 핵심 그라운드 룰 3개 -->
+  <template id="tpl-culture-1">
+    <section class="slide-page" id="page-culture-1">
+      <div class="slide-header">
+        <h1 class="slide-title">일하는 방식</h1>
+        <span class="slide-subtitle">핵심 그라운드 룰</span>
+      </div>
+      <div class="slide-body">
+
+        <div class="big-quote" style="margin-bottom:16px;">
+          스마트브랜딩은 <strong>신뢰를 최우선 가치</strong>로 여기는 마케팅 대행사입니다.<br />
+          업계 평균을 넘어서는 정상 이상의 신뢰를 클라이언트에게 제공하는 것이 우리의 목표입니다.
+        </div>
+
+        <!-- 룰 3개 -->
+        <div class="content-card">
+          <div class="rule-block">
+            <div class="rule-number">01</div>
+            <div style="flex:1;">
+              <div class="rule-title">선 확인, 후 작업</div>
+              <ul class="bullet-list">
+                <li>클라이언트 요청이 들어오면 <strong>"확인해보겠습니다"</strong>부터 회신</li>
+                <li>회신 시 언제까지 답변 드릴지 마감 시한을 함께 공유</li>
+                <li>우리가 반응하고 있고, 일하고 있음을 클라이언트에게 명확히 전달</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="rule-block">
+            <div class="rule-number">02</div>
+            <div style="flex:1;">
+              <div class="rule-title">1차 응답은 <span style="color:#0A3D91;">30분 이내</span></div>
+              <ul class="bullet-list">
+                <li>클라이언트 메시지는 근무일 기준 최대 <strong>30분 이내</strong> 1차 회신 원칙</li>
+                <li>최종 답변까지 시간이 걸려도 무방하나, 받았다는 신호는 즉시 전달</li>
+                <li>주말 회신은 원칙적으로 진행하지 않음</li>
+                <li class="rule-warn">침묵 = 신뢰 하락</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="rule-block">
+            <div class="rule-number">03</div>
+            <div style="flex:1;">
+              <div class="rule-title">받은 만큼, 그 이상으로</div>
+              <ul class="bullet-list">
+                <li>클라이언트가 기대한 수준의 "다음 한 걸음"을 먼저 고민</li>
+                <li>단순 실행이 아닌 <strong>제안·개선</strong>이 기본</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 5-2: 커뮤니케이션 채널 + 디스코드 -->
+  <template id="tpl-culture-2">
+    <section class="slide-page" id="page-culture-2">
+      <div class="slide-header">
+        <h1 class="slide-title">일하는 방식</h1>
+        <span class="slide-subtitle">커뮤니케이션 채널</span>
+      </div>
+      <div class="slide-body">
+
+        <!-- 30분 히어로 강조 -->
+        <div class="stat-grid stat-grid-2" style="margin-bottom:16px;">
+          <div class="keyword-block" style="text-align:left;padding:18px 22px;">
+            <div style="font-size:clamp(11px,0.9vw,14px);color:rgba(255,255,255,0.5);font-weight:600;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:4px;">1차 응답 기준</div>
+            <div class="hero-number" style="color:#4A9EFF;">30분</div>
+            <div style="color:rgba(255,255,255,0.7);font-size:clamp(13px,1.2vw,16px);margin-top:4px;">이내 회신 원칙</div>
+          </div>
+          <div class="content-card" style="display:flex;flex-direction:column;justify-content:center;">
+            <div class="card-title">커뮤니케이션 채널</div>
+            <table class="data-table">
+              <thead><tr><th>용도</th><th>채널</th></tr></thead>
+              <tbody>
+                <tr><td>사내 자료 관리</td><td>노션</td></tr>
+                <tr><td>사내 소통</td><td>디스코드</td></tr>
+                <tr><td>클라이언트 소통</td><td>카카오톡, 라인</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="content-card">
+          <h2 class="section-heading">디스코드 운영 안내</h2>
+          <p class="body-text" style="margin-bottom:10px;">채널 구성 및 사용 규칙은 입사 첫날 직접 안내 드립니다.</p>
+          <div class="placeholder-block">디스코드 스크린샷 / 초대 링크 삽입 예정</div>
+        </div>
+
+        <div class="notion-link-group">
+          <a class="notion-link-btn" href="#" target="_blank" rel="noopener">커뮤니케이션 &amp; 메신저 룰 →</a>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- =====================================================
+       CHAPTER 6: 회의 & 보고 (2개 슬라이드)
+  ====================================================== -->
+
+  <!-- 6-1: 내부 회의 + 클라이언트 보고 -->
+  <template id="tpl-meetings-1">
+    <section class="slide-page" id="page-meetings-1">
+      <div class="slide-header">
+        <h1 class="slide-title">회의 &amp; 보고</h1>
+        <span class="slide-subtitle">내부 회의 &amp; 클라이언트 보고</span>
+      </div>
+      <div class="slide-body">
+
+        <div style="display:flex;flex-direction:column;gap:12px;">
+
+        <div class="content-card">
+          <h2 class="section-heading">내부 회의</h2>
+          <table class="data-table">
+            <tbody>
+              <tr><td class="td-label">정기 회의</td><td>없음 — 사안 발생 시 별도 미팅 진행</td></tr>
+              <tr><td class="td-label">미팅 요청</td><td>사수 또는 이사에게 요청</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="content-card">
+          <h2 class="section-heading">클라이언트 보고</h2>
+          <table class="data-table" style="margin-bottom:10px;">
+            <thead><tr><th>구분</th><th>주기</th><th>형식</th></tr></thead>
+            <tbody>
+              <tr><td>주간 보고</td><td>주 1회</td><td>노션 온라인 서면</td></tr>
+              <tr><td>월간 보고</td><td>월 1회</td><td>노션 온라인 서면</td></tr>
+            </tbody>
+          </table>
+          <div class="placeholder-block">보고 템플릿·양식: 내부 노션 링크 — 삽입 예정</div>
+        </div>
+
+        </div><!-- /.flex-col gap wrapper -->
+
+        <div class="notion-link-group">
+          <a class="notion-link-btn" href="#" target="_blank" rel="noopener">회의 &amp; 보고 가이드 →</a>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 6-2: 보고 라인 -->
+  <template id="tpl-meetings-2">
+    <section class="slide-page" id="page-meetings-2">
+      <div class="slide-header">
+        <h1 class="slide-title">회의 &amp; 보고</h1>
+        <span class="slide-subtitle">보고 라인</span>
+      </div>
+      <div class="slide-body">
+
+        <div class="two-col">
+          <!-- 수직 플로우 -->
+          <div class="content-card">
+            <h2 class="section-heading">보고 흐름</h2>
+            <div class="flow-diagram vertical mt-2">
+              <div class="flow-node-v">
+                <div class="flow-vnode">부사수</div>
+                <div class="flow-vnode-desc">원고 작성 완료</div>
+              </div>
+              <div class="flow-varrow">
+                <svg width="16" height="28" viewBox="0 0 16 28"><path d="M8 0 V22 M2 16 L8 22 L14 16" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              </div>
+              <div class="flow-node-v">
+                <div class="flow-vnode primary">사수 컨펌</div>
+                <div class="flow-vnode-desc">피드백 · 수정 지시</div>
+              </div>
+              <div class="flow-varrow">
+                <svg width="16" height="28" viewBox="0 0 16 28"><path d="M8 0 V22 M2 16 L8 22 L14 16" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              </div>
+              <div class="flow-node-v">
+                <div class="flow-vnode">진행</div>
+                <div class="flow-vnode-desc">클라이언트에 발송</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 규칙 설명 -->
+          <div class="content-card">
+            <h2 class="section-heading">보고 원칙</h2>
+            <ul class="bullet-list" style="margin-top:8px;">
+              <li>부사수는 작성 후 반드시 <strong>사수 컨펌</strong>을 거친 뒤 진행</li>
+              <li>사수는 컨펌 과정에서 피드백 및 수정 지시</li>
+              <li>사안에 따라 이사/대표까지 에스컬레이션</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- =====================================================
+       CHAPTER 7: Operations (5개 슬라이드)
+  ====================================================== -->
+
+  <!-- 7-1: 협업 툴 -->
+  <template id="tpl-ops-1">
+    <section class="slide-page" id="page-ops-1">
+      <div class="slide-header">
+        <h1 class="slide-title">Operations</h1>
+        <span class="slide-subtitle">7-1. 필수 협업 툴 계정 세팅</span>
+      </div>
+      <div class="slide-body">
+
+        <div class="content-card" style="margin-bottom:12px;">
+          <p class="body-text">담당자: <strong>이사</strong> (입사 첫날 온보딩 안내 및 계정 발급 총괄)</p>
+        </div>
+
+        <table class="data-table" style="margin-bottom:14px;">
+          <thead><tr><th>#</th><th>툴</th><th>용도</th><th>비고</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>구글 워크스페이스 (Gmail)</td><td>회사 이메일, 구글 문서</td><td>다른 계정 발급의 기준</td></tr>
+            <tr><td>2</td><td>flex</td><td>근태 관리</td><td>회사 Gmail로 초대</td></tr>
+            <tr><td>3</td><td>노션</td><td>사내 자료 관리</td><td>회사 Gmail로 초대</td></tr>
+            <tr><td>4</td><td>디스코드</td><td>내부 소통</td><td>닉네임: 실명 (예: 김OO)</td></tr>
+            <tr><td>5</td><td>NAS</td><td>파일 저장소</td><td>별도 ID/PW, 웹+로컬 접속 교육자료 제공</td></tr>
+          </tbody>
+        </table>
+
+        <div class="content-card">
+          <h2 class="section-heading">세팅 체크리스트</h2>
+          <div class="checklist mt-2">
+            <label class="check-item"><input type="checkbox" /> 구글 워크스페이스 Gmail 발급 완료</label>
+            <label class="check-item"><input type="checkbox" /> flex 가입 및 출퇴근 테스트</label>
+            <label class="check-item"><input type="checkbox" /> 노션 초대 수락 및 팀 페이지 확인</label>
+            <label class="check-item"><input type="checkbox" /> 디스코드 서버 참여 및 닉네임 설정</label>
+            <label class="check-item"><input type="checkbox" /> NAS 접속 확인</label>
+          </div>
+          <div class="placeholder-block mt-3">툴별 상세 사용 규칙: 추후 이미지·링크 삽입 예정</div>
+        </div>
+
+        <div class="notion-link-group">
+          <a class="notion-link-btn" href="#" target="_blank" rel="noopener">마케팅 실무 툴 접근 권한 →</a>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 7-2: 근무 · 근태 -->
+  <template id="tpl-ops-2">
+    <section class="slide-page" id="page-ops-2">
+      <div class="slide-header">
+        <h1 class="slide-title">Operations</h1>
+        <span class="slide-subtitle">7-2. 근무 &amp; 근태 관리</span>
+      </div>
+      <div class="slide-body">
+
+        <table class="data-table" style="margin-bottom:14px;">
+          <tbody>
+            <tr><td class="td-label">기본 근무</td><td>09:00 – 18:00 (점심 시간 포함)</td></tr>
+            <tr><td class="td-label">유연근무</td><td>8시간 유지 범위 내 자율 (08–17 / 09–18 / 10–19)</td></tr>
+            <tr><td class="td-label">주 근무일</td><td>5일 (평일)</td></tr>
+            <tr><td class="td-label">재택근무</td><td>주 1일 가능 (경영지원 직무 제외)</td></tr>
+            <tr><td class="td-label">연차</td><td>법정 연차 운영 / flex로 신청·승인</td></tr>
+            <tr><td class="td-label">주말·휴일</td><td>원칙적으로 업무 회신 없음</td></tr>
+          </tbody>
+        </table>
+
+        <div class="placeholder-block">근태 상세 가이드: 노션 페이지 참조 (추후 링크 삽입 예정)</div>
+
+        <div class="notion-link-group">
+          <a class="notion-link-btn" href="#" target="_blank" rel="noopener">근무 &amp; 근태 관리 →</a>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 7-3: 복리후생 · 다과 -->
+  <template id="tpl-ops-3">
+    <section class="slide-page" id="page-ops-3">
+      <div class="slide-header">
+        <h1 class="slide-title">Operations</h1>
+        <span class="slide-subtitle">7-3. 복리후생 &amp; 비용 처리</span>
+      </div>
+      <div class="slide-body">
+
+        <table class="data-table" style="margin-bottom:14px;">
+          <tbody>
+            <tr><td class="td-label">식비</td><td>지원 (확정)</td></tr>
+            <tr><td class="td-label">기타 복리후생</td><td>추후 확정 및 공지 예정</td></tr>
+          </tbody>
+        </table>
+
+        <div class="content-card">
+          <h2 class="section-heading">다과 주문</h2>
+          <p class="body-text">경영지원팀이 매주 <strong>월요일</strong> 취합 → 구매 진행. 자유 양식으로 신청 가능.</p>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 7-4: 오피스 (출입 · 와이파이 · 공용 · 프린터 · 청소) -->
+  <template id="tpl-ops-4">
+    <section class="slide-page" id="page-ops-4">
+      <div class="slide-header">
+        <h1 class="slide-title">Operations</h1>
+        <span class="slide-subtitle">7-4. 오피스 시설 이용</span>
+      </div>
+      <div class="slide-body">
+
+        <div class="two-col">
+          <div>
+            <div class="content-card" style="margin-bottom:12px;">
+              <h2 class="section-heading">출입 &amp; 와이파이</h2>
+              <p class="body-text" style="margin-bottom:10px;">사무실·회의실 출입문 비밀번호, 와이파이 정보는 보안상 웹 문서에 표기하지 않습니다.<br/>
+              내부 노션 페이지에서 확인해주세요.</p>
+              <a class="notion-link-btn" href="#" target="_blank" rel="noopener">노션에서 확인 →</a>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div class="content-card">
+              <h2 class="section-heading">공용 공간 &amp; 시설</h2>
+              <table class="data-table">
+                <thead><tr><th>공간</th><th>이용 방식</th></tr></thead>
+                <tbody>
+                  <tr><td>회의실</td><td>자유 이용</td></tr>
+                  <tr><td>탕비실</td><td>자유 이용</td></tr>
+                  <tr><td>프린터/복합기</td><td>필요 시 이사 또는 경영지원에게 문의</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="content-card">
+              <h2 class="section-heading">청소 구역 제도</h2>
+              <p class="body-text">직원별 담당 구역 배정. 신규 직원은 입사 <strong>1개월 후</strong>부터 적용.</p>
+            </div>
+          </div><!-- /.flex-col gap wrapper -->
+        </div>
+
+        <div class="notion-link-group">
+          <a class="notion-link-btn" href="#" target="_blank" rel="noopener">오피스 시설 이용 안내 →</a>
+        </div>
+
+      </div>
+    </section>
+  </template>
+
+  <!-- 7-5: 신규 직원 / 수습 -->
+  <template id="tpl-ops-5">
+    <section class="slide-page" id="page-ops-5">
+      <div class="slide-header">
+        <h1 class="slide-title">Operations</h1>
+        <span class="slide-subtitle">7-5. 신규 직원 &amp; 수습 기간</span>
+      </div>
+      <div class="slide-body">
+
+        <div style="display:flex;flex-direction:column;gap:12px;">
+
+        <div class="content-card">
+          <h2 class="section-heading">수습 기간 안내</h2>
+          <ul class="body-text" style="padding-left:20px;line-height:1.8;">
+            <li>전 직원 정규직 채용</li>
+            <li>수습 기간 3개월 적용</li>
+            <li>수습 기간 중 급여는 정규직과 동일</li>
+          </ul>
+        </div>
+
+        <div class="content-card">
+          <h2 class="section-heading">신규 직원 초기 1개월 유예 항목</h2>
+          <table class="data-table" style="margin-bottom:12px;">
+            <thead><tr><th>항목</th><th>적용 시점</th></tr></thead>
+            <tbody>
+              <tr><td>재택근무 (주 1일)</td><td>입사 1개월 후부터</td></tr>
+              <tr><td>청소 구역 담당</td><td>입사 1개월 후부터</td></tr>
+            </tbody>
+          </table>
+          <p class="body-text">첫 1개월은 업무 적응 · 조직 파악 우선 기간으로 운영합니다.</p>
+        </div>
+
+        </div><!-- /.flex-col gap wrapper -->
+
+      </div>
+    </section>
+  </template>
+
+
+
+  <script src="js/app.js"></script>
+</body>
+</html>

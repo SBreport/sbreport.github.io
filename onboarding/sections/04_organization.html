@@ -1,0 +1,222 @@
+  <!-- =====================================================
+       CHAPTER 4: 조직도 (1개 슬라이드 — 좌우 통합)
+  ====================================================== -->
+
+  <!-- 4-1: 조직 구조 + 좌석 배치도 통합 -->
+  <template id="tpl-org-1">
+    <section class="slide-page" id="page-org-1">
+      <div class="slide-header slide-header-notion">
+        <div class="slide-header-titles">
+          <h1 class="slide-title">조직도</h1>
+          <span class="slide-subtitle">조직 구조 &amp; 팀별 역할</span>
+        </div>
+        <a class="notion-link-btn sm" href="#" target="_blank" rel="noopener">조직도 &amp; 팀 소개 →</a>
+      </div>
+      <div class="slide-body" style="overflow:hidden;min-height:0;display:grid;grid-template-columns:65fr 35fr;gap:0;padding:14px 18px;">
+
+        <!-- 좌측 65%: 임원 + 3팀 그리드 -->
+        <div style="display:flex;flex-direction:column;gap:12px;padding-right:16px;border-right:1px solid #dce3ef;min-height:0;">
+
+          <!-- 상단: 임원 2카드 가로 배치 -->
+          <div style="display:flex;gap:12px;flex-shrink:0;">
+            <div class="content-card" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px 16px;gap:2px;">
+              <div style="font-size:clamp(10px,0.85vw,12px);font-weight:600;color:#6b7a99;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;">대표</div>
+              <div style="font-size:clamp(18px,2vw,26px);font-weight:800;color:#051E4F;white-space:nowrap;">최형기</div>
+            </div>
+            <div class="content-card" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px 16px;gap:2px;margin-top:0;">
+              <div style="font-size:clamp(10px,0.85vw,12px);font-weight:600;color:#6b7a99;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;">이사</div>
+              <div style="font-size:clamp(18px,2vw,26px);font-weight:800;color:#051E4F;white-space:nowrap;">이OO</div>
+            </div>
+          </div>
+
+          <!-- 하단: 3개 팀 그리드 -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1.6fr;gap:12px;flex:1;min-height:0;">
+
+            <!-- 컬럼 1: 경영지원 -->
+            <div class="content-card" style="display:flex;flex-direction:column;gap:8px;min-height:0;">
+              <h2 class="section-heading" style="flex-shrink:0;margin-bottom:0;">경영지원</h2>
+              <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;">인사 · 총무 · 재무 등 경영 전반</div>
+              <div style="display:flex;flex-direction:column;gap:6px;flex:1;">
+                <!-- 김OO -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">경영지원</div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">김OO</div>
+                </div>
+                <!-- 양OO -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">경영지원</div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">양OO <span class="badge-new">신입</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 컬럼 2: 사업팀 -->
+            <div class="content-card" style="display:flex;flex-direction:column;gap:8px;min-height:0;margin-top:0;">
+              <h2 class="section-heading" style="flex-shrink:0;margin-bottom:0;">사업팀</h2>
+              <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;">네트워크 병원 + 로컬 병원</div>
+              <div style="display:flex;flex-direction:column;gap:6px;flex:1;">
+                <!-- 신OO -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">총괄 팀장</div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">신OO</div>
+                </div>
+                <!-- 정OO -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">블로그 담당</div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">정OO <span class="badge-new">신입</span></div>
+                </div>
+                <!-- 사수 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">사수 <span style="font-size:9px;background:#9ca3af;color:#fff;padding:1px 4px;border-radius:2px;font-weight:700;vertical-align:middle;">프리랜서</span></div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">6명</div>
+                </div>
+                <!-- 부사수 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">부사수 <span style="font-size:9px;background:#9ca3af;color:#fff;padding:1px 4px;border-radius:2px;font-weight:700;vertical-align:middle;">프리랜서</span></div>
+                  <div style="font-size:clamp(15px,1.5vw,20px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">8명</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 컬럼 3: 지원팀 (내부 2열 4행) -->
+            <div class="content-card" style="display:flex;flex-direction:column;gap:8px;min-height:0;margin-top:0;">
+              <h2 class="section-heading" style="flex-shrink:0;margin-bottom:0;">지원팀</h2>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;flex:1;min-height:0;">
+                <!-- PM -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">PM</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">조OO</div>
+                </div>
+                <!-- 디자인 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">디자인</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">최OO</div>
+                </div>
+                <!-- 상위노출 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">상위노출</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">신OO</div>
+                </div>
+                <!-- 채널 배포 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">채널 배포</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">김OO</div>
+                </div>
+                <!-- 카페 리드 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">카페 리드</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">김OO</div>
+                </div>
+                <!-- 카페 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">카페</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#051E4F;white-space:nowrap;line-height:1.3;">이OO</div>
+                </div>
+                <!-- 외주관리 -->
+                <div style="background:#f7f9fc;border:1px solid #dce3ef;border-radius:4px;padding:8px 12px;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#6b7a99;white-space:nowrap;line-height:1.2;">외주관리</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#9ca3af;white-space:nowrap;line-height:1.3;font-style:italic;">(미정)</div>
+                </div>
+                <!-- 빈칸 -->
+                <div style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:4px;padding:8px 12px;opacity:0.4;">
+                  <div style="font-size:clamp(10px,0.85vw,12px);color:#9ca3af;white-space:nowrap;line-height:1.2;">&nbsp;</div>
+                  <div style="font-size:clamp(14px,1.4vw,18px);font-weight:700;color:#9ca3af;white-space:nowrap;line-height:1.3;">—</div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- 우측 35%: 좌석 배치도 (compact) -->
+        <div style="display:flex;flex-direction:column;padding-left:16px;min-height:0;overflow:hidden;">
+          <h2 class="section-heading" style="flex-shrink:0;margin-bottom:4px;">좌석 배치도</h2>
+          <p class="seat-desc" style="margin-bottom:6px;">14석 · 2열 · 7행 구조</p>
+
+          <div class="seat-grid-wrapper" style="flex:1;min-height:0;justify-content:flex-start;">
+            <div class="seat-grid seat-grid--compact">
+              <!-- 행 1 -->
+              <div class="seat seat--compact vacant">
+                <div class="seat-role">공석</div>
+                <div class="seat-name">—</div>
+              </div>
+              <div class="seat seat--compact exec">
+                <div class="seat-role">대표</div>
+                <div class="seat-name">최형기</div>
+              </div>
+              <!-- 행 2 -->
+              <div class="seat seat--compact mgmt">
+                <div class="seat-role">경영지원</div>
+                <div class="seat-name">김OO</div>
+              </div>
+              <div class="seat seat--compact mgmt">
+                <div class="seat-role">경영지원 <span class="seat-badge">신입</span></div>
+                <div class="seat-name">양OO</div>
+              </div>
+              <!-- 행 3 -->
+              <div class="seat seat--compact vacant">
+                <div class="seat-role">공석</div>
+                <div class="seat-name">—</div>
+              </div>
+              <div class="seat seat--compact exec">
+                <div class="seat-role">이사</div>
+                <div class="seat-name">이OO</div>
+              </div>
+              <!-- 행 4 -->
+              <div class="seat seat--compact biz1">
+                <div class="seat-role">블로그 담당 <span class="seat-badge">신입</span></div>
+                <div class="seat-name">정OO</div>
+              </div>
+              <div class="seat seat--compact biz1">
+                <div class="seat-role">총괄 팀장</div>
+                <div class="seat-name">신OO</div>
+              </div>
+              <!-- 행 5 -->
+              <div class="seat seat--compact support">
+                <div class="seat-role">PM</div>
+                <div class="seat-name">조OO</div>
+              </div>
+              <div class="seat seat--compact support">
+                <div class="seat-role">디자인</div>
+                <div class="seat-name">최OO</div>
+              </div>
+              <!-- 행 6 -->
+              <div class="seat seat--compact support">
+                <div class="seat-role">상위노출</div>
+                <div class="seat-name">신OO</div>
+              </div>
+              <div class="seat seat--compact support">
+                <div class="seat-role">채널 배포</div>
+                <div class="seat-name">김OO</div>
+              </div>
+              <!-- 행 7 -->
+              <div class="seat seat--compact support">
+                <div class="seat-role">카페 리드</div>
+                <div class="seat-name">김OO</div>
+              </div>
+              <div class="seat seat--compact support">
+                <div class="seat-role">카페</div>
+                <div class="seat-name">이OO</div>
+              </div>
+            </div>
+
+            <!-- 출입문 -->
+            <div class="seat-door seat-door--compact">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4h3a2 2 0 0 1 2 2v14"/><path d="M2 20h3"/><path d="M13 20h9"/><path d="M10 12v.01"/><path d="M13 4.562v16.157a1 1 0 0 1-1.242.97L5 20V5.562a2 2 0 0 1 1.515-1.94l4-1A2 2 0 0 1 13 4.561z"/></svg>
+              출입문
+            </div>
+          </div>
+
+          <!-- 범례 -->
+          <div class="seat-legend" style="margin-top:6px;padding-top:6px;">
+            <div class="legend-item"><div class="legend-dot exec"></div>임원</div>
+            <div class="legend-item"><div class="legend-dot mgmt"></div>경영지원</div>
+            <div class="legend-item"><div class="legend-dot biz1"></div>마케팅 1팀</div>
+            <div class="legend-item"><div class="legend-dot support"></div>지원팀</div>
+            <div class="legend-item"><div class="legend-dot vacant"></div>공석</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </template>
