@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "네이버 블로그 글감 숨기기",
+  "version": "1.1.0",
+  "description": "네이버 블로그 에디터 하단의 글감 패널을 원클릭으로 숨깁니다.",
+  "permissions": ["activeTab", "scripting"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    },
+    "default_title": "글감 숨기기/보이기"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://blog.naver.com/*",
+        "https://editor.blog.naver.com/*",
+        "https://m.blog.naver.com/*",
+        "https://se.editor.naver.com/*",
+        "https://editor.se.naver.com/*"
+      ],
+      "all_frames": true,
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

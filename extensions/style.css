@@ -1,0 +1,284 @@
+/* ============================================================
+   확장프로그램 랜딩 페이지 — 공용 스타일
+   README를 렌더링 + 다운로드/GitHub 링크 노출
+   ============================================================ */
+
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f6f7f9;
+  --text: #1f2328;
+  --text-muted: #57606a;
+  --border: #d0d7de;
+  --border-soft: #eaeef2;
+  --accent: #0969da;
+  --accent-soft: #dbeafe;
+  --code-bg: #f3f4f6;
+  --quote-bg: #f6f8fa;
+  --shadow: 0 1px 3px rgba(0,0,0,.06);
+  --font-sans: 'Pretendard', -apple-system, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Consolas, monospace;
+}
+
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --bg-soft: #161b22;
+  --text: #e6edf3;
+  --text-muted: #8d96a0;
+  --border: #30363d;
+  --border-soft: #21262d;
+  --accent: #58a6ff;
+  --accent-soft: #1f3a5f;
+  --code-bg: #161b22;
+  --quote-bg: #161b22;
+  --shadow: 0 1px 3px rgba(0,0,0,.4);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+/* 홈 링크 */
+#home-link {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 60;
+  padding: 7px 12px;
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: var(--shadow);
+  transition: background .12s, color .12s;
+}
+#home-link:hover {
+  background: var(--bg-soft);
+  color: var(--accent);
+}
+
+/* 다크모드 버튼 */
+#theme-toggle {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 40;
+  padding: 8px 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+[data-theme="dark"] #theme-toggle {
+  background: var(--bg-soft);
+  border-color: var(--accent);
+}
+
+/* 컨테이너 */
+.page {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 56px 32px 80px;
+}
+
+.ext-header {
+  margin-bottom: 24px;
+}
+.ext-tags {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.ext-tag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ext-title {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: -.3px;
+}
+.ext-sub {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* 액션 버튼 */
+.ext-actions {
+  display: flex;
+  gap: 10px;
+  margin: 24px 0;
+  flex-wrap: wrap;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  font-weight: 700;
+  text-decoration: none;
+  border: 1px solid var(--border);
+  transition: background .12s, transform .12s;
+}
+.btn:hover {
+  transform: translateY(-1px);
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.btn-primary:hover {
+  filter: brightness(0.95);
+}
+.btn-secondary {
+  background: var(--bg);
+  color: var(--text);
+}
+.btn-secondary:hover {
+  background: var(--bg-soft);
+}
+
+hr.divider {
+  margin: 24px 0 32px;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* 렌더링된 README */
+.readme {
+  font-size: 15.5px;
+}
+.readme h1 {
+  font-size: 26px;
+  font-weight: 800;
+  margin: 0 0 16px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--border);
+  line-height: 1.3;
+}
+.readme h2 {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 32px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.readme h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 24px 0 8px;
+}
+.readme p {
+  margin: 0 0 12px;
+}
+.readme a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.readme a:hover {
+  border-bottom-color: var(--accent);
+}
+.readme strong {
+  font-weight: 700;
+}
+.readme ul, .readme ol {
+  margin: 0 0 12px;
+  padding-left: 24px;
+}
+.readme li {
+  margin: 3px 0;
+}
+.readme code {
+  padding: 2px 6px;
+  background: var(--code-bg);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+.readme pre {
+  margin: 16px 0;
+  padding: 14px 18px;
+  background: var(--code-bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.readme pre code {
+  padding: 0;
+  background: transparent;
+}
+.readme blockquote {
+  margin: 16px 0;
+  padding: 10px 16px;
+  background: var(--quote-bg);
+  border-left: 4px solid var(--border);
+  border-radius: 0 6px 6px 0;
+  color: var(--text);
+}
+.readme table {
+  width: 100%;
+  margin: 16px 0;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.readme th, .readme td {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+.readme th {
+  background: var(--bg-soft);
+  font-weight: 700;
+}
+
+.loading, .error {
+  padding: 24px;
+  background: var(--bg-soft);
+  border-radius: 8px;
+  color: var(--text-muted);
+}
+.error {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+[data-theme="dark"] .error {
+  color: #fca5a5;
+  background: #2a0e0e;
+}
+
+@media (max-width: 720px) {
+  .page { padding: 56px 18px 80px; }
+  .ext-title { font-size: 22px; }
+}

@@ -1,0 +1,79 @@
+/* YouTube Script Copy Button Styles */
+
+#yt-script-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+#yt-script-copy-btn button {
+  cursor: pointer;
+  border: none;
+  outline: none;
+  font-family: "Roboto", "Arial", sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 36px;
+  border-radius: 18px;
+  padding: 0 16px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background-color 0.1s;
+  white-space: nowrap;
+}
+
+/* Light mode */
+#yt-script-copy-btn button {
+  background-color: rgba(0, 0, 0, 0.05);
+  color: #0f0f0f;
+}
+
+#yt-script-copy-btn button:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+/* Dark mode */
+html[dark] #yt-script-copy-btn button {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #f1f1f1;
+}
+
+html[dark] #yt-script-copy-btn button:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Icon */
+#yt-script-copy-btn svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+/* Status states */
+#yt-script-copy-btn button.loading {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+#yt-script-copy-btn button.success {
+  background-color: rgba(25, 135, 84, 0.15);
+  color: #198754;
+}
+
+html[dark] #yt-script-copy-btn button.success {
+  background-color: rgba(25, 135, 84, 0.25);
+  color: #75d6a1;
+}
+
+#yt-script-copy-btn button.error {
+  background-color: rgba(220, 53, 69, 0.15);
+  color: #dc3545;
+}
+
+html[dark] #yt-script-copy-btn button.error {
+  background-color: rgba(220, 53, 69, 0.25);
+  color: #f5a0a8;
+}
