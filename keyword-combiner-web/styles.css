@@ -109,11 +109,16 @@ html, body {
   padding: 48px 32px 80px;
 }
 
-/* ===== 헤더 ===== */
+/* ===== 헤더 (A: 좌측 액센트 바) ===== */
 .hero {
+  position: relative;
   margin: 0 0 24px;
-  padding-bottom: 20px;
+  padding: 4px 0 20px 16px;
   border-bottom: 1px solid var(--border-soft);
+  border-left: 4px solid var(--accent);
+  border-top-right-radius: 4px;
+  border-bottom-left-radius: 4px;
+  background: linear-gradient(to right, var(--accent-soft) 0%, transparent 40%);
 }
 .hero h1 {
   margin: 0 0 6px;
@@ -156,7 +161,24 @@ html, body {
   padding: 14px 16px;
   background: var(--bg-card);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
   border-radius: 8px;
+  transition: transform .14s, box-shadow .14s, border-color .14s, border-left-color .14s, border-left-width .14s;
+}
+/* A: hover translate */
+.input-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+/* C: 입력 상태 시각화 — 값이 있으면 액센트 컬러 좌측 보더 */
+.input-card:has(textarea:not(:placeholder-shown)) {
+  border-left-color: var(--accent);
+  border-left-width: 5px;
+  padding-left: 14px;
+}
+.input-card:has(textarea:not(:placeholder-shown)) .badge {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .input-card-head {
@@ -313,9 +335,23 @@ html, body {
 .result {
   background: var(--bg-card);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
   border-radius: 8px;
   padding: 16px 20px;
   margin-bottom: 32px;
+  transition: border-color .14s, border-left-color .14s, border-left-width .14s, background .14s;
+}
+/* A: 결과 활성화 — 데이터가 있을 때(empty 셀이 없을 때) 그린 보더로 강조 */
+.result:not(:has(.result-table td.empty)) {
+  border-left-color: var(--success);
+  border-left-width: 5px;
+  padding-left: 18px;
+}
+.result:not(:has(.result-table td.empty)) .result-head h2::before {
+  content: "● ";
+  color: var(--success);
+  font-size: 0.7em;
+  vertical-align: middle;
 }
 .result-head {
   display: flex;
@@ -374,6 +410,10 @@ html, body {
 }
 .result-table tr:nth-child(even) td {
   background: var(--bg-soft);
+}
+/* C: 표 행 호버 강조 */
+.result-table tbody tr:hover td {
+  background: var(--accent-soft);
 }
 .result-table td.empty {
   text-align: center;
