@@ -29,6 +29,30 @@ body {
   min-height: 100vh;
 }
 
+/* 홈 링크 (우상단 floating) */
+#home-link {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  z-index: 100;
+  padding: 8px 14px;
+  background: rgba(255, 252, 246, 0.92);
+  color: var(--brand-deep);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  font-family: "IBM Plex Sans KR", sans-serif;
+  box-shadow: 0 2px 8px rgba(71, 47, 27, 0.1);
+  transition: background .15s, transform .15s;
+}
+#home-link:hover {
+  background: #fffaf1;
+  transform: translateY(-1px);
+  color: var(--brand);
+}
+
 .app-shell {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;

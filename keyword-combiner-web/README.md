@@ -12,7 +12,7 @@
 ## 실행 방법
 
 1. `keyword-combiner-web` 폴더를 엽니다.
-2. [index.html](C:/Users/TUF%20A15%20FA507RM/OneDrive/%EB%B0%94%ED%83%95%20%ED%99%94%EB%A9%B4/codex/keyword-combiner-web/index.html) 파일을 브라우저에서 엽니다.
+2. `index.html` 파일을 브라우저에서 엽니다 (더블클릭).
 3. 또는 VS Code의 Live Server로 실행해도 됩니다.
 
 ## 입력 방식
