@@ -11,7 +11,7 @@
 
 ## 실행 방법
 
-1. `keyword-combiner-web` 폴더를 엽니다.
+1. `tools/keyword-combiner` 폴더를 엽니다.
 2. `index.html` 파일을 브라우저에서 엽니다 (더블클릭).
 3. 또는 VS Code의 Live Server로 실행해도 됩니다.
 

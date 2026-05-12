@@ -57,16 +57,31 @@ sbreport.github.io/
 ├── style.css           ← 허브 전용 스타일 (카테고리 색상 시스템 포함)
 ├── .gitignore          ← 원본 백업 폴더 push 차단
 │
-├── docu/               ← 장기 문서·강의 자료
-│   └── naverlogic2605/ ← 네이버 AI 검색 대응 강의 메모
-│       ├── index.html  ← 챕터 선택 허브
-│       ├── lecture.md / lecture-easy.md / playbook.md ← 본문 마크다운
-│       ├── viewer.js   ← 마크다운 → HTML 렌더러
-│       ├── style.css
-│       └── playbook/   ← 세부 챕터 (각각 index.html)
-│           ├── index.html
-│           ├── principle/index.html
-│           └── pro/index.html
+├── docs/               ← 문서·강의·슬라이드 (type: doc)
+│   ├── naver-logic-2605/   ← 네이버 AI 검색 대응 강의 묶음
+│   │   ├── index.html      ← 리다이렉트 (→ ./playbook/)
+│   │   ├── style.css / viewer.js / *.md ← 공유 자산
+│   │   ├── playbook/       ← 실행 가이드
+│   │   ├── principle/      ← 원리 설명
+│   │   └── pro/            ← 현업 버전
+│   └── onboarding/     ← 신규 직원 온보딩 슬라이드
+│       ├── index.html  ← 슬라이드 뷰어 (16:9 + 사이드바)
+│       ├── css/ js/    ← 뷰어 자산
+│       ├── sections/   ← 섹션별 HTML
+│       └── _source/ src/ ← 원본 소스 (빌드용)
+│
+├── tools/              ← 인터랙티브 웹 도구 (type: tool)
+│   ├── keyword-combiner/ ← 네이버 키워드 조합기
+│   │   ├── index.html
+│   │   ├── app.js / styles.css
+│   │   └── README.md
+│   └── youtube-report/ ← 유튜브 월간 보고서 생성기 (SPA)
+│       ├── index.html
+│       ├── app.js / youtube-api.js / ai-analysis.js ...
+│       └── style.css
+│
+├── deploy/             ← 외부 공개(Netlify 배포) 보고서
+│   └── naver-logic-update-2605/
 │
 ├── extensions/         ← Chrome 확장 소개·다운로드 페이지
 │   ├── style.css       ← 확장 뷰어 공용 스타일
@@ -83,17 +98,6 @@ sbreport.github.io/
 │       ├── manifest.json
 │       └── content.js / styles.css
 │
-├── onboarding/         ← 신규 직원 온보딩 슬라이드
-│   ├── index.html      ← 슬라이드 뷰어 (16:9 + 사이드바)
-│   ├── css/ js/        ← 뷰어 자산
-│   ├── sections/       ← 섹션별 마크다운
-│   └── _source/ src/   ← 원본 소스 (빌드용)
-│
-├── youtube-report/     ← 유튜브 월간 보고서 생성기 (SPA)
-│   ├── index.html
-│   ├── app.js / youtube-api.js / ai-analysis.js ...
-│   └── style.css
-│
 └── help/               ← (예약) 이 가이드를 사이트에서 보는 페이지
 ```
 
@@ -101,10 +105,10 @@ sbreport.github.io/
 
 | 폴더 | 성격 | 추가 기준 |
 |------|------|-----------|
-| `docu/` | 마크다운 기반 문서·강의 | 글 위주 콘텐츠 |
+| `docs/` | 문서·강의·슬라이드 (type: doc) | 글 위주 콘텐츠, 슬라이드 |
+| `tools/` | 인터랙티브 웹 도구 (type: tool) | JS SPA, 복잡한 도구 |
+| `deploy/` | 외부 공개 보고서 (Netlify 배포) | 클라이언트 공유용 |
 | `extensions/` | Chrome 확장 소개 페이지 | 확장 배포 시 |
-| `onboarding/` | 사내 슬라이드형 문서 | 내부 교육용 |
-| `youtube-report/` | 인터랙티브 웹 도구 | 복잡한 JS 도구 |
 | `help/` | 가이드·안내 페이지 | 운영 문서 공개 필요 시 |
 
 ---
@@ -148,9 +152,9 @@ sbreport.github.io/
 
 | 종류 | 예시 | 특징 |
 |------|------|------|
-| 단순 마크다운 문서 | `docu/naverlogic2605/lecture.md` | 가장 간단. 마크다운 작성 후 viewer.js로 렌더링 |
-| 마크다운 + 멀티 탭 | `docu/naverlogic2605/playbook/` | 챕터가 여러 개인 강의·플레이북 |
-| 인터랙티브 도구 | `youtube-report/` | JavaScript SPA. 별도 폴더에 자체 index.html |
+| 단순 마크다운 문서 | `docs/naver-logic-2605/lecture.md` | 가장 간단. 마크다운 작성 후 viewer.js로 렌더링 |
+| 마크다운 + 멀티 탭 | `docs/naver-logic-2605/playbook/` | 챕터가 여러 개인 강의·플레이북 |
+| 인터랙티브 도구 | `tools/youtube-report/` | JavaScript SPA. 별도 폴더에 자체 index.html |
 | Chrome 확장 | `extensions/naver-blog-cleaner/` | 확장 파일 + 소개 index.html |
 
 ---
@@ -163,22 +167,22 @@ sbreport.github.io/
 
 ```powershell
 # 예: 새 강의 자료 추가
-mkdir "docu\instagram2606"
+mkdir "docs\instagram2606"
 
 # 또는 확장이 아닌 일반 도구라면
-mkdir "ig-tool"
+mkdir "tools\ig-tool"
 ```
 
 #### 2단계: 콘텐츠 파일 배치
 
-마크다운 문서라면 `content.md` 또는 원하는 이름으로 작성합니다. 기존 `docu/naverlogic2605/` 구조를 참고해 `viewer.js`, `style.css`를 복사해서 쓸 수 있습니다.
+마크다운 문서라면 `content.md` 또는 원하는 이름으로 작성합니다. 기존 `docs/naver-logic-2605/` 구조를 참고해 `viewer.js`, `style.css`를 복사해서 쓸 수 있습니다.
 
 #### 3단계: 허브 index.html에 카드 추가
 
 `index.html`의 `<section class="cards">` 안에 아래 스니펫을 복사·붙여넣기하고 내용을 수정합니다.
 
 ```html
-<a class="card" href="./docu/instagram2606/" target="_self"
+<a class="card" href="./docs/instagram2606/" target="_self"
    data-platform="naver" data-type="doc"
    data-tags="네이버 인스타그램 강의 문서">
   <div class="card-tags">
@@ -537,7 +541,7 @@ GitHub Pages 빌드에 1~2분이 걸립니다. 기다린 후 브라우저에서 
 
 카드의 `href` 경로와 실제 폴더 경로가 맞지 않는 경우입니다.
 
-- `href="./docu/mypage/"` 라면 `docu/mypage/index.html` 파일이 반드시 있어야 합니다.
+- `href="./docs/mypage/"` 라면 `docs/mypage/index.html` 파일이 반드시 있어야 합니다.
 - 경로의 대소문자, 슬래시 방향(`/`) 을 확인하세요.
 
 ---
@@ -610,19 +614,7 @@ data-type="doc"         ← doc / tool 중 하나인지 확인
 
 ### 우선순위 — 정해진 다음 작업
 
-- [ ] **폴더 구조 재분류** — 현재 프로젝트별 폴더(`docu/`, `extensions/`, `onboarding/`, `youtube-report/`)가 일관되지 않은 분류 양식으로 나뉘어 있음. 향후 **`문서/`, `도구/`** 같은 상위 카테고리 폴더를 만들고 하위에 정렬하는 방식으로 통합 고려.
-  - 예상 구조 (안):
-    ```
-    문서/
-      naverlogic2605/
-      onboarding/
-    도구/
-      youtube-report/
-      naver-blog-cleaner/
-      youtube-script-copier/
-    ```
-  - 단점: URL 변경 → 외부 공유 링크 끊김. 마이그레이션 시점에 주의.
-  - **후순위**: 카드 가시성·검색이 현재 충분히 동작하므로 폴더 구조는 콘텐츠가 더 쌓인 후 진행.
+- [x] **폴더 구조 재분류 완료 (2026-05-12)** — `docs/`(문서), `tools/`(도구), `deploy/`(배포), `extensions/`(확장) 4분류 체계 수립. `docu/` → `docs/`, `onboarding/` → `docs/onboarding/`, `keyword-combiner-web/` → `tools/keyword-combiner/`, `youtube-report/` → `tools/youtube-report/` 이동 완료.
 
 - [ ] **문서 전용 보기 모드 (필터 뷰)** — 문서가 여럿 쌓이면 허브에 "문서만 보기" 또는 "도구만 보기" 토글 추가 검토.
   - 현재도 검색창에 `문서` 입력 시 필터링은 작동함 (`data-tags`에 "문서" 포함)
