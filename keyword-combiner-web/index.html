@@ -1,0 +1,144 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>키워드 조합기</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <main class="app-shell">
+    <section class="hero">
+      <p class="eyebrow">Keyword Studio</p>
+      <h1>키워드 조합기</h1>
+      <p class="hero-copy">
+        지점, 시술, 키워드를 입력하면 조합 결과를 바로 확인하고 <strong>엑셀</strong>이나 <strong>CSV</strong>로 저장할 수 있어요.
+      </p>
+      <div class="hero-stats">
+        <article>
+          <span class="label">지점 수</span>
+          <strong id="branchCount">0</strong>
+        </article>
+        <article>
+          <span class="label">시술 수</span>
+          <strong id="procedureCount">0</strong>
+        </article>
+        <article>
+          <span class="label">키워드 수</span>
+          <strong id="keywordCount">0</strong>
+        </article>
+        <article class="accent">
+          <span class="label">예상 조합 수</span>
+          <strong id="totalCount">0</strong>
+        </article>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="input-grid">
+        <article class="card">
+          <div class="card-head">
+            <h2>지점</h2>
+            <span id="branchBadge" class="badge">0개</span>
+          </div>
+          <p class="hint">한 줄에 하나씩 입력하면 가장 편해요. 쉼표로 나눠 적어도 됩니다.</p>
+          <textarea id="branches" placeholder="예:&#10;강남&#10;일산&#10;다산"></textarea>
+          <label class="file-picker" for="branchFile">
+            <span class="file-picker-label">파일 불러오기</span>
+            <span class="file-picker-name" id="branchFileName">선택한 파일 없음</span>
+            <input id="branchFile" type="file" accept=".txt,.md,.csv,.xlsx">
+          </label>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>시술</h2>
+            <span id="procedureBadge" class="badge">0개</span>
+          </div>
+          <p class="hint">직접 입력하거나 파일에서 불러올 수 있어요.</p>
+          <textarea id="procedures" placeholder="예:&#10;울쎄라&#10;인모드&#10;리쥬란"></textarea>
+          <label class="file-picker" for="procedureFile">
+            <span class="file-picker-label">파일 불러오기</span>
+            <span class="file-picker-name" id="procedureFileName">선택한 파일 없음</span>
+            <input id="procedureFile" type="file" accept=".txt,.md,.csv,.xlsx">
+          </label>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>키워드</h2>
+            <span id="keywordBadge" class="badge">0개</span>
+          </div>
+          <p class="hint">예: 효과, 추천, 부작용, 유지기간</p>
+          <textarea id="keywords" placeholder="예:&#10;효과&#10;추천&#10;부작용&#10;유지기간"></textarea>
+          <label class="file-picker" for="keywordFile">
+            <span class="file-picker-label">파일 불러오기</span>
+            <span class="file-picker-name" id="keywordFileName">선택한 파일 없음</span>
+            <input id="keywordFile" type="file" accept=".txt,.md,.csv,.xlsx">
+          </label>
+        </article>
+      </div>
+
+      <aside class="panel">
+        <div class="panel-head">
+          <h2>작업 안내</h2>
+          <p>텍스트는 줄바꿈이나 쉼표 기준으로 읽고, 표 파일은 첫 번째 시트의 첫 번째 열을 기준으로 불러옵니다.</p>
+        </div>
+
+        <div class="actions">
+          <button id="fillSampleButton" class="secondary" type="button">예시 채우기</button>
+          <button id="clearButton" class="secondary" type="button">입력 비우기</button>
+          <button id="downloadXlsxButton" type="button">엑셀로 저장</button>
+          <button id="downloadCsvButton" class="secondary" type="button">CSV로 저장</button>
+        </div>
+
+        <div class="notice" id="statusMessage">
+          값을 입력하면 아래 표에 조합 결과가 바로 나타납니다.
+        </div>
+
+        <div class="checklist">
+          <h3>처음이라면 이렇게 시작해보세요</h3>
+          <ol>
+            <li>예시 채우기 버튼으로 화면 흐름 익히기</li>
+            <li>원하는 단어로 하나씩 바꾸기</li>
+            <li>조합 수와 미리보기 확인하기</li>
+            <li>엑셀이나 CSV로 저장하기</li>
+          </ol>
+        </div>
+      </aside>
+    </section>
+
+    <section class="preview card">
+      <div class="preview-head">
+        <div>
+          <p class="eyebrow">Live Preview</p>
+          <h2>조합 결과 미리보기</h2>
+        </div>
+        <p id="previewMeta">아직 만들어진 결과가 없어요.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>지점</th>
+              <th>시술</th>
+              <th>키워드</th>
+              <th>조합 키워드</th>
+            </tr>
+          </thead>
+          <tbody id="previewBody">
+            <tr>
+              <td colspan="4" class="empty">먼저 값을 입력해 주세요.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
