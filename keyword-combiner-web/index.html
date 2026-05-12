@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>키워드 조합기 — 스마트브랜딩</title>
+  <title>네이버 키워드 조합기 — 스마트브랜딩</title>
   <link rel="stylesheet" href="./styles.css">
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <script src="./app.js" defer></script>
@@ -13,17 +13,28 @@
 
   <main class="page">
 
-    <!-- 헤더 -->
+    <!-- 헤더 + 사용 방법 (좌우 2단) -->
     <header class="hero">
-      <h1>키워드 조합기</h1>
-      <p class="hero-sub">지점·시술·키워드를 조합해 키워드 목록을 만듭니다.</p>
-      <p class="hero-stats">
-        지점 <strong id="branchCount">0</strong> ·
-        시술 <strong id="procedureCount">0</strong> ·
-        키워드 <strong id="keywordCount">0</strong>
-        <span class="hero-arrow">→</span>
-        조합 <strong id="totalCount">0</strong>개
-      </p>
+      <div class="hero-content">
+        <h1>네이버 키워드 조합기</h1>
+        <p class="hero-sub">지점·시술·키워드를 조합해 키워드 목록을 만듭니다.</p>
+        <p class="hero-stats">
+          지점 <strong id="branchCount">0</strong> ·
+          시술 <strong id="procedureCount">0</strong> ·
+          키워드 <strong id="keywordCount">0</strong>
+          <span class="hero-arrow">→</span>
+          조합 <strong id="totalCount">0</strong>개
+        </p>
+      </div>
+      <aside class="hero-usage">
+        <h3>사용 방법</h3>
+        <ul>
+          <li>각 칸에 값을 입력하면 아래 표에 조합 결과가 바로 나옵니다.</li>
+          <li>텍스트(<code>.txt</code>, <code>.md</code>)는 줄바꿈이나 쉼표로 구분해서 읽어요.</li>
+          <li>표 파일(<code>.csv</code>, <code>.xlsx</code>)은 첫 번째 열에서 값을 가져옵니다.</li>
+          <li>완성된 결과는 엑셀 또는 CSV로 저장할 수 있어요.</li>
+        </ul>
+      </aside>
     </header>
 
     <!-- 입력 영역 -->
@@ -108,17 +119,6 @@
         </table>
       </div>
     </section>
-
-    <!-- 사용법 안내 -->
-    <footer class="usage">
-      <h3>사용 방법</h3>
-      <ul>
-        <li>각 칸에 값을 입력하면 아래 표에 조합 결과가 바로 나옵니다.</li>
-        <li>텍스트(<code>.txt</code>, <code>.md</code>)는 줄바꿈이나 쉼표로 구분해서 읽어요.</li>
-        <li>표 파일(<code>.csv</code>, <code>.xlsx</code>)은 첫 번째 열에서 값을 가져옵니다.</li>
-        <li>완성된 결과는 엑셀 또는 CSV로 저장할 수 있어요.</li>
-      </ul>
-    </footer>
 
   </main>
 
