@@ -57,6 +57,8 @@ html, body {
   -webkit-font-smoothing: antialiased;
   word-break: keep-all;
   overflow-wrap: anywhere;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* ===== 홈 링크 + 다크 토글 (사이트 표준) ===== */
@@ -102,21 +104,48 @@ html, body {
   border-color: var(--accent);
 }
 
-/* ===== 페이지 컨테이너 ===== */
+/* ===== 페이지 컨테이너 — Height 체인 ===== */
 .page {
   max-width: 1280px;
+  height: 100vh;
   margin: 0 auto;
-  padding: 48px 32px 80px;
+  padding: 48px 32px 24px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 작업 영역: 좌(입력+액션) / 우(결과) 분할 */
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 16px;
+  overflow: hidden;
+}
+.workspace-left {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+.workspace-right {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ===== 헤더 + 사용방법 (좌우 2단) ===== */
 .hero {
+  flex-shrink: 0;
   display: grid;
   grid-template-columns: 1fr 500px;
   gap: 20px;
   align-items: start;
-  margin: 0 0 24px;
-  padding-bottom: 20px;
+  margin: 0 0 20px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--border-soft);
 }
 .hero-content {
@@ -385,14 +414,18 @@ html, body {
   border-color: var(--warning);
 }
 
-/* ===== 결과 영역 ===== */
+/* ===== 결과 영역 — 우측 패널 내부 스크롤 ===== */
 .result {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-left: 3px solid var(--border);
   border-radius: 8px;
   padding: 16px 20px;
-  margin-bottom: 32px;
   transition: border-color .14s, border-left-color .14s, border-left-width .14s, background .14s;
 }
 /* A: 결과 활성화 — 데이터가 있을 때(empty 셀이 없을 때) 그린 보더로 강조 */
@@ -408,6 +441,7 @@ html, body {
   vertical-align: middle;
 }
 .result-head {
+  flex-shrink: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -433,10 +467,23 @@ html, body {
 }
 
 .result-table-wrap {
+  flex: 1;
+  min-height: 0;
   overflow-x: auto;
-  max-height: 480px;
   overflow-y: auto;
   border-radius: 6px;
+}
+.result-table .col-num {
+  width: 56px;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.result-table tbody td.col-num {
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
 }
 .result-table {
   width: 100%;
@@ -477,15 +524,39 @@ html, body {
 }
 
 /* ===== 반응형 ===== */
-/* 사용 방법 박스가 1줄씩 들어갈 충분한 폭이 안 되면 미리 세로로 */
+/* 1100px 이하 — 좌우 분할 X, 전체 페이지 세로 흐름으로 복귀 */
 @media (max-width: 1100px) {
+  html, body {
+    height: auto;
+    overflow: auto;
+  }
+  .page {
+    height: auto;
+    overflow: visible;
+    padding-bottom: 60px;
+  }
   .hero {
     grid-template-columns: 1fr;
+  }
+  .workspace {
+    display: block;
+    overflow: visible;
+  }
+  .workspace-left,
+  .workspace-right {
+    overflow: visible;
+  }
+  .result {
+    overflow: visible;
+    margin-top: 16px;
+  }
+  .result-table-wrap {
+    max-height: 480px;
   }
 }
 @media (max-width: 900px) {
   .page {
-    padding: 56px 18px 80px;
+    padding: 56px 18px 60px;
   }
   .inputs {
     grid-template-columns: 1fr;

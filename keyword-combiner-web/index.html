@@ -37,6 +37,12 @@
       </aside>
     </header>
 
+    <!-- 작업 영역: 좌(입력+액션) / 우(결과) 분할 -->
+    <div class="workspace">
+
+    <!-- 좌측 패널: 입력 + 보조 액션 -->
+    <div class="workspace-left">
+
     <!-- 입력 영역 -->
     <section class="inputs">
 
@@ -91,34 +97,38 @@
       <span class="status" id="statusMessage" data-tone="default"></span>
     </div>
 
-    <!-- 결과 영역 -->
-    <section class="result">
-      <div class="result-head">
-        <div>
-          <h2>조합 결과</h2>
-          <p class="result-meta" id="previewMeta">아직 만들어진 결과가 없어요.</p>
+    </div><!-- /.workspace-left -->
+
+    <!-- 우측 패널: 결과 -->
+    <div class="workspace-right">
+      <section class="result">
+        <div class="result-head">
+          <div>
+            <h2>조합 결과</h2>
+            <p class="result-meta" id="previewMeta">아직 만들어진 결과가 없어요.</p>
+          </div>
+          <div class="result-actions">
+            <button type="button" class="btn btn-primary" id="downloadXlsxButton" disabled>엑셀로 저장</button>
+            <button type="button" class="btn btn-secondary" id="downloadCsvButton" disabled>CSV로 저장</button>
+          </div>
         </div>
-        <div class="result-actions">
-          <button type="button" class="btn btn-primary" id="downloadXlsxButton" disabled>엑셀로 저장</button>
-          <button type="button" class="btn btn-secondary" id="downloadCsvButton" disabled>CSV로 저장</button>
+        <div class="result-table-wrap">
+          <table class="result-table">
+            <thead>
+              <tr>
+                <th class="col-num">#</th>
+                <th>조합</th>
+              </tr>
+            </thead>
+            <tbody id="previewBody">
+              <tr><td colspan="2" class="empty">먼저 값을 입력해 주세요.</td></tr>
+            </tbody>
+          </table>
         </div>
-      </div>
-      <div class="result-table-wrap">
-        <table class="result-table">
-          <thead>
-            <tr>
-              <th>지점</th>
-              <th>시술</th>
-              <th>키워드</th>
-              <th>조합</th>
-            </tr>
-          </thead>
-          <tbody id="previewBody">
-            <tr><td colspan="4" class="empty">먼저 값을 입력해 주세요.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+      </section>
+    </div><!-- /.workspace-right -->
+
+    </div><!-- /.workspace -->
 
   </main>
 

@@ -25,7 +25,7 @@
   },
 };
 
-const previewLimit = 10;
+const previewLimit = 500;
 
 const state = {
   branches: [],
@@ -323,7 +323,7 @@ function updatePreview() {
   const rows = buildRows();
 
   if (!rows.length) {
-    previewBody.innerHTML = '<tr><td colspan="4" class="empty">먼저 값을 입력해 주세요.</td></tr>';
+    previewBody.innerHTML = '<tr><td colspan="2" class="empty">먼저 값을 입력해 주세요.</td></tr>';
     previewMeta.textContent = "아직 만들어진 결과가 없어요.";
     return;
   }
@@ -331,18 +331,20 @@ function updatePreview() {
   const slicedRows = rows.slice(0, previewLimit);
   previewBody.innerHTML = slicedRows
     .map(
-      (row) => `
+      (row, index) => `
         <tr>
-          <td>${escapeHtml(row[0])}</td>
-          <td>${escapeHtml(row[1])}</td>
-          <td>${escapeHtml(row[2])}</td>
+          <td class="col-num">${(index + 1).toLocaleString("ko-KR")}</td>
           <td>${escapeHtml(row[3])}</td>
         </tr>
       `,
     )
     .join("");
 
-  previewMeta.textContent = `전체 ${rows.length.toLocaleString("ko-KR")}개 중 ${slicedRows.length.toLocaleString("ko-KR")}개를 먼저 보여드리고 있어요.`;
+  if (rows.length > previewLimit) {
+    previewMeta.textContent = `전체 ${rows.length.toLocaleString("ko-KR")}개 중 처음 ${slicedRows.length.toLocaleString("ko-KR")}개를 보여드리고 있어요. 전체는 엑셀 또는 CSV로 저장해서 확인하세요.`;
+  } else {
+    previewMeta.textContent = `총 ${rows.length.toLocaleString("ko-KR")}개의 조합 키워드입니다.`;
+  }
 }
 
 function updateButtons() {
@@ -380,9 +382,10 @@ function downloadXlsx() {
     return;
   }
 
+  const numberedRows = rows.map((row, i) => [i + 1, ...row]);
   const worksheet = XLSX.utils.aoa_to_sheet([
-    ["지점", "시술", "키워드", "조합 키워드"],
-    ...rows,
+    ["순번", "지점", "시술", "키워드", "조합 키워드"],
+    ...numberedRows,
   ]);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "CombinedKeywords");
@@ -397,7 +400,8 @@ function downloadCsv() {
     return;
   }
 
-  const csvRows = [["지점", "시술", "키워드", "조합 키워드"], ...rows];
+  const numberedRows = rows.map((row, i) => [i + 1, ...row]);
+  const csvRows = [["순번", "지점", "시술", "키워드", "조합 키워드"], ...numberedRows];
   const csvContent = csvRows.map((row) => row.map(escapeCsv).join(",")).join("\r\n");
   const blob = new Blob(["\uFEFF", csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
