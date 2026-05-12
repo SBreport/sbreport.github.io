@@ -12,5 +12,23 @@
 </head>
 <body>
   <script src="../viewer.js"></script>
+  <script>
+    (function () {
+      var banner = document.createElement('a');
+      banner.className = 'deploy-banner';
+      banner.href = '../../../deploy/naver-logic-update-2605/';
+      banner.target = '_blank';
+      banner.rel = 'noopener noreferrer';
+      banner.innerHTML =
+        '<span class="deploy-banner-tag">📋 클라이언트 공유용 보고서</span>' +
+        '<div class="deploy-banner-body">' +
+          '<strong class="deploy-banner-title">네이버 AI 검색 의료 마케팅 대응 가이드</strong>' +
+          '<span class="deploy-banner-desc">이 강의 메모를 마스킹·정제한 외부 배포본</span>' +
+        '</div>' +
+        '<span class="deploy-banner-arrow" aria-hidden="true">→</span>';
+      var content = document.getElementById('content');
+      if (content) content.insertAdjacentElement('beforebegin', banner);
+    })();
+  </script>
 </body>
 </html>
