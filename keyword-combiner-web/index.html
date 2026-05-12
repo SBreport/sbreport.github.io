@@ -25,6 +25,11 @@
           <span class="hero-arrow">→</span>
           조합 <strong id="totalCount">0</strong>개
         </p>
+        <div class="layout-switch" role="tablist" aria-label="레이아웃 선택">
+          <span class="layout-switch-label">레이아웃</span>
+          <button type="button" data-layout="side" class="active">좌우 분할</button>
+          <button type="button" data-layout="stack">상하 분할</button>
+        </div>
       </div>
       <aside class="hero-usage">
         <h3>사용 방법</h3>
@@ -37,8 +42,8 @@
       </aside>
     </header>
 
-    <!-- 작업 영역: 좌(입력+액션) / 우(결과) 분할 -->
-    <div class="workspace">
+    <!-- 작업 영역 — 좌우(side) / 상하(stack) 토글 가능 -->
+    <div class="workspace layout-side">
 
     <!-- 좌측 패널: 입력 + 보조 액션 -->
     <div class="workspace-left">
@@ -138,6 +143,24 @@
   </button>
 
   <script>
+    // ===== 레이아웃 토글 (좌우 / 상하) =====
+    const workspace = document.querySelector('.workspace');
+    const layoutButtons = document.querySelectorAll('.layout-switch button');
+    function applyLayout(mode) {
+      workspace.classList.remove('layout-side', 'layout-stack');
+      workspace.classList.add('layout-' + mode);
+      layoutButtons.forEach(b => b.classList.toggle('active', b.dataset.layout === mode));
+    }
+    const savedLayout = localStorage.getItem('kc-layout') || 'side';
+    applyLayout(savedLayout);
+    layoutButtons.forEach(b => {
+      b.addEventListener('click', () => {
+        const mode = b.dataset.layout;
+        applyLayout(mode);
+        localStorage.setItem('kc-layout', mode);
+      });
+    });
+
     // 다크모드 (사이트 표준)
     function applyTheme(theme) {
       document.documentElement.dataset.theme = theme;
