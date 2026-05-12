@@ -266,6 +266,29 @@ html, body {
 .card[data-type="deploy"] { --card-type: var(--type-deploy); }
 .card[data-type="tool"]   { --card-type: var(--type-tool); }
 
+/* === 외부 공개(배포용) 카드 — 다른 카드와 시각적 분리 === */
+.card[data-type="deploy"] {
+  background-color: var(--tag-deploy-bg);
+  border-color: var(--type-deploy);
+}
+.card[data-type="deploy"]::after {
+  content: "외부 공개";
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  padding: 2px 8px;
+  background: var(--type-deploy);
+  color: #ffffff;
+  border-radius: 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  pointer-events: none;
+}
+.card[data-type="deploy"]:hover {
+  border-color: var(--type-deploy);
+}
+
 .card-tags {
   display: flex;
   gap: 4px;
