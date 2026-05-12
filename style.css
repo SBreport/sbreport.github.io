@@ -390,6 +390,52 @@ html, body {
   color: var(--accent);
 }
 
+/* ===== Page 카드 (외부 운영 서비스) ===== */
+:root {
+  --plat-company: #6366f1;        /* 회사(company) — 인디고 */
+  --type-page: #6366f1;           /* 페이지 유형 — 인디고 */
+  --tag-page-bg: #e0e7ff;         --tag-page-fg: #4338ca;
+}
+[data-theme="dark"] {
+  --plat-company: #818cf8;
+  --type-page: #818cf8;
+  --tag-page-bg: #1e1b4b;         --tag-page-fg: #a5b4fc;
+}
+
+/* 플랫폼 컬러 매핑 — company 추가 */
+.card[data-platform="company"] { --card-plat: var(--plat-company); }
+
+/* 유형 컬러 매핑 — page 추가 */
+.card[data-type="page"] { --card-type: var(--type-page); }
+
+/* card-page: 옅은 인디고 틴트 배경 + 인디고 좌측 바 강조 */
+.card-page {
+  background-color: #eef2ff;
+  border-color: rgba(99, 102, 241, 0.35);
+}
+[data-theme="dark"] .card-page {
+  background-color: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+.card-page:hover {
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.18);
+  border-color: var(--type-page);
+}
+[data-theme="dark"] .card-page:hover {
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+}
+
+/* tag-page */
+.tag-page { background: var(--tag-page-bg); color: var(--tag-page-fg); }
+
+/* ext-arrow: 제목 옆 작은 ↗ */
+.ext-arrow {
+  font-size: 0.75em;
+  vertical-align: middle;
+  color: var(--tag-page-fg);
+  margin-left: 1px;
+}
+
 /* ===== Responsive ===== */
 @media (max-width: 720px) {
   .hero {

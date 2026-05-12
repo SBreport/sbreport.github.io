@@ -36,6 +36,42 @@
 
     <section class="cards" aria-label="프로젝트 목록">
 
+      <a class="card card-page" href="http://smartbranding.synology.me:8080/" target="_blank" rel="noopener noreferrer"
+         data-platform="company" data-type="page"
+         data-tags="회사 페이지 홈페이지 서비스 마케팅 모니터링 결과물 uni 유니">
+        <div class="card-tags">
+          <span class="tag tag-page">#홈페이지</span>
+          <span class="tag tag-page">#회사</span>
+          <span class="tag tag-page">#서비스</span>
+        </div>
+        <h2 class="card-title">UNI portal <span class="ext-arrow" aria-hidden="true">↗</span></h2>
+        <p class="card-desc">
+          마케팅 작업 결과물을 모니터링하는 사내 운영 페이지.
+        </p>
+        <div class="card-footer">
+          <span class="card-meta">smartbranding.synology.me</span>
+          <span class="card-cta">열기 ↗</span>
+        </div>
+      </a>
+
+      <a class="card card-page" href="https://sb-work-six.vercel.app/" target="_blank" rel="noopener noreferrer"
+         data-platform="company" data-type="page"
+         data-tags="회사 페이지 홈페이지 서비스 직원 업무 분장 관리 sbcompany">
+        <div class="card-tags">
+          <span class="tag tag-page">#홈페이지</span>
+          <span class="tag tag-page">#회사</span>
+          <span class="tag tag-page">#서비스</span>
+        </div>
+        <h2 class="card-title">SBcompany <span class="ext-arrow" aria-hidden="true">↗</span></h2>
+        <p class="card-desc">
+          내부 직원 업무 분장과 운영을 관리하는 사내 페이지.
+        </p>
+        <div class="card-footer">
+          <span class="card-meta">sb-work-six.vercel.app</span>
+          <span class="card-cta">열기 ↗</span>
+        </div>
+      </a>
+
       <a class="card" href="./docs/naver-logic-2605/playbook/" target="_self"
          data-platform="naver" data-type="doc"
          data-tags="네이버 SEO 블로그 검색 강의 문서">
@@ -91,7 +127,7 @@
       </a>
 
       <a class="card" href="./docs/onboarding/" target="_self"
-         data-platform="onboarding" data-type="doc"
+         data-platform="company" data-type="doc"
          data-tags="온보딩 신입 회사소개 입사 문서">
         <div class="card-tags">
           <span class="tag tag-onboarding">#온보딩</span>
@@ -206,8 +242,8 @@
     const originalOrder = [...cards]; // 기본순 보존
 
     // 정렬 우선순위 정의 — 새 카테고리 추가 시 이 두 객체에만 추가
-    const PLATFORM_ORDER = { naver: 1, youtube: 2, onboarding: 3 };
-    const TYPE_ORDER = { doc: 1, deploy: 2, tool: 3 };
+    const PLATFORM_ORDER = { company: 1, naver: 2, youtube: 3 };
+    const TYPE_ORDER = { page: 1, doc: 2, deploy: 3, tool: 4 };
 
     function applySort(mode) {
       let sorted;
