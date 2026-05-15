@@ -319,24 +319,43 @@
       if (el) return el;
     }
 
-    // 2. 일반 data 속성 셀렉터
-    let el;
-    el = document.querySelector(`[data-meta-area^="${areaId}"]`);
+    // 1순위: data-slog-container 정확 매칭 (외부 wrapper)
+    let el = document.querySelector(`[data-slog-container="${areaId}"]`);
     if (el) return el;
 
-    el = document.querySelector(`[data-slog-container="${areaId}"]`);
-    if (el) return el;
-
+    // 2순위: data-slog-container 접두사 매칭
     el = document.querySelector(`[data-slog-container^="${areaId}"]`);
     if (el) return el;
 
+    // 3순위: data-meta-area — 다수 매칭이면 공통 부모 반환
+    const matches = document.querySelectorAll(`[data-meta-area="${areaId}"]`);
+    if (matches.length > 1) {
+      let common = matches[0].parentElement;
+      while (common) {
+        let containsAll = true;
+        for (let i = 1; i < matches.length; i++) {
+          if (!common.contains(matches[i])) { containsAll = false; break; }
+        }
+        if (containsAll) return common;
+        common = common.parentElement;
+      }
+      return matches[0];
+    }
+    if (matches.length === 1) return matches[0];
+
+    // 4순위: data-meta-area 접두사
+    el = document.querySelector(`[data-meta-area^="${areaId}"]`);
+    if (el) return el;
+
+    // 5순위: data-laim-exp-id
     el = document.querySelector(`[data-laim-exp-id="${areaId}"]`);
     if (el) return el;
-
-    // 3. id 폴백
-    el = document.querySelector(`#${areaId}_root`);
+    el = document.querySelector(`[data-laim-exp-id^="${areaId}"]`);
     if (el) return el;
 
+    // 6순위: id 기반 폴백
+    el = document.getElementById(`${areaId}_root`);
+    if (el) return el;
     el = document.querySelector(`[id^="${areaId}"]`);
     if (el) return el;
 
@@ -538,19 +557,36 @@
 
   /**
    * isMixed 섹션(통합검색) 컨테이너 안의 카드를 분석해 타입 배열을 반환.
-   * 네이버 SERP의 명시적 카드 클래스(fds-web-list-root, fds-ugc-block-mod 등)를
-   * 기반으로 카드를 식별하므로 한 카드 안의 sublink 여러 개도 카드 1개로 정확히 카운트.
+   * 1순위: data-meta-area="${areaId}" 반복 패턴 (urB_coR 등 동일 areaId가 카드별로 반복)
+   * 2순위: 네이버 SERP의 명시적 카드 클래스(fds-web-doc-root, fds-ugc-block-mod 등) 폴백
    * @param {Element} container
+   * @param {string}  [areaId]  섹션 areaId (data-meta-area 반복 패턴 탐지에 사용)
    * @returns {Array<{ type: string, key: string, color: string }>}
    */
-  function analyzeMixedBlock(container) {
-    // 1. 모든 카드 후보 수집
+  function analyzeMixedBlock(container, areaId) {
+    // 1순위: data-meta-area="${areaId}"가 카드별로 반복되는 패턴
+    if (areaId) {
+      const innerCards = Array.from(container.querySelectorAll(`[data-meta-area="${areaId}"]`));
+      // container 자신이 data-meta-area를 가진 경우 제외
+      const filtered = innerCards.filter(card => card !== container);
+      if (filtered.length > 0) {
+        // querySelectorAll 결과는 이미 문서 순서
+        const cards = [];
+        for (const card of filtered) {
+          const type = determineCardType(card);
+          if (type) cards.push(type);
+        }
+        return cards;
+      }
+    }
+
+    // 2순위: 기존 fds-*/ugcItem 셀렉터 폴백
     const cardSet = new Set();
     for (const sel of CARD_SELECTORS) {
       container.querySelectorAll(sel).forEach(el => cardSet.add(el));
     }
 
-    // 2. 중첩 카드 제거: 다른 카드가 조상이면 skip
+    // 중첩 카드 제거: 다른 카드가 조상이면 skip
     const cardArr = Array.from(cardSet);
     const topLevel = cardArr.filter(card => {
       let p = card.parentElement;
@@ -561,7 +597,7 @@
       return true;
     });
 
-    // 3. 문서 순서로 정렬
+    // 문서 순서로 정렬
     topLevel.sort((a, b) => {
       const pos = a.compareDocumentPosition(b);
       if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
@@ -569,7 +605,7 @@
       return 0;
     });
 
-    // 4. 각 카드 타입 결정
+    // 각 카드 타입 결정
     const cards = [];
     for (const card of topLevel) {
       const type = determineCardType(card);
@@ -909,7 +945,7 @@
 
         // 통합검색(isMixed)이면 내부 카드 분석
         const isMixed = meta.isMixed === true;
-        const composition = isMixed ? analyzeMixedBlock(element) : null;
+        const composition = isMixed ? analyzeMixedBlock(element, s.n) : null;
 
         // 표시용 카운트: 통합검색 → 카드 수, 파워링크 → 광고 카드 수, 그 외 → null
         const matchKey = SECTION_MAP_KEYS_SORTED.find((k) => s.n.startsWith(k));
@@ -960,7 +996,7 @@
 
       // 통합검색(isMixed)이면 내부 카드 분석
       const isMixed = meta.isMixed === true;
-      const composition = isMixed ? analyzeMixedBlock(el) : null;
+      const composition = isMixed ? analyzeMixedBlock(el, areaId) : null;
 
       // 표시용 카운트: 통합검색 → 카드 수, 파워링크 → 광고 카드 수, 그 외 → null
       const matchKey = SECTION_MAP_KEYS_SORTED.find((k) => areaId.startsWith(k));
