@@ -6,9 +6,15 @@
   "use strict";
 
   const STORAGE_KEY      = "searchHighlighter";
-  const STYLE_KEY        = "searchHighlighterStyle";
+  const COLOR_KEY        = "searchHighlighterColor";
   const STYLE_ID         = "sbs-highlighter-style";
   const HIGHLIGHTED_ATTR = "data-sbs-highlighted";
+
+  const COLOR_PRESETS = {
+    green:  "rgba(45, 180, 0, 0.10)",
+    yellow: "rgba(255, 215, 0, 0.16)",
+    blue:   "rgba(74, 138, 244, 0.10)",
+  };
 
   // 블로그로 판정할 호스트 목록
   const BLOG_HOSTS = ["blog.naver.com", "m.blog.naver.com"];
@@ -42,7 +48,7 @@
   ];
 
   let enabled          = false;
-  let style            = "both";
+  let color            = "green";
   let observer         = null;
   let observerThrottle = null;
 
@@ -112,49 +118,24 @@
     });
   }
 
-  // 스타일 값에 따라 CSS 문자열 생성 (가상 요소 오버레이 방식)
-  function buildCssForStyle(s) {
-    const wantBar  = (s === "bar"  || s === "both");
-    const wantTint = (s === "tint" || s === "both");
-
-    let css = `
+  // 색상 값에 따라 CSS 문자열 생성 (::after 오버레이 방식)
+  function buildCssForColor(c) {
+    const bg = COLOR_PRESETS[c] || COLOR_PRESETS.green;
+    return `
       [${HIGHLIGHTED_ATTR}='1'] {
         position: relative !important;
       }
-    `;
-
-    if (wantBar) {
-      css += `
-      [${HIGHLIGHTED_ATTR}='1']::before {
-        content: '';
-        position: absolute;
-        left: 0;
-        top: 4px;
-        bottom: 4px;
-        width: 5px;
-        background: #2db400;
-        border-radius: 3px;
-        z-index: 100;
-        pointer-events: none;
-      }
-      `;
-    }
-
-    if (wantTint) {
-      css += `
       [${HIGHLIGHTED_ATTR}='1']::after {
         content: '';
         position: absolute;
         inset: 0;
-        background: rgba(45, 180, 0, 0.08);
+        background: ${bg};
         border-radius: 4px;
         pointer-events: none;
         z-index: 99;
+        transition: background 0.15s ease;
       }
-      `;
-    }
-
-    return css;
+    `;
   }
 
   // 강조 CSS 주입 (이미 있으면 텍스트만 교체)
@@ -165,7 +146,7 @@
       el.id = STYLE_ID;
       document.head.appendChild(el);
     }
-    el.textContent = buildCssForStyle(style);
+    el.textContent = buildCssForColor(color);
   }
 
   // 강조 CSS 제거
@@ -240,22 +221,22 @@
     removeStyle();
   }
 
-  // 초기 상태 로드 (기본값 true, style 기본값 "both")
-  chrome.storage.sync.get([STORAGE_KEY, STYLE_KEY]).then((stored) => {
+  // 초기 상태 로드 (기본값 true, color 기본값 "green")
+  chrome.storage.sync.get([STORAGE_KEY, COLOR_KEY]).then((stored) => {
     enabled = stored[STORAGE_KEY] ?? true;
-    style   = stored[STYLE_KEY]   ?? "both";
+    color   = stored[COLOR_KEY]   ?? "green";
     if (enabled) init();
   });
 
-  // popup 토글 및 스타일 변경 실시간 반응
+  // popup 토글 및 색상 변경 실시간 반응
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "sync") return;
 
-    // 스타일 변경: style 태그 텍스트만 교체 (DOM 재생성 없음)
-    if (STYLE_KEY in changes) {
-      const next = changes[STYLE_KEY].newValue ?? "both";
-      if (next !== style) {
-        style = next;
+    // 색상 변경: style 태그 텍스트만 교체 (DOM 재생성 없음)
+    if (COLOR_KEY in changes) {
+      const next = changes[COLOR_KEY].newValue ?? "green";
+      if (next !== color) {
+        color = next;
         if (enabled) injectStyle();
       }
     }

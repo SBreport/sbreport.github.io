@@ -2,20 +2,20 @@
 // 4개 기능 토글 상태를 chrome.storage.sync에 저장/불러오기.
 
 const FEATURE_KEYS = ["blogCleaner", "searchNavigator", "searchHighlighter", "searchVolume"];
-const STYLE_KEYS   = ["searchHighlighterStyle"];
+const COLOR_KEYS   = ["searchHighlighterColor"];
 
 const DEFAULTS = {
   blogCleaner: true,
   searchNavigator: true,
   searchHighlighter: true,
   searchVolume: false, // 백엔드 미완성 → 기본 OFF
-  searchHighlighterStyle: "both",
+  searchHighlighterColor: "green",
 };
 
 document.addEventListener("DOMContentLoaded", async () => {
   const toggles  = document.querySelectorAll("input.toggle");
   const segments = document.querySelectorAll(".segmented");
-  const allKeys  = [...FEATURE_KEYS, ...STYLE_KEYS];
+  const allKeys  = [...FEATURE_KEYS, ...COLOR_KEYS];
   const stored   = await chrome.storage.sync.get(allKeys);
 
   // 토글 초기값 반영
@@ -48,7 +48,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const val = btn.dataset.value;
         applySegmentedValue(seg, val);
         await chrome.storage.sync.set({ [key]: val });
-        flashStatus(`스타일: ${labelOfStyle(val)}`);
+        flashStatus(`색상: ${labelOfColor(val)}`);
       });
     });
   });
@@ -77,8 +77,8 @@ function labelOf(key) {
   }[key] ?? key;
 }
 
-function labelOfStyle(v) {
-  return { bar: "선", tint: "배경", both: "둘 다" }[v] ?? v;
+function labelOfColor(v) {
+  return { green: "녹색", yellow: "노랑", blue: "하늘" }[v] ?? v;
 }
 
 function flashStatus(text) {
