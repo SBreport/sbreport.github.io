@@ -34,7 +34,7 @@
       <aside class="hero-usage">
         <h3>사용 방법</h3>
         <ul>
-          <li>각 칸에 값을 입력하면 아래 표에 조합 결과가 바로 나옵니다.</li>
+          <li>각 칸에 값을 입력하고 '조합하기'를 누르면 조합 결과가 나옵니다.</li>
           <li>텍스트(<code>.txt</code>, <code>.md</code>)는 줄바꿈이나 쉼표로 구분해서 읽어요.</li>
           <li>표 파일(<code>.csv</code>, <code>.xlsx</code>)은 첫 번째 열에서 값을 가져옵니다.</li>
           <li>완성된 결과는 엑셀 또는 CSV로 저장할 수 있어요.</li>
@@ -97,6 +97,7 @@
 
     <!-- 보조 액션 -->
     <div class="aux-actions">
+      <button type="button" class="btn btn-primary" id="combineButton" disabled>조합하기</button>
       <button type="button" class="btn btn-clear" id="clearButton">입력 비우기</button>
       <button type="button" class="btn btn-ghost" id="fillSampleButton">예시 채우기</button>
       <span class="status" id="statusMessage" data-tone="default"></span>
@@ -113,7 +114,7 @@
             <p class="result-meta" id="previewMeta">아직 만들어진 결과가 없어요.</p>
           </div>
           <div class="result-actions">
-            <button type="button" class="btn btn-primary" id="downloadXlsxButton" disabled>엑셀로 저장</button>
+            <button type="button" class="btn btn-secondary" id="downloadXlsxButton" disabled>엑셀로 저장</button>
             <button type="button" class="btn btn-secondary" id="downloadCsvButton" disabled>CSV로 저장</button>
           </div>
         </div>
@@ -126,7 +127,7 @@
               </tr>
             </thead>
             <tbody id="previewBody">
-              <tr><td colspan="2" class="empty">먼저 값을 입력해 주세요.</td></tr>
+              <tr><td colspan="2" class="empty">값을 입력하고 '조합하기'를 눌러보세요.</td></tr>
             </tbody>
           </table>
         </div>

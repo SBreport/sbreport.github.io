@@ -1,4 +1,4 @@
-﻿const sourceConfig = {
+const sourceConfig = {
   branches: {
     textareaId: "branches",
     fileInputId: "branchFile",
@@ -31,6 +31,8 @@ const state = {
   branches: [],
   procedures: [],
   keywords: [],
+  results: [],       // 마지막 조합하기 결과 rows
+  activeLabels: [],  // 마지막 조합하기 시점의 활성 필드 레이블
   xlsxReady: false,
 };
 
@@ -39,16 +41,38 @@ document.addEventListener("DOMContentLoaded", () => {
   bindTextareas();
   bindFileInputs();
   bindButtons();
-  updateAll();
+  updateCountsOnly();
   updateSpreadsheetUi();
 });
+
+// ===== 활성 소스 / 카테시안 곱 =====
+
+function getActiveSources() {
+  return [
+    { key: "branches",   values: state.branches,   label: "지점" },
+    { key: "procedures", values: state.procedures, label: "시술" },
+    { key: "keywords",   values: state.keywords,   label: "키워드" },
+  ].filter((s) => s.values.length > 0);
+}
+
+function cartesianProduct(arrays) {
+  if (arrays.length === 0) {
+    return [];
+  }
+  return arrays.reduce(
+    (acc, arr) => acc.flatMap((a) => arr.map((b) => [...a, b])),
+    [[]]
+  );
+}
+
+// ===== 이벤트 바인딩 =====
 
 function bindTextareas() {
   Object.values(sourceConfig).forEach((config) => {
     const textarea = document.getElementById(config.textareaId);
     textarea.addEventListener("input", () => {
       updateStateFromTextarea(config);
-      updateAll();
+      updateCountsOnly();
     });
   });
 }
@@ -71,7 +95,7 @@ function bindFileInputs() {
         const textarea = document.getElementById(config.textareaId);
         textarea.value = values.join("\n");
         state[key] = values;
-        updateAll();
+        updateCountsOnly();
         setStatus(`${config.label} 파일에서 ${values.length.toLocaleString("ko-KR")}개를 불러왔어요.`);
       } catch (error) {
         console.error(error);
@@ -84,19 +108,22 @@ function bindFileInputs() {
 }
 
 function bindButtons() {
+  document.getElementById("combineButton").addEventListener("click", updateResult);
   document.getElementById("fillSampleButton").addEventListener("click", fillSampleData);
   document.getElementById("clearButton").addEventListener("click", clearAll);
   document.getElementById("downloadXlsxButton").addEventListener("click", downloadXlsx);
   document.getElementById("downloadCsvButton").addEventListener("click", downloadCsv);
 }
 
+// ===== 데이터 채우기 / 비우기 =====
+
 function fillSampleData() {
-  document.getElementById("branches").value = ["강남", "일산", "다산"].join("\n");
+  document.getElementById("branches").value   = ["강남", "일산", "다산"].join("\n");
   document.getElementById("procedures").value = ["울쎄라", "인모드", "리쥬란"].join("\n");
-  document.getElementById("keywords").value = ["효과", "추천", "부작용", "유지기간"].join("\n");
+  document.getElementById("keywords").value   = ["효과", "추천", "부작용", "유지기간"].join("\n");
 
   syncStateFromAllTextareas();
-  updateAll();
+  updateResult();
   setStatus("예시 데이터를 채워 두었어요. 아래 미리보기에서 조합 결과를 먼저 확인해 보세요.");
 }
 
@@ -106,12 +133,17 @@ function clearAll() {
     updateFileName(config, "선택한 파일 없음");
   });
 
-  state.branches = [];
-  state.procedures = [];
-  state.keywords = [];
-  updateAll();
+  state.branches     = [];
+  state.procedures   = [];
+  state.keywords     = [];
+  state.results      = [];
+  state.activeLabels = [];
+  updateCountsOnly();
+  resetPreview();
   setStatus("입력한 내용을 모두 비웠어요.");
 }
+
+// ===== 상태 동기화 =====
 
 function syncStateFromAllTextareas() {
   Object.values(sourceConfig).forEach((config) => {
@@ -129,10 +161,12 @@ function getSourceKeyFromTextareaId(textareaId) {
   return Object.keys(sourceConfig).find((key) => sourceConfig[key].textareaId === textareaId);
 }
 
+// ===== 토크나이징 / 중복 제거 =====
+
 function tokenizeValues(rawText) {
   const seen = new Set();
   const values = String(rawText ?? "")
-    .replace(/^\uFEFF/, "")
+    .replace(/^﻿/, "")
     .split(/[,\n;\t]+/g)
     .map((value) => value.trim())
     .filter(Boolean);
@@ -142,11 +176,12 @@ function tokenizeValues(rawText) {
     if (seen.has(normalized)) {
       return false;
     }
-
     seen.add(normalized);
     return true;
   });
 }
+
+// ===== 파일 읽기 =====
 
 async function readValuesFromFile(file) {
   const extension = file.name.split(".").pop()?.toLowerCase();
@@ -201,7 +236,7 @@ async function readValuesFromFile(file) {
 }
 
 function readValuesFromCsv(text) {
-  const normalizedText = String(text ?? "").replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const normalizedText = String(text ?? "").replace(/^﻿/, "").replace(/\r\n?/g, "\n");
   const rows = normalizedText
     .split("\n")
     .filter((line) => line.trim().length > 0)
@@ -267,16 +302,16 @@ function dedupeValues(values) {
     if (seen.has(normalized)) {
       return false;
     }
-
     seen.add(normalized);
     return true;
   });
 }
 
-function updateAll() {
+// ===== 카운트 / 버튼 전용 업데이트 (입력 중 실시간) =====
+
+function updateCountsOnly() {
   syncStateFromAllTextareas();
   updateCounts();
-  updatePreview();
   updateButtons();
 }
 
@@ -291,50 +326,66 @@ function updateCounts() {
 }
 
 function getTotalCount() {
-  if (!state.branches.length || !state.procedures.length || !state.keywords.length) {
+  const active = getActiveSources();
+  if (active.length === 0) {
     return 0;
   }
-
-  return state.branches.length * state.procedures.length * state.keywords.length;
+  return active.reduce((product, s) => product * s.values.length, 1);
 }
 
-function buildRows() {
-  const rows = [];
+function updateButtons() {
+  const hasActiveSource = getActiveSources().length > 0;
+  const hasResults = state.results.length > 0;
 
-  state.branches.forEach((branch) => {
-    state.procedures.forEach((procedure) => {
-      state.keywords.forEach((keyword) => {
-        rows.push([
-          branch,
-          procedure,
-          keyword,
-          `${branch} ${procedure} ${keyword}`.trim(),
-        ]);
-      });
-    });
+  document.getElementById("combineButton").disabled = !hasActiveSource;
+  document.getElementById("downloadXlsxButton").disabled = !hasResults || !state.xlsxReady;
+  document.getElementById("downloadCsvButton").disabled = !hasResults;
+}
+
+// ===== 결과 생성 (조합하기 버튼 클릭 시) =====
+
+function updateResult() {
+  const active = getActiveSources();
+  const rows = buildRows(active);
+
+  state.results      = rows;
+  state.activeLabels = active.map((s) => s.label);
+
+  updateButtons();
+  updatePreview(rows);
+}
+
+function buildRows(activeSources) {
+  if (activeSources.length === 0) {
+    return [];
+  }
+
+  const valueArrays = activeSources.map((s) => s.values);
+  const combinations = cartesianProduct(valueArrays);
+
+  return combinations.map((combo) => {
+    const combined = combo.join(" ").trim();
+    return [...combo, combined];
   });
-
-  return rows;
 }
 
-function updatePreview() {
+function updatePreview(rows) {
   const previewBody = document.getElementById("previewBody");
   const previewMeta = document.getElementById("previewMeta");
-  const rows = buildRows();
 
   if (!rows.length) {
-    previewBody.innerHTML = '<tr><td colspan="2" class="empty">먼저 값을 입력해 주세요.</td></tr>';
-    previewMeta.textContent = "아직 만들어진 결과가 없어요.";
+    resetPreview();
     return;
   }
 
   const slicedRows = rows.slice(0, previewLimit);
+  // 마지막 열이 조합 키워드이므로 그것만 미리보기에 표시
   previewBody.innerHTML = slicedRows
     .map(
       (row, index) => `
         <tr>
           <td class="col-num">${(index + 1).toLocaleString("ko-KR")}</td>
-          <td>${escapeHtml(row[3])}</td>
+          <td>${escapeHtml(row[row.length - 1])}</td>
         </tr>
       `,
     )
@@ -347,11 +398,14 @@ function updatePreview() {
   }
 }
 
-function updateButtons() {
-  const hasRows = getTotalCount() > 0;
-  document.getElementById("downloadXlsxButton").disabled = !hasRows || !state.xlsxReady;
-  document.getElementById("downloadCsvButton").disabled = !hasRows;
+function resetPreview() {
+  const previewBody = document.getElementById("previewBody");
+  const previewMeta = document.getElementById("previewMeta");
+  previewBody.innerHTML = '<tr><td colspan="2" class="empty">값을 입력하고 \'조합하기\'를 눌러보세요.</td></tr>';
+  previewMeta.textContent = "아직 만들어진 결과가 없어요.";
 }
+
+// ===== 스프레드시트 UI =====
 
 function updateSpreadsheetUi() {
   const xlsxButton = document.getElementById("downloadXlsxButton");
@@ -365,15 +419,16 @@ function updateSpreadsheetUi() {
   xlsxButton.title = "";
 }
 
-function updateFileName(config, fileName) {
-  const target = document.getElementById(config.fileNameId);
-  target.textContent = fileName;
+// ===== 다운로드 =====
+
+function getDownloadHeader() {
+  return ["순번", ...state.activeLabels, "조합 키워드"];
 }
 
 function downloadXlsx() {
-  const rows = buildRows();
+  const rows = state.results;
   if (!rows.length) {
-    setStatus("저장할 결과가 없어요. 먼저 값을 입력해 주세요.", true);
+    setStatus("저장할 결과가 없어요. 먼저 '조합하기'를 눌러주세요.", true);
     return;
   }
 
@@ -383,10 +438,7 @@ function downloadXlsx() {
   }
 
   const numberedRows = rows.map((row, i) => [i + 1, ...row]);
-  const worksheet = XLSX.utils.aoa_to_sheet([
-    ["순번", "지점", "시술", "키워드", "조합 키워드"],
-    ...numberedRows,
-  ]);
+  const worksheet = XLSX.utils.aoa_to_sheet([getDownloadHeader(), ...numberedRows]);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "CombinedKeywords");
   XLSX.writeFile(workbook, buildFileName("xlsx"));
@@ -394,16 +446,16 @@ function downloadXlsx() {
 }
 
 function downloadCsv() {
-  const rows = buildRows();
+  const rows = state.results;
   if (!rows.length) {
-    setStatus("저장할 결과가 없어요. 먼저 값을 입력해 주세요.", true);
+    setStatus("저장할 결과가 없어요. 먼저 '조합하기'를 눌러주세요.", true);
     return;
   }
 
   const numberedRows = rows.map((row, i) => [i + 1, ...row]);
-  const csvRows = [["순번", "지점", "시술", "키워드", "조합 키워드"], ...numberedRows];
+  const csvRows = [getDownloadHeader(), ...numberedRows];
   const csvContent = csvRows.map((row) => row.map(escapeCsv).join(",")).join("\r\n");
-  const blob = new Blob(["\uFEFF", csvContent], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob(["﻿", csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -412,6 +464,8 @@ function downloadCsv() {
   URL.revokeObjectURL(url);
   setStatus(`CSV 파일로 저장했어요. 총 ${rows.length.toLocaleString("ko-KR")}개입니다.`);
 }
+
+// ===== 유틸 =====
 
 function buildFileName(extension) {
   const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
@@ -430,6 +484,11 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function updateFileName(config, fileName) {
+  const target = document.getElementById(config.fileNameId);
+  target.textContent = fileName;
 }
 
 function setStatus(message, isError = false) {
