@@ -89,32 +89,43 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 10px 6px 10px;
-  border-bottom: 1px solid #f0f0f0;
+  padding: 2px 12px 8px 12px;
+  border-bottom: 1px solid #ececec;
   margin-bottom: 4px;
 }
 
 .sbs-nav-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: #888;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 700;
+  color: #222;
+  letter-spacing: -0.005em;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sbs-nav-title::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: #03c75a;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .sbs-nav-close {
   background: none;
   border: none;
   cursor: pointer;
-  padding: 0;
-  font-size: 14px;
-  color: #bbb;
+  padding: 0 4px;
+  font-size: 16px;
+  color: #aaa;
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 3px;
   transition: color 0.15s, background 0.15s;
 }
@@ -126,7 +137,7 @@
 .sbs-nav-list {
   list-style: none;
   margin: 0;
-  padding: 2px 6px;
+  padding: 4px 8px;
 }
 
 .sbs-nav-item {
@@ -186,9 +197,14 @@
   background: rgba(255, 255, 255, 0.25);
   color: #fff;
 }
-.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp {
-  filter: brightness(0.85);
-}
+/* 활성 항목 안의 배지: 흰 배경 + 색 글자로 반전 (녹색 위 녹색 회피) */
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-blog { background: #fff; color: #2db400; }
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-cafe { background: #fff; color: #67ac5b; }
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-kin  { background: #fff; color: #4a8af4; }
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-web  { background: #fff; color: #555; }
+
+/* 활성 항목 안의 +N more 표시도 흰색 */
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-more { color: #fff; }
 
 .sbs-nav-dot {
   font-size: 8px;
@@ -222,18 +238,18 @@
 /* 신스블 내부 카드 구성 인디케이터 */
 .sbs-nav-composition {
   display: flex;
-  gap: 2px;
+  gap: 3px;
   margin-top: 3px;
   padding-left: 14px;
   flex-wrap: wrap;
 }
 .sbs-nav-comp {
   display: inline-flex;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   color: #fff;
   border-radius: 3px;
@@ -245,9 +261,9 @@
 .sbs-nav-comp-web  { background: #888;    }
 .sbs-nav-comp-more {
   display: inline-flex;
-  height: 14px;
+  height: 16px;
   align-items: center;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   color: #888;
   padding: 0 3px;
@@ -699,7 +715,7 @@
 
     const title = document.createElement("span");
     title.className = "sbs-nav-title";
-    title.textContent = "섹션";
+    title.textContent = "스마트브랜딩 서포터";
 
     const closeBtn = document.createElement("button");
     closeBtn.className = "sbs-nav-close";
