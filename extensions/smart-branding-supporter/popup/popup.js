@@ -2,35 +2,71 @@
 // 4개 기능 토글 상태를 chrome.storage.sync에 저장/불러오기.
 
 const FEATURE_KEYS = ["blogCleaner", "searchNavigator", "searchHighlighter", "searchVolume"];
+const STYLE_KEYS   = ["searchHighlighterStyle"];
 
 const DEFAULTS = {
   blogCleaner: true,
   searchNavigator: true,
   searchHighlighter: true,
   searchVolume: false, // 백엔드 미완성 → 기본 OFF
+  searchHighlighterStyle: "both",
 };
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const toggles = document.querySelectorAll("input.toggle");
-  const stored = await chrome.storage.sync.get(FEATURE_KEYS);
+  const toggles  = document.querySelectorAll("input.toggle");
+  const segments = document.querySelectorAll(".segmented");
+  const allKeys  = [...FEATURE_KEYS, ...STYLE_KEYS];
+  const stored   = await chrome.storage.sync.get(allKeys);
 
-  // 초기값 반영
+  // 토글 초기값 반영
   toggles.forEach((input) => {
     const key = input.dataset.feature;
     if (input.disabled) return;
     input.checked = stored[key] ?? DEFAULTS[key];
+    syncFeatureItemState(input);
   });
 
-  // 변경 시 즉시 저장
+  // 토글 변경 시 즉시 저장
   toggles.forEach((input) => {
     input.addEventListener("change", async () => {
       if (input.disabled) return;
       const key = input.dataset.feature;
       await chrome.storage.sync.set({ [key]: input.checked });
       flashStatus(`${labelOf(key)}: ${input.checked ? "켬" : "끔"}`);
+      syncFeatureItemState(input);
+    });
+  });
+
+  // segmented 초기값 반영 + 클릭 이벤트
+  segments.forEach((seg) => {
+    const key     = seg.dataset.segmented;
+    const current = stored[key] ?? DEFAULTS[key];
+    applySegmentedValue(seg, current);
+
+    seg.querySelectorAll("button[data-value]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const val = btn.dataset.value;
+        applySegmentedValue(seg, val);
+        await chrome.storage.sync.set({ [key]: val });
+        flashStatus(`스타일: ${labelOfStyle(val)}`);
+      });
     });
   });
 });
+
+// segmented 버튼의 active 클래스를 value에 맞게 갱신
+function applySegmentedValue(seg, value) {
+  seg.querySelectorAll("button[data-value]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.value === value);
+  });
+}
+
+// 토글 상태에 따라 .feature-on 클래스 동기화
+function syncFeatureItemState(input) {
+  const li = input.closest(".feature-item");
+  if (!li) return;
+  li.classList.toggle("feature-on", input.checked && !input.disabled);
+}
 
 function labelOf(key) {
   return {
@@ -39,6 +75,10 @@ function labelOf(key) {
     searchHighlighter: "블로그 결과 강조",
     searchVolume: "검색량 표시",
   }[key] ?? key;
+}
+
+function labelOfStyle(v) {
+  return { bar: "선", tint: "배경", both: "둘 다" }[v] ?? v;
 }
 
 function flashStatus(text) {

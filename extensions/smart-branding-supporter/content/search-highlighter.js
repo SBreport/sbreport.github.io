@@ -6,6 +6,7 @@
   "use strict";
 
   const STORAGE_KEY      = "searchHighlighter";
+  const STYLE_KEY        = "searchHighlighterStyle";
   const STYLE_ID         = "sbs-highlighter-style";
   const HIGHLIGHTED_ATTR = "data-sbs-highlighted";
 
@@ -41,6 +42,7 @@
   ];
 
   let enabled          = false;
+  let style            = "both";
   let observer         = null;
   let observerThrottle = null;
 
@@ -110,20 +112,33 @@
     });
   }
 
-  // 강조 CSS 주입
-  function injectStyle() {
-    if (document.getElementById(STYLE_ID)) return;
-    const style = document.createElement("style");
-    style.id = STYLE_ID;
-    style.textContent = `
+  // 스타일 값에 따라 CSS 문자열 생성
+  function buildCssForStyle(s) {
+    const bar  = `box-shadow: inset 4px 0 0 0 #2db400 !important;`;
+    const tint = `background-color: rgba(45, 180, 0, 0.05) !important;`;
+    let inner  = "";
+    if (s === "bar")       inner = bar;
+    else if (s === "tint") inner = tint;
+    else                   inner = `${bar} ${tint}`; // both
+
+    return `
       [${HIGHLIGHTED_ATTR}='1'] {
-        outline: 3px solid #2db400 !important;
-        outline-offset: 2px !important;
+        ${inner}
         border-radius: 4px !important;
-        transition: outline 0.15s ease;
+        transition: box-shadow 0.15s ease, background-color 0.15s ease;
       }
     `;
-    document.head.appendChild(style);
+  }
+
+  // 강조 CSS 주입 (이미 있으면 텍스트만 교체)
+  function injectStyle() {
+    let el = document.getElementById(STYLE_ID);
+    if (!el) {
+      el = document.createElement("style");
+      el.id = STYLE_ID;
+      document.head.appendChild(el);
+    }
+    el.textContent = buildCssForStyle(style);
   }
 
   // 강조 CSS 제거
@@ -198,19 +213,33 @@
     removeStyle();
   }
 
-  // 초기 상태 로드 (기본값 true)
-  chrome.storage.sync.get(STORAGE_KEY).then((stored) => {
+  // 초기 상태 로드 (기본값 true, style 기본값 "both")
+  chrome.storage.sync.get([STORAGE_KEY, STYLE_KEY]).then((stored) => {
     enabled = stored[STORAGE_KEY] ?? true;
+    style   = stored[STYLE_KEY]   ?? "both";
     if (enabled) init();
   });
 
-  // popup 토글 실시간 반응
+  // popup 토글 및 스타일 변경 실시간 반응
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "sync" || !(STORAGE_KEY in changes)) return;
-    const next = changes[STORAGE_KEY].newValue;
-    if (next === enabled) return;
-    enabled = next;
-    if (enabled) init();
-    else teardown();
+    if (area !== "sync") return;
+
+    // 스타일 변경: style 태그 텍스트만 교체 (DOM 재생성 없음)
+    if (STYLE_KEY in changes) {
+      const next = changes[STYLE_KEY].newValue ?? "both";
+      if (next !== style) {
+        style = next;
+        if (enabled) injectStyle();
+      }
+    }
+
+    // 토글 변경
+    if (STORAGE_KEY in changes) {
+      const next = changes[STORAGE_KEY].newValue;
+      if (next === enabled) return;
+      enabled = next;
+      if (enabled) init();
+      else teardown();
+    }
   });
 })();
