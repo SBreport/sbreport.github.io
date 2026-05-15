@@ -20,7 +20,7 @@
   const SECTION_MAP = {
     // 신규 네이버 ID 체계 (현행 — 6글자 접두사)
     "pwl_":   { label: "파워링크",       isUgc: false, isAd: true  },
-    "urB_":   { label: "웹사이트",       isUgc: false, isAd: false },
+    "urB_":   { label: "신스블",          isUgc: false, isAd: false, isMixed: true },
     "ugB_":   { label: "브랜드콘텐츠",   isUgc: false, isAd: true  },
     "nmb_":   { label: "플레이스",       isUgc: false, isAd: false },
     "kwX_":   { label: "함께 많이 찾는", isUgc: false, isAd: false },
@@ -208,6 +208,40 @@
   vertical-align: middle;
   flex-shrink: 0;
   line-height: 1.4;
+}
+
+/* 신스블 내부 카드 구성 인디케이터 */
+.sbs-nav-composition {
+  display: flex;
+  gap: 2px;
+  margin-top: 3px;
+  padding-left: 14px;
+  flex-wrap: wrap;
+}
+.sbs-nav-comp {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.sbs-nav-comp-blog { background: #2db400; }
+.sbs-nav-comp-cafe { background: #67ac5b; }
+.sbs-nav-comp-kin  { background: #4a8af4; }
+.sbs-nav-comp-web  { background: #888;    }
+.sbs-nav-comp-more {
+  display: inline-flex;
+  height: 14px;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 600;
+  color: #888;
+  padding: 0 3px;
 }
     `.trim();
   }
@@ -400,6 +434,88 @@
     });
   }
 
+  // ─── 신스블 내부 카드 분석 ───────────────────────────────────────────────────
+
+  const CARD_TYPE_RULES = [
+    { type: "블로그",   key: "blog", color: "#2db400", hosts: ["blog.naver.com", "m.blog.naver.com"] },
+    { type: "카페",     key: "cafe", color: "#67ac5b", hosts: ["cafe.naver.com", "m.cafe.naver.com"] },
+    { type: "지식인",   key: "kin",  color: "#4a8af4", hosts: ["kin.naver.com", "m.kin.naver.com"] },
+    { type: "웹사이트", key: "web",  color: "#888",    hosts: [] }, // 폴백
+  ];
+
+  /**
+   * URL을 받아 해당하는 CARD_TYPE_RULES 항목을 반환.
+   * 매칭 실패 시 마지막 항목(웹사이트)을 폴백으로 반환.
+   * @param {string} url
+   * @returns {{ type: string, key: string, color: string }|null}
+   */
+  function detectCardType(url) {
+    try {
+      const u = new URL(url);
+      for (const rule of CARD_TYPE_RULES) {
+        if (rule.hosts.some(h => u.hostname === h)) return rule;
+      }
+      return CARD_TYPE_RULES[CARD_TYPE_RULES.length - 1]; // 웹사이트 폴백
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * isMixed 섹션(신스블) 컨테이너 안의 카드를 분석해 타입 배열을 반환.
+   * 카드 셀렉터 3종으로 탐색하고, Set으로 중복 제거 후 각 카드의
+   * 첫 번째 링크 href로 타입을 판정한다.
+   * @param {Element} container
+   * @returns {Array<{ type: string, key: string, color: string }>}
+   */
+  function analyzeMixedBlock(container) {
+    const cardSelectors = [
+      ".fds-ugc-block-mod",
+      "[data-template-id='ugcItem']",
+      "[data-template-id='ugcItemDesk']",
+    ];
+
+    const cards = [];
+    for (const sel of cardSelectors) {
+      container.querySelectorAll(sel).forEach(c => cards.push(c));
+    }
+
+    // 중복 제거 (한 카드가 여러 셀렉터에 매칭될 수 있음)
+    const uniqueCards = Array.from(new Set(cards));
+
+    // 각 카드의 첫 의미있는 링크로 타입 판정
+    const compositions = uniqueCards.map(card => {
+      const link = card.querySelector("a[href]");
+      if (!link) return null;
+      return detectCardType(link.href);
+    }).filter(Boolean);
+
+    return compositions; // [{type, key, color}, ...]
+  }
+
+  /**
+   * composition 배열을 받아 미니 인디케이터 HTML 문자열을 반환.
+   * 최대 5개까지 표시하고, 초과분은 "+N" 표기.
+   * @param {Array|null} composition
+   * @returns {string}
+   */
+  function buildCompositionHtml(composition) {
+    if (!composition || composition.length === 0) return "";
+    const MAX = 5;
+    const visible = composition.slice(0, MAX);
+    const overflow = composition.length - MAX;
+
+    const items = visible.map(c =>
+      `<span class="sbs-nav-comp sbs-nav-comp-${escapeHtml(c.key)}" title="${escapeHtml(c.type)}">${escapeHtml(c.type.charAt(0))}</span>`
+    ).join("");
+
+    const more = overflow > 0
+      ? `<span class="sbs-nav-comp-more" title="추가 ${overflow}개">+${overflow}</span>`
+      : "";
+
+    return `<div class="sbs-nav-composition">${items}${more}</div>`;
+  }
+
   // ─── DOM 생성 / 렌더 ──────────────────────────────────────────────────────────
 
   /** HTML 특수문자 이스케이프 */
@@ -488,6 +604,19 @@
       });
 
       li.appendChild(btn);
+
+      // 신스블(isMixed)이면 카드 구성 인디케이터 추가
+      if (sec.isMixed) {
+        const compHtml = buildCompositionHtml(sec.composition);
+        if (compHtml) {
+          const compWrapper = document.createElement("div");
+          compWrapper.innerHTML = compHtml;
+          // innerHTML로 만든 div 자체가 아니라 내부 .sbs-nav-composition 을 붙임
+          const compEl = compWrapper.firstElementChild;
+          if (compEl) li.appendChild(compEl);
+        }
+      }
+
       ul.appendChild(li);
     }
 
@@ -670,12 +799,19 @@
         const element = findSectionElement(s.n);
         if (!element) return null;
         const label = resolveLabel(element, meta.label, s.n);
+
+        // 신스블이면 내부 카드 분석
+        const isMixed = meta.isMixed === true;
+        const composition = isMixed ? analyzeMixedBlock(element) : null;
+
         return {
           areaId: s.n,
           element,
           label,
-          isUgc: meta.isUgc,
-          isAd:  meta.isAd,
+          isUgc:       meta.isUgc,
+          isAd:        meta.isAd,
+          isMixed,
+          composition, // null 또는 [{type, key, color}, ...]
         };
       })
       .filter(Boolean);
@@ -704,12 +840,19 @@
       const meta = getSectionMeta(areaId);
       if (!meta) continue;
       const label = resolveLabel(el, meta.label, areaId);
+
+      // 신스블이면 내부 카드 분석
+      const isMixed = meta.isMixed === true;
+      const composition = isMixed ? analyzeMixedBlock(el) : null;
+
       mapped.push({
         areaId,
-        element: el,
+        element:     el,
         label,
-        isUgc: meta.isUgc,
-        isAd:  meta.isAd,
+        isUgc:       meta.isUgc,
+        isAd:        meta.isAd,
+        isMixed,
+        composition, // null 또는 [{type, key, color}, ...]
       });
     }
 
