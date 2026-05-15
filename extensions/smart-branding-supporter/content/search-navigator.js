@@ -462,55 +462,108 @@
     { type: "웹사이트", key: "web",  color: "#888",    hosts: [] }, // 폴백
   ];
 
+  const WEB_TYPE = CARD_TYPE_RULES.find(r => r.key === "web");
+  const KIN_TYPE = CARD_TYPE_RULES.find(r => r.key === "kin");
+
+  const CARD_SELECTORS = [
+    ".fds-web-list-root",              // 웹사이트 클러스터
+    ".fds-ugc-block-mod",              // UGC (구형)
+    "[data-template-id='ugcItem']",    // UGC (신형 모바일/PC 공용)
+    "[data-template-id='ugcItemDesk']" // UGC (신형 PC 데스크탑)
+  ];
+
   /**
-   * URL 객체 또는 URL 문자열을 받아 해당하는 CARD_TYPE_RULES 항목을 반환.
-   * 매칭 실패 시 마지막 항목(웹사이트)을 폴백으로 반환.
-   * @param {URL|string} urlOrStr
+   * SVG의 className은 SVGAnimatedString이라 .includes() 호출 시 터짐. 안전 처리.
+   * @param {Element} el
+   * @returns {string}
+   */
+  function safeClass(el) {
+    if (!el) return "";
+    if (typeof el.className === "string") return el.className;
+    if (el.className && typeof el.className.baseVal === "string") return el.className.baseVal;
+    return "";
+  }
+
+  /**
+   * 카드 요소를 받아 해당하는 CARD_TYPE_RULES 항목을 반환.
+   * 1순위: fds-web-list-root 클래스 → 웹사이트
+   * 2순위: 카드 텍스트에 "네이버 지식iN" 표식 → 지식인
+   * 3순위: 카드 내부 첫 본문 링크의 도메인 매칭
+   * @param {Element} card
    * @returns {{ type: string, key: string, color: string }|null}
    */
-  function detectCardType(urlOrStr) {
-    try {
-      const u = urlOrStr instanceof URL ? urlOrStr : new URL(urlOrStr);
-      for (const rule of CARD_TYPE_RULES) {
-        if (rule.hosts.some(h => u.hostname === h)) return rule;
-      }
-      return CARD_TYPE_RULES[CARD_TYPE_RULES.length - 1]; // 웹사이트 폴백
-    } catch {
-      return null;
+  function determineCardType(card) {
+    const cls = safeClass(card);
+
+    // 1순위: 웹사이트 클러스터 마킹
+    if (cls.includes("fds-web-list-root")) {
+      return WEB_TYPE;
     }
+
+    // 2순위: 카드 텍스트에 "네이버 지식iN" 표식
+    const text = card.textContent || "";
+    if (/네이버\s*지식iN|지식iN/.test(text)) {
+      return KIN_TYPE;
+    }
+
+    // 3순위: 카드 내부 첫 본문 링크의 도메인 매칭
+    const links = card.querySelectorAll("a[href]");
+    for (const a of links) {
+      let url;
+      try { url = new URL(a.href); } catch { continue; }
+      if (SYSTEM_DOMAINS.has(url.hostname)) continue;
+      if (!/^https?:$/.test(url.protocol)) continue;
+
+      // 도메인 매칭
+      for (const rule of CARD_TYPE_RULES) {
+        if (rule.hosts.some(h => url.hostname === h)) return rule;
+      }
+      // 외부 도메인
+      return WEB_TYPE;
+    }
+
+    return null; // 식별 실패
   }
 
   /**
    * isMixed 섹션(통합검색) 컨테이너 안의 카드를 분석해 타입 배열을 반환.
-   * 컨테이너 내 모든 a[href] 링크를 순회하고, 시스템 도메인·비 http·
-   * hostname+pathname dedup 으로 카드 콘텐츠를 추정한다.
+   * 네이버 SERP의 명시적 카드 클래스(fds-web-list-root, fds-ugc-block-mod 등)를
+   * 기반으로 카드를 식별하므로 한 카드 안의 sublink 여러 개도 카드 1개로 정확히 카운트.
    * @param {Element} container
    * @returns {Array<{ type: string, key: string, color: string }>}
    */
   function analyzeMixedBlock(container) {
-    const links = container.querySelectorAll("a[href]");
-    const seen = new Set();
-    const cards = [];
-
-    for (const a of links) {
-      let url;
-      try { url = new URL(a.href); } catch { continue; }
-
-      // 시스템 도메인 (네이버 기능 링크) 제외
-      if (SYSTEM_DOMAINS.has(url.hostname)) continue;
-
-      // http/https 이외의 프로토콜 제외
-      if (!/^https?:$/.test(url.protocol)) continue;
-
-      // hostname + pathname dedup (검색 파라미터 무시)
-      const key = url.hostname + (url.pathname || "/");
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      const rule = detectCardType(url);
-      if (rule) cards.push(rule);
+    // 1. 모든 카드 후보 수집
+    const cardSet = new Set();
+    for (const sel of CARD_SELECTORS) {
+      container.querySelectorAll(sel).forEach(el => cardSet.add(el));
     }
 
+    // 2. 중첩 카드 제거: 다른 카드가 조상이면 skip
+    const cardArr = Array.from(cardSet);
+    const topLevel = cardArr.filter(card => {
+      let p = card.parentElement;
+      while (p && p !== container && p !== document.body) {
+        if (cardSet.has(p)) return false; // 부모가 카드면 자기는 nested → skip
+        p = p.parentElement;
+      }
+      return true;
+    });
+
+    // 3. 문서 순서로 정렬
+    topLevel.sort((a, b) => {
+      const pos = a.compareDocumentPosition(b);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
+
+    // 4. 각 카드 타입 결정
+    const cards = [];
+    for (const card of topLevel) {
+      const type = determineCardType(card);
+      if (type) cards.push(type);
+    }
     return cards; // [{type, key, color}, ...]
   }
 
