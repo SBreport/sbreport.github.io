@@ -9,11 +9,58 @@
   <main class="popup">
     <header class="popup-header">
       <h1>스마트 브랜딩 서포터</h1>
-      <p class="popup-sub">v0.1.0</p>
+      <span class="popup-version">v0.1.0</span>
     </header>
-    <section class="popup-empty">
-      <p>설정 UI는 다음 단계에서 추가됩니다.</p>
-    </section>
+
+    <ul class="feature-list">
+      <li class="feature-item">
+        <label class="feature-label">
+          <div class="feature-text">
+            <span class="feature-title">글감 패널 숨기기</span>
+            <span class="feature-desc">블로그 에디터 우측 패널을 숨깁니다.</span>
+          </div>
+          <input type="checkbox" class="toggle" data-feature="blogCleaner" checked>
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </li>
+
+      <li class="feature-item">
+        <label class="feature-label">
+          <div class="feature-text">
+            <span class="feature-title">좌측 섹션 네비게이터</span>
+            <span class="feature-desc">검색 결과 페이지 좌측에 섹션 목록 표시.</span>
+          </div>
+          <input type="checkbox" class="toggle" data-feature="searchNavigator" checked>
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </li>
+
+      <li class="feature-item">
+        <label class="feature-label">
+          <div class="feature-text">
+            <span class="feature-title">블로그 결과 강조</span>
+            <span class="feature-desc">검색 결과 중 블로그 항목만 녹색 강조.</span>
+          </div>
+          <input type="checkbox" class="toggle" data-feature="searchHighlighter" checked>
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </li>
+
+      <li class="feature-item feature-disabled">
+        <label class="feature-label">
+          <div class="feature-text">
+            <span class="feature-title">검색량 표시</span>
+            <span class="feature-desc">PC·모바일 검색량 표시. (백엔드 셋업 후 활성)</span>
+          </div>
+          <input type="checkbox" class="toggle" data-feature="searchVolume" disabled>
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </li>
+    </ul>
+
+    <footer class="popup-footer">
+      <span id="statusMessage">설정은 즉시 저장됩니다.</span>
+    </footer>
   </main>
   <script src="popup.js"></script>
 </body>
