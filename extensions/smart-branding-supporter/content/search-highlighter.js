@@ -1,5 +1,5 @@
 // content/search-highlighter.js
-// SBS 기능 ③: 네이버 검색 결과 중 블로그 항목 녹색 강조
+// SBS 기능 ③: 네이버 검색 결과 중 블로그 항목 강조
 // 적용: search.naver.com/search.naver
 
 (function () {
@@ -48,7 +48,7 @@
   ];
 
   let enabled          = false;
-  let color            = "green";
+  let color            = "blue";
   let observer         = null;
   let observerThrottle = null;
 
@@ -221,10 +221,10 @@
     removeStyle();
   }
 
-  // 초기 상태 로드 (기본값 true, color 기본값 "green")
+  // 초기 상태 로드 (기본값 true, color 기본값 "blue")
   chrome.storage.sync.get([STORAGE_KEY, COLOR_KEY]).then((stored) => {
     enabled = stored[STORAGE_KEY] ?? true;
-    color   = stored[COLOR_KEY]   ?? "green";
+    color   = stored[COLOR_KEY]   ?? "blue";
     if (enabled) init();
   });
 
@@ -234,7 +234,7 @@
 
     // 색상 변경: style 태그 텍스트만 교체 (DOM 재생성 없음)
     if (COLOR_KEY in changes) {
-      const next = changes[COLOR_KEY].newValue ?? "green";
+      const next = changes[COLOR_KEY].newValue ?? "blue";
       if (next !== color) {
         color = next;
         if (enabled) injectStyle();

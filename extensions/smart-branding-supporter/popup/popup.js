@@ -9,7 +9,7 @@ const DEFAULTS = {
   searchNavigator: true,
   searchHighlighter: true,
   searchVolume: false, // 백엔드 미완성 → 기본 OFF
-  searchHighlighterColor: "green",
+  searchHighlighterColor: "blue",
 };
 
 document.addEventListener("DOMContentLoaded", async () => {

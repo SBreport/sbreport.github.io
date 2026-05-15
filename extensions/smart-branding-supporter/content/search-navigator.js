@@ -68,7 +68,7 @@
     return `
 #sbs-nav {
   position: fixed;
-  left: 16px;
+  /* left는 JS(updateNavPosition)가 동적으로 설정 */
   top: 50%;
   transform: translateY(-50%);
   z-index: 9999;
@@ -138,11 +138,18 @@
   list-style: none;
   margin: 0;
   padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .sbs-nav-item {
   border-radius: 4px;
+  padding: 6px 10px;
   transition: background 0.12s;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .sbs-nav-item button {
@@ -155,7 +162,7 @@
   background: none;
   border: none;
   cursor: pointer;
-  padding: 6px 6px;
+  padding: 0;
   font-size: 12px;
   font-family: inherit;
   border-radius: 0;
@@ -239,9 +246,8 @@
 .sbs-nav-composition {
   display: flex;
   gap: 3px;
-  margin-top: 3px;
-  padding-left: 14px;
   flex-wrap: wrap;
+  /* margin/padding 없음 — .sbs-nav-item의 gap이 라벨과 간격 처리 */
 }
 .sbs-nav-comp {
   display: inline-flex;
@@ -811,9 +817,52 @@
     const nav = buildNavDom(state.sections);
     document.body.appendChild(nav);
 
+    // DOM 생성 직후 위치 설정
+    updateNavPosition();
+
     // 렌더 후 활성 상태 강제 재계산 (early return 회피)
     state.activeAreaId = null;
     updateActive();
+  }
+
+  // ─── 네비게이터 위치 계산 ─────────────────────────────────────────────────────
+
+  const NAV_WIDTH = 200;
+  const NAV_GAP   = 16; // 콘텐츠 좌측 모서리와 네비게이터 사이 간격
+
+  /**
+   * 검색 결과 콘텐츠 영역의 viewport 기준 left 좌표를 반환.
+   * 앵커 우선순위: .api_subject_bx → #main_pack → .content_wrap
+   * 너비가 0이면(숨겨진 요소) 건너뜀.
+   * @returns {number|null}
+   */
+  function getContentLeft() {
+    const anchors = [".api_subject_bx", "#main_pack", ".content_wrap"];
+    for (const sel of anchors) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0) return rect.left;
+    }
+    return null;
+  }
+
+  /**
+   * 콘텐츠 영역 좌측 기준으로 네비게이터의 left 위치를 동적으로 설정.
+   * 공간이 부족하면(desired < 10) 숨김.
+   */
+  function updateNavPosition() {
+    const nav = document.getElementById(NAV_ID);
+    if (!nav) return;
+    const contentLeft = getContentLeft();
+    if (contentLeft === null) return;
+    const desired = contentLeft - NAV_WIDTH - NAV_GAP;
+    if (desired < 10) {
+      nav.style.display = "none";
+      return;
+    }
+    nav.style.display = "";
+    nav.style.left = `${desired}px`;
   }
 
   /** 네비게이터 DOM 제거 */
@@ -1132,7 +1181,7 @@
     }
   });
 
-  // 창 크기 변경 감지: 좁아지면 숨기고, 넓어지면 재표시
+  // 창 크기 변경 감지: 좁아지면 숨기고, 넓어지면 재표시 + 위치 재계산
   window.addEventListener("resize", () => {
     if (!state.enabled) return;
     if (window.innerWidth < 1200) {
@@ -1140,6 +1189,9 @@
       destroyNav();
     } else if (!document.getElementById(NAV_ID) && !state.closed) {
       init();
+    } else {
+      // 창 너비 변경 시 콘텐츠 위치가 달라질 수 있으므로 위치 재계산
+      updateNavPosition();
     }
   });
 })();
