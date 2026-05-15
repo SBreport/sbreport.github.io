@@ -58,6 +58,7 @@
     mutationObserver: null,
     mutationThrottle: null,
     lastQuery:        "",
+    lastSignature:    "",   // sections 시그니처 — 불필요한 재생성 skip용
     scrollHandler:    null, // 제거 시 참조 필요
   };
 
@@ -656,6 +657,20 @@
     return `<div class="sbs-nav-composition">${items}${more}</div>`;
   }
 
+  // ─── 섹션 시그니처 ───────────────────────────────────────────────────────────
+
+  /**
+   * sections 배열을 문자열 시그니처로 변환.
+   * 본질적으로 같은 목록이면 동일 문자열이 된다 → 불필요한 renderNav 스킵에 사용.
+   * @param {Array} sections
+   * @returns {string}
+   */
+  function signatureOf(sections) {
+    return sections.map(s =>
+      `${s.areaId}|${s.label}|${s.count ?? "-"}|${(s.composition || []).map(c => c.key).join(",")}`
+    ).join("||");
+  }
+
   // ─── DOM 생성 / 렌더 ──────────────────────────────────────────────────────────
 
   /** HTML 특수문자 이스케이프 */
@@ -780,7 +795,8 @@
     const nav = buildNavDom(state.sections);
     document.body.appendChild(nav);
 
-    // 렌더 직후 활성 항목 반영
+    // 렌더 후 활성 상태 강제 재계산 (early return 회피)
+    state.activeAreaId = null;
     updateActive();
   }
 
@@ -856,14 +872,14 @@
     const target = document.getElementById("main_pack") ?? document.body;
 
     state.mutationObserver = new MutationObserver(() => {
-      // 100ms throttle: 짧은 시간에 여러 DOM 변경이 몰려도 한 번만 재로드
+      // 500ms throttle: 짧은 시간에 여러 DOM 변경이 몰려도 한 번만 재로드
       if (state.mutationThrottle) return;
       state.mutationThrottle = setTimeout(() => {
         state.mutationThrottle = null;
         if (state.enabled && !state.closed) {
           loadSections();
         }
-      }, 100);
+      }, 500);
     });
 
     state.mutationObserver.observe(target, { childList: true, subtree: true });
@@ -969,10 +985,16 @@
       })
       .filter(Boolean);
 
-    // 중복 라벨 넘버링 적용 후 state에 저장
-    state.sections = applyDuplicateNumbering(mapped);
+    // 중복 라벨 넘버링 적용 후 시그니처 비교 — 변화가 있을 때만 재생성
+    const newSig = signatureOf(mapped);
+    const numbered = applyDuplicateNumbering(mapped);
 
-    renderNav();
+    if (state.lastSignature !== newSig) {
+      state.lastSignature = newSig;
+      state.sections = numbered;
+      renderNav();
+    }
+    // 시그니처 변화와 무관하게 항상 스크롤 위치 반영
     updateActive();
   }
 
@@ -1019,10 +1041,16 @@
       });
     }
 
-    // 중복 라벨 넘버링 적용 후 state에 저장
-    state.sections = applyDuplicateNumbering(mapped);
+    // 중복 라벨 넘버링 적용 후 시그니처 비교 — 변화가 있을 때만 재생성
+    const newSig = signatureOf(mapped);
+    const numbered = applyDuplicateNumbering(mapped);
 
-    renderNav();
+    if (state.lastSignature !== newSig) {
+      state.lastSignature = newSig;
+      state.sections = numbered;
+      renderNav();
+    }
+    // 시그니처 변화와 무관하게 항상 스크롤 위치 반영
     updateActive();
   }
 
@@ -1060,8 +1088,9 @@
     teardownMutationObserver();
     teardownQueryPoll();
     removeStyle();
-    state.sections     = [];
-    state.activeAreaId = null;
+    state.sections      = [];
+    state.activeAreaId  = null;
+    state.lastSignature = "";
   }
 
   // ─── storage 토글 연동 ────────────────────────────────────────────────────────
