@@ -466,8 +466,8 @@
   const KIN_TYPE = CARD_TYPE_RULES.find(r => r.key === "kin");
 
   const CARD_SELECTORS = [
-    ".fds-web-list-root",              // 웹사이트 클러스터
-    ".fds-ugc-block-mod",              // UGC (구형)
+    ".fds-web-doc-root",               // 신형 통합검색 카드 (개별 카드 단위)
+    ".fds-ugc-block-mod",              // UGC 카드 (구형)
     "[data-template-id='ugcItem']",    // UGC (신형 모바일/PC 공용)
     "[data-template-id='ugcItemDesk']" // UGC (신형 PC 데스크탑)
   ];
@@ -486,25 +486,36 @@
 
   /**
    * 카드 요소를 받아 해당하는 CARD_TYPE_RULES 항목을 반환.
-   * 1순위: fds-web-list-root 클래스 → 웹사이트
-   * 2순위: 카드 텍스트에 "네이버 지식iN" 표식 → 지식인
+   * 1순위: 프로필 영역 텍스트에 "네이버 지식iN" → 지식인, 도메인 노출 → 웹사이트
+   * 2순위: 카드 전체 텍스트에 "네이버 지식iN" 표식 → 지식인
    * 3순위: 카드 내부 첫 본문 링크의 도메인 매칭
    * @param {Element} card
    * @returns {{ type: string, key: string, color: string }|null}
    */
   function determineCardType(card) {
-    const cls = safeClass(card);
-
-    // 1순위: 웹사이트 클러스터 마킹
-    if (cls.includes("fds-web-list-root")) {
-      return WEB_TYPE;
+    // 1순위: 프로필 영역에 도메인 노출 여부 검사
+    const profileSelectors = [
+      "[data-sds-comp='Profile']",
+      "[class*='profile']",
+      "[class*='source']",
+      "[class*='header']",
+    ];
+    for (const sel of profileSelectors) {
+      const pe = card.querySelector(sel);
+      if (!pe) continue;
+      const t = pe.textContent || "";
+      // "네이버 지식iN"이 먼저 — 지식인 우선
+      if (/네이버\s*지식iN/.test(t)) return KIN_TYPE;
+      // 도메인 노출 패턴: blog.naver.com, cafe.naver.com, kin.naver.com, 또는 외부 도메인
+      if (/(?:blog|cafe|kin)\.naver\.com|[a-z0-9-]+\.(?:com|co\.kr|kr|net|org)\b/i.test(t)) {
+        return WEB_TYPE;
+      }
+      break; // 첫 프로필 영역만 검사
     }
 
-    // 2순위: 카드 텍스트에 "네이버 지식iN" 표식
-    const text = card.textContent || "";
-    if (/네이버\s*지식iN|지식iN/.test(text)) {
-      return KIN_TYPE;
-    }
+    // 2순위: 카드 전체 텍스트에 "네이버 지식iN" 표식
+    const cardText = card.textContent || "";
+    if (/네이버\s*지식iN|지식iN/.test(cardText)) return KIN_TYPE;
 
     // 3순위: 카드 내부 첫 본문 링크의 도메인 매칭
     const links = card.querySelectorAll("a[href]");
