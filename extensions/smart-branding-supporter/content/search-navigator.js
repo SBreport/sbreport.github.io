@@ -76,7 +76,8 @@
   border-radius: 8px;
   padding: 10px 0 10px 0;
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-  width: 140px;
+  width: 200px;
+  min-width: 200px;
   font-family: 'Pretendard', system-ui, -apple-system, sans-serif;
   font-size: 12px;
   line-height: 1.4;
@@ -124,7 +125,12 @@
 .sbs-nav-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 2px 6px;
+}
+
+.sbs-nav-item {
+  border-radius: 4px;
+  transition: background 0.12s;
 }
 
 .sbs-nav-item button {
@@ -132,15 +138,15 @@
   align-items: center;
   gap: 5px;
   width: 100%;
+  min-width: 0;
   text-align: left;
   background: none;
   border: none;
   cursor: pointer;
-  padding: 6px 10px;
+  padding: 6px 6px;
   font-size: 12px;
   font-family: inherit;
   border-radius: 0;
-  transition: background 0.12s;
   box-sizing: border-box;
 }
 
@@ -159,29 +165,28 @@
   color: #555;
 }
 
-/* hover */
-.sbs-nav-item button:hover {
+/* hover (비활성 항목만) */
+.sbs-nav-item:not(.sbs-nav-item--active):hover {
   background: #f5f5f5;
 }
 
-/* 활성 - UGC */
-.sbs-nav-item.sbs-nav-item--ugc.sbs-nav-item--active button {
+/* 활성 항목: li 전체 배경 녹색 + 흰 글자 */
+.sbs-nav-item.sbs-nav-item--active {
   background: #03c75a;
-  color: #fff;
-  font-weight: 600;
 }
-
-/* 활성 - 일반 */
 .sbs-nav-item.sbs-nav-item--active button {
-  background: #555;
   color: #fff;
   font-weight: 600;
 }
-
-/* 활성 UGC가 일반 활성보다 우선 (중복 규칙 충돌 방지) */
-.sbs-nav-item.sbs-nav-item--ugc.sbs-nav-item--active button {
-  background: #03c75a;
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-dot {
   color: #fff;
+}
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-badge {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp {
+  filter: brightness(0.85);
 }
 
 .sbs-nav-dot {
@@ -191,9 +196,12 @@
 }
 
 .sbs-nav-label {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 /* 광고 배지 */
@@ -613,9 +621,11 @@
 
       // 라벨 (N건 접미사 포함)
       const countSuffix = sec.count != null && sec.count > 0 ? ` (${sec.count}건)` : "";
+      const labelText = `${sec.label}${countSuffix}`;
       const labelSpan = document.createElement("span");
       labelSpan.className = "sbs-nav-label";
-      labelSpan.textContent = `${sec.label}${countSuffix}`;
+      labelSpan.title = labelText;
+      labelSpan.textContent = labelText;
 
       btn.appendChild(dot);
       btn.appendChild(labelSpan);
