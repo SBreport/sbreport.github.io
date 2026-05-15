@@ -337,6 +337,7 @@ html, body {
   color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.45;
+  min-height: 2.9em; /* 2줄 높이 확보 — 박스 간 textarea 시작 위치 정렬 */
 }
 
 .input-card textarea {
