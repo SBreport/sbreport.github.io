@@ -112,22 +112,49 @@
     });
   }
 
-  // 스타일 값에 따라 CSS 문자열 생성
+  // 스타일 값에 따라 CSS 문자열 생성 (가상 요소 오버레이 방식)
   function buildCssForStyle(s) {
-    const bar  = `box-shadow: inset 4px 0 0 0 #2db400 !important;`;
-    const tint = `background-color: rgba(45, 180, 0, 0.05) !important;`;
-    let inner  = "";
-    if (s === "bar")       inner = bar;
-    else if (s === "tint") inner = tint;
-    else                   inner = `${bar} ${tint}`; // both
+    const wantBar  = (s === "bar"  || s === "both");
+    const wantTint = (s === "tint" || s === "both");
 
-    return `
+    let css = `
       [${HIGHLIGHTED_ATTR}='1'] {
-        ${inner}
-        border-radius: 4px !important;
-        transition: box-shadow 0.15s ease, background-color 0.15s ease;
+        position: relative !important;
       }
     `;
+
+    if (wantBar) {
+      css += `
+      [${HIGHLIGHTED_ATTR}='1']::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 4px;
+        bottom: 4px;
+        width: 5px;
+        background: #2db400;
+        border-radius: 3px;
+        z-index: 100;
+        pointer-events: none;
+      }
+      `;
+    }
+
+    if (wantTint) {
+      css += `
+      [${HIGHLIGHTED_ATTR}='1']::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: rgba(45, 180, 0, 0.08);
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 99;
+      }
+      `;
+    }
+
+    return css;
   }
 
   // 강조 CSS 주입 (이미 있으면 텍스트만 교체)
