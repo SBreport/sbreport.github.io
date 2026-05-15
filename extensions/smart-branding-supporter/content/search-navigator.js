@@ -11,30 +11,47 @@
   const NAV_ID      = "sbs-nav";
   const STYLE_ID    = "sbs-nav-style";
 
-  // 섹션 ID → 라벨 / UGC 여부 매핑
-  // n 필드가 아래 키로 startsWith()하면 매칭
+  // 섹션 ID → 라벨 / UGC 여부 / 광고 여부 매핑
+  // 키: areaId의 접두사. startsWith()로 매칭.
+  // isAd: true면 광고 배지 + 회색 톤 (isUgc보다 우선)
+  // isUgc: true면 녹색 톤
+  //
+  // 중요: 매칭 시 키를 length DESC로 정렬해 긴 접두사 우선 매칭.
   const SECTION_MAP = {
-    pwl:   { label: "파워링크",   isUgc: false },
-    brd:   { label: "브랜드",     isUgc: false },
-    blg:   { label: "블로그",     isUgc: true  },
-    caf:   { label: "카페",       isUgc: true  },
-    kin:   { label: "지식iN",     isUgc: true  },
-    influ: { label: "인플루언서", isUgc: true  },
-    news:  { label: "뉴스",       isUgc: false },
-    img:   { label: "이미지",     isUgc: false },
-    vid:   { label: "동영상",     isUgc: false },
-    shp:   { label: "쇼핑",       isUgc: false },
-    shop:  { label: "쇼핑",       isUgc: false },
-    plac:  { label: "플레이스",   isUgc: false },
-    smart: { label: "스마트블록", isUgc: false },
+    // 신규 네이버 ID 체계 (현행 — 6글자 접두사)
+    "pwl_":   { label: "파워링크",       isUgc: false, isAd: true  },
+    "urB_":   { label: "웹사이트",       isUgc: false, isAd: false },
+    "ugB_":   { label: "브랜드콘텐츠",   isUgc: false, isAd: true  },
+    "nmb_":   { label: "플레이스",       isUgc: false, isAd: false },
+    "kwX_":   { label: "함께 많이 찾는", isUgc: false, isAd: false },
+
+    // 옛 짧은 코드 (다른 검색어에서 나올 수 있음)
+    "blg":    { label: "블로그",         isUgc: true,  isAd: false },
+    "caf":    { label: "카페",           isUgc: true,  isAd: false },
+    "kin":    { label: "지식iN",         isUgc: true,  isAd: false },
+    "influ":  { label: "인플루언서",     isUgc: true,  isAd: false },
+    "news":   { label: "뉴스",           isUgc: false, isAd: false },
+    "img":    { label: "이미지",         isUgc: false, isAd: false },
+    "vid":    { label: "동영상",         isUgc: false, isAd: false },
+    "shp":    { label: "쇼핑",           isUgc: false, isAd: false },
+    "shop":   { label: "쇼핑",           isUgc: false, isAd: false },
+    "plac":   { label: "플레이스",       isUgc: false, isAd: false },
+    "brd":    { label: "브랜드콘텐츠",   isUgc: false, isAd: true  },
+    "smart":  { label: "스마트블록",     isUgc: false, isAd: false },
+    "pwl":    { label: "파워링크",       isUgc: false, isAd: true  },
   };
+
+  // SECTION_MAP 키를 길이 내림차순으로 정렬한 배열 — 긴 접두사 우선 매칭
+  const SECTION_MAP_KEYS_SORTED = Object.keys(SECTION_MAP).sort(
+    (a, b) => b.length - a.length
+  );
 
   // ─── 상태 ────────────────────────────────────────────────────────────────────
 
   let state = {
     enabled:          false,
-    sections:         [],   // { areaId, element, label, isUgc }
-    closed:           false, // 사용자가 ✕ 눌러서 닫았는지
+    sections:         [],   // { areaId, element, label, isUgc, isAd }
+    closed:           false, // 사용자가 × 눌러서 닫았는지
     activeAreaId:     null,
     scrollRafId:      null,
     pollIntervalId:   null,
@@ -127,6 +144,11 @@
   box-sizing: border-box;
 }
 
+/* 광고 항목 기본 색 */
+.sbs-nav-item.sbs-nav-item--ad button {
+  color: #888;
+}
+
 /* UGC 항목 기본 색 */
 .sbs-nav-item.sbs-nav-item--ugc button {
   color: #2db400;
@@ -172,6 +194,20 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 광고 배지 */
+.sbs-nav-badge {
+  display: inline-block;
+  font-size: 9px;
+  background: #ddd;
+  color: #666;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 2px;
+  vertical-align: middle;
+  flex-shrink: 0;
+  line-height: 1.4;
 }
     `.trim();
   }
@@ -267,17 +303,113 @@
 
   /**
    * areaId에 해당하는 SECTION_MAP 항목을 반환.
-   * SECTION_MAP의 키로 startsWith() 매칭.
+   * 키를 length DESC로 정렬한 배열(SECTION_MAP_KEYS_SORTED)로 startsWith() 매칭해
+   * 긴 접두사가 먼저 매칭되도록 보장한다.
    * @param {string} areaId
-   * @returns {{ label: string, isUgc: boolean }|null}
+   * @returns {{ label: string, isUgc: boolean, isAd: boolean }|null}
    */
   function getSectionMeta(areaId) {
     if (!areaId) return null;
-    const key = Object.keys(SECTION_MAP).find((k) => areaId.startsWith(k));
+    const key = SECTION_MAP_KEYS_SORTED.find((k) => areaId.startsWith(k));
     return key ? SECTION_MAP[key] : null;
   }
 
+  // ─── 라벨 추출 — heading 우선 전략 ──────────────────────────────────────────
+
+  /**
+   * 섹션 컨테이너 DOM에서 헤딩 텍스트를 추출한다.
+   * 우선순위: h2 > h3 > .api_title > .title > .mod_title
+   *
+   * 헤딩 안의 부가 텍스트(예: "내 업체 등록" 앵커 등)를 배제하기 위해
+   * 첫 번째 직접 텍스트 노드 또는 첫 자식 요소의 텍스트만 사용한다.
+   * 추출된 텍스트가 30자를 초과하거나 비어있으면 null 반환.
+   *
+   * @param {Element} container
+   * @returns {string|null}
+   */
+  function extractHeading(container) {
+    const candidates = container.querySelectorAll(
+      "h2, h3, .api_title, .title, .mod_title"
+    );
+    for (const h of candidates) {
+      let text = "";
+
+      // 첫 번째 직접 텍스트 노드 우선
+      for (const node of h.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          text = node.textContent.trim();
+          if (text) break;
+        }
+      }
+
+      // 직접 텍스트 노드가 없으면 첫 자식 요소의 텍스트
+      if (!text && h.firstElementChild) {
+        text = h.firstElementChild.textContent.trim();
+      }
+
+      // 최후 폴백: 전체 텍스트의 첫 줄
+      if (!text) {
+        text = h.textContent.split("\n")[0].trim();
+      }
+
+      if (text && text.length > 0 && text.length <= 30) {
+        return text;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 섹션의 표시 라벨을 결정한다.
+   * 1. 섹션 요소의 헤딩 텍스트 (extractHeading)
+   * 2. SECTION_MAP 매칭 라벨
+   * 3. areaId 그대로
+   *
+   * @param {Element} element   섹션 DOM 요소
+   * @param {string}  mapLabel  SECTION_MAP에서 찾은 라벨 (또는 null)
+   * @param {string}  areaId    폴백용 원본 ID
+   * @returns {string}
+   */
+  function resolveLabel(element, mapLabel, areaId) {
+    const heading = extractHeading(element);
+    if (heading) return heading;
+    if (mapLabel) return mapLabel;
+    return areaId;
+  }
+
+  // ─── 중복 라벨 넘버링 ─────────────────────────────────────────────────────────
+
+  /**
+   * 같은 라벨이 2개 이상인 경우 "라벨 1", "라벨 2" 식으로 번호를 붙인다.
+   * 1개뿐인 라벨은 그대로 유지.
+   * @param {Array} sections
+   * @returns {Array}
+   */
+  function applyDuplicateNumbering(sections) {
+    const counts = {};
+    sections.forEach((s) => {
+      counts[s.label] = (counts[s.label] || 0) + 1;
+    });
+    const seen = {};
+    return sections.map((s) => {
+      if (counts[s.label] > 1) {
+        seen[s.label] = (seen[s.label] || 0) + 1;
+        return { ...s, label: `${s.label} ${seen[s.label]}` };
+      }
+      return s;
+    });
+  }
+
   // ─── DOM 생성 / 렌더 ──────────────────────────────────────────────────────────
+
+  /** HTML 특수문자 이스케이프 */
+  function escapeHtml(str) {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
 
   /**
    * sections 배열을 받아 #sbs-nav aside 요소를 생성해 반환.
@@ -314,23 +446,39 @@
 
     for (const sec of sections) {
       const li = document.createElement("li");
-      li.className = "sbs-nav-item" + (sec.isUgc ? " sbs-nav-item--ugc" : "");
+
+      // 클래스: 광고 > UGC > 일반 순 우선
+      let itemClass = "sbs-nav-item";
+      if (sec.isAd)       itemClass += " sbs-nav-item--ad";
+      else if (sec.isUgc) itemClass += " sbs-nav-item--ugc";
+      li.className = itemClass;
       li.dataset.areaId = sec.areaId;
 
       const btn = document.createElement("button");
       btn.setAttribute("type", "button");
 
+      // 점 아이콘
       const dot = document.createElement("span");
       dot.className = "sbs-nav-dot";
       dot.textContent = "○";
       dot.setAttribute("aria-hidden", "true");
 
+      // 라벨
       const labelSpan = document.createElement("span");
       labelSpan.className = "sbs-nav-label";
       labelSpan.textContent = sec.label;
 
       btn.appendChild(dot);
       btn.appendChild(labelSpan);
+
+      // 광고 배지
+      if (sec.isAd) {
+        const badge = document.createElement("span");
+        badge.className = "sbs-nav-badge";
+        badge.textContent = "AD";
+        badge.setAttribute("aria-label", "광고");
+        btn.appendChild(badge);
+      }
 
       // 클릭 → 해당 섹션으로 부드러운 스크롤 (상단 70px 여유)
       btn.addEventListener("click", () => {
@@ -497,7 +645,8 @@
   // ─── 섹션 로드 ───────────────────────────────────────────────────────────────
 
   /**
-   * nx_cr_area_info 파싱 → SECTION_MAP 필터 → DOM 요소 탐색 → 렌더.
+   * nx_cr_area_info 파싱 → SECTION_MAP 필터 → DOM 요소 탐색 →
+   * heading 우선 라벨 결정 → 중복 넘버링 → 렌더.
    * 파싱 실패 시 최대 retry회 재시도 (500ms 간격).
    * @param {number} retry  남은 재시도 횟수
    */
@@ -514,15 +663,25 @@
       return;
     }
 
-    state.sections = raw
+    const mapped = raw
       .map((s) => {
         const meta = getSectionMeta(s.n);
         if (!meta) return null;
         const element = findSectionElement(s.n);
         if (!element) return null;
-        return { areaId: s.n, element, label: meta.label, isUgc: meta.isUgc };
+        const label = resolveLabel(element, meta.label, s.n);
+        return {
+          areaId: s.n,
+          element,
+          label,
+          isUgc: meta.isUgc,
+          isAd:  meta.isAd,
+        };
       })
       .filter(Boolean);
+
+    // 중복 라벨 넘버링 적용 후 state에 저장
+    state.sections = applyDuplicateNumbering(mapped);
 
     renderNav();
     updateActive();
@@ -536,7 +695,7 @@
     const candidates = document.querySelectorAll("[data-meta-area]");
     const seen = new Set();
 
-    state.sections = [];
+    const mapped = [];
 
     for (const el of candidates) {
       const areaId = el.getAttribute("data-meta-area");
@@ -544,8 +703,18 @@
       seen.add(areaId);
       const meta = getSectionMeta(areaId);
       if (!meta) continue;
-      state.sections.push({ areaId, element: el, label: meta.label, isUgc: meta.isUgc });
+      const label = resolveLabel(el, meta.label, areaId);
+      mapped.push({
+        areaId,
+        element: el,
+        label,
+        isUgc: meta.isUgc,
+        isAd:  meta.isAd,
+      });
     }
+
+    // 중복 라벨 넘버링 적용 후 state에 저장
+    state.sections = applyDuplicateNumbering(mapped);
 
     renderNav();
     updateActive();
