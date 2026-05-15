@@ -20,8 +20,8 @@
   const SECTION_MAP = {
     // 신규 네이버 ID 체계 (현행 — 6글자 접두사)
     "pwl_":   { label: "파워링크",       isUgc: false, isAd: true  },
-    "urB_":   { label: "신스블",          isUgc: false, isAd: false, isMixed: true },
-    "ugB_":   { label: "브랜드콘텐츠",   isUgc: false, isAd: true  },
+    "urB_":   { label: "통합검색",         isUgc: false, isAd: false, isMixed: true },
+    "ugB_":   { label: "브랜드 콘텐츠",  isUgc: false, isAd: false },
     "nmb_":   { label: "플레이스",       isUgc: false, isAd: false },
     "kwX_":   { label: "함께 많이 찾는", isUgc: false, isAd: false },
 
@@ -436,6 +436,17 @@
 
   // ─── 신스블 내부 카드 분석 ───────────────────────────────────────────────────
 
+  // 네이버 시스템 기능 링크 도메인 — analyzeMixedBlock에서 카드 후보에서 제외
+  const SYSTEM_DOMAINS = new Set([
+    "search.naver.com",
+    "keep.naver.com",
+    "ader.naver.com",
+    "kup.naver.com",
+    "help.naver.com",
+    "datalab.tools",
+    "app.datalab.tools",
+  ]);
+
   const CARD_TYPE_RULES = [
     { type: "블로그",   key: "blog", color: "#2db400", hosts: ["blog.naver.com", "m.blog.naver.com"] },
     { type: "카페",     key: "cafe", color: "#67ac5b", hosts: ["cafe.naver.com", "m.cafe.naver.com"] },
@@ -444,14 +455,14 @@
   ];
 
   /**
-   * URL을 받아 해당하는 CARD_TYPE_RULES 항목을 반환.
+   * URL 객체 또는 URL 문자열을 받아 해당하는 CARD_TYPE_RULES 항목을 반환.
    * 매칭 실패 시 마지막 항목(웹사이트)을 폴백으로 반환.
-   * @param {string} url
+   * @param {URL|string} urlOrStr
    * @returns {{ type: string, key: string, color: string }|null}
    */
-  function detectCardType(url) {
+  function detectCardType(urlOrStr) {
     try {
-      const u = new URL(url);
+      const u = urlOrStr instanceof URL ? urlOrStr : new URL(urlOrStr);
       for (const rule of CARD_TYPE_RULES) {
         if (rule.hosts.some(h => u.hostname === h)) return rule;
       }
@@ -462,35 +473,56 @@
   }
 
   /**
-   * isMixed 섹션(신스블) 컨테이너 안의 카드를 분석해 타입 배열을 반환.
-   * 카드 셀렉터 3종으로 탐색하고, Set으로 중복 제거 후 각 카드의
-   * 첫 번째 링크 href로 타입을 판정한다.
+   * isMixed 섹션(통합검색) 컨테이너 안의 카드를 분석해 타입 배열을 반환.
+   * 컨테이너 내 모든 a[href] 링크를 순회하고, 시스템 도메인·비 http·
+   * hostname+pathname dedup 으로 카드 콘텐츠를 추정한다.
    * @param {Element} container
    * @returns {Array<{ type: string, key: string, color: string }>}
    */
   function analyzeMixedBlock(container) {
-    const cardSelectors = [
-      ".fds-ugc-block-mod",
-      "[data-template-id='ugcItem']",
-      "[data-template-id='ugcItemDesk']",
-    ];
-
+    const links = container.querySelectorAll("a[href]");
+    const seen = new Set();
     const cards = [];
-    for (const sel of cardSelectors) {
-      container.querySelectorAll(sel).forEach(c => cards.push(c));
+
+    for (const a of links) {
+      let url;
+      try { url = new URL(a.href); } catch { continue; }
+
+      // 시스템 도메인 (네이버 기능 링크) 제외
+      if (SYSTEM_DOMAINS.has(url.hostname)) continue;
+
+      // http/https 이외의 프로토콜 제외
+      if (!/^https?:$/.test(url.protocol)) continue;
+
+      // hostname + pathname dedup (검색 파라미터 무시)
+      const key = url.hostname + (url.pathname || "/");
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const rule = detectCardType(url);
+      if (rule) cards.push(rule);
     }
 
-    // 중복 제거 (한 카드가 여러 셀렉터에 매칭될 수 있음)
-    const uniqueCards = Array.from(new Set(cards));
+    return cards; // [{type, key, color}, ...]
+  }
 
-    // 각 카드의 첫 의미있는 링크로 타입 판정
-    const compositions = uniqueCards.map(card => {
-      const link = card.querySelector("a[href]");
-      if (!link) return null;
-      return detectCardType(link.href);
-    }).filter(Boolean);
-
-    return compositions; // [{type, key, color}, ...]
+  /**
+   * 파워링크 섹션 컨테이너에서 광고 카드 개수를 반환.
+   * 폴백 셀렉터 순으로 시도해 0보다 큰 첫 결과를 반환.
+   * @param {Element} container
+   * @returns {number}
+   */
+  function countAdCards(container) {
+    const sels = [
+      ".lst_type > li",
+      ".ad_section > li",
+      "ul.lst_type > li",
+    ];
+    for (const sel of sels) {
+      const n = container.querySelectorAll(sel).length;
+      if (n > 0) return n;
+    }
+    return 0;
   }
 
   /**
@@ -579,10 +611,11 @@
       dot.textContent = "○";
       dot.setAttribute("aria-hidden", "true");
 
-      // 라벨
+      // 라벨 (N건 접미사 포함)
+      const countSuffix = sec.count != null && sec.count > 0 ? ` (${sec.count}건)` : "";
       const labelSpan = document.createElement("span");
       labelSpan.className = "sbs-nav-label";
-      labelSpan.textContent = sec.label;
+      labelSpan.textContent = `${sec.label}${countSuffix}`;
 
       btn.appendChild(dot);
       btn.appendChild(labelSpan);
@@ -800,9 +833,18 @@
         if (!element) return null;
         const label = resolveLabel(element, meta.label, s.n);
 
-        // 신스블이면 내부 카드 분석
+        // 통합검색(isMixed)이면 내부 카드 분석
         const isMixed = meta.isMixed === true;
         const composition = isMixed ? analyzeMixedBlock(element) : null;
+
+        // 표시용 카운트: 통합검색 → 카드 수, 파워링크 → 광고 카드 수, 그 외 → null
+        const matchKey = SECTION_MAP_KEYS_SORTED.find((k) => s.n.startsWith(k));
+        let count = null;
+        if (isMixed) {
+          count = composition ? composition.length : 0;
+        } else if (matchKey === "pwl_" || matchKey === "pwl") {
+          count = countAdCards(element);
+        }
 
         return {
           areaId: s.n,
@@ -812,6 +854,7 @@
           isAd:        meta.isAd,
           isMixed,
           composition, // null 또는 [{type, key, color}, ...]
+          count,       // null 또는 숫자
         };
       })
       .filter(Boolean);
@@ -841,9 +884,18 @@
       if (!meta) continue;
       const label = resolveLabel(el, meta.label, areaId);
 
-      // 신스블이면 내부 카드 분석
+      // 통합검색(isMixed)이면 내부 카드 분석
       const isMixed = meta.isMixed === true;
       const composition = isMixed ? analyzeMixedBlock(el) : null;
+
+      // 표시용 카운트: 통합검색 → 카드 수, 파워링크 → 광고 카드 수, 그 외 → null
+      const matchKey = SECTION_MAP_KEYS_SORTED.find((k) => areaId.startsWith(k));
+      let count = null;
+      if (isMixed) {
+        count = composition ? composition.length : 0;
+      } else if (matchKey === "pwl_" || matchKey === "pwl") {
+        count = countAdCards(el);
+      }
 
       mapped.push({
         areaId,
@@ -853,6 +905,7 @@
         isAd:        meta.isAd,
         isMixed,
         composition, // null 또는 [{type, key, color}, ...]
+        count,       // null 또는 숫자
       });
     }
 
