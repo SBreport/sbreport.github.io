@@ -1,0 +1,20 @@
+/* 스마트 브랜딩 서포터 — popup 스타일
+   글로벌 디자인 원칙: 정보 밀도, AI Slop 회피, Pretendard 폰트, 4px 스케일 */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 320px;
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 13px;
+  color: #222;
+  background: #fff;
+}
+
+.popup { padding: 16px; }
+
+.popup-header { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #eee; }
+.popup-header h1 { font-size: 14px; font-weight: 700; }
+.popup-sub { font-size: 11px; color: #888; margin-top: 2px; }
+
+.popup-empty { padding: 24px 8px; text-align: center; color: #888; font-size: 12px; }
