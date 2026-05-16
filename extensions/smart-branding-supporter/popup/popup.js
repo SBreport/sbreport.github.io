@@ -87,8 +87,8 @@ function labelOfColor(v) {
 function labelOfPosition(v) {
   return {
     auto: "자동(콘텐츠 옆)",
-    "left-top": "좌상", "left-middle": "좌중", "left-bottom": "좌하",
-    "right-top": "우상", "right-middle": "우중", "right-bottom": "우하",
+    "left-top": "좌상", "left-middle": "좌중(s)", "left-bottom": "좌중(l)",
+    "right-top": "우상", "right-middle": "우중(s)", "right-bottom": "우중(l)",
   }[v] ?? v;
 }
 

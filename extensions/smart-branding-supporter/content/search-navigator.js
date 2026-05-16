@@ -73,9 +73,7 @@
     return `
 #sbs-nav {
   position: fixed;
-  /* left는 JS(updateNavPosition)가 동적으로 설정 */
-  top: 50%;
-  transform: translateY(-50%);
+  /* left/top/right/bottom/transform 모두 JS가 설정 */
   z-index: 9999;
   background: #fff;
   border: 1px solid #e5e5e5;
@@ -902,11 +900,15 @@
     // 세로
     if (pos.endsWith("-top")) {
       styles.top = `${TOP_OFFSET}px`;
+      // transform은 applyNavPosition reset에서 이미 none
     } else if (pos.endsWith("-middle")) {
       styles.top = "50%";
       styles.transform = "translateY(-50%)";
     } else if (pos.endsWith("-bottom")) {
+      // 긴 사이드바 모드: top + bottom 동시 지정해 세로로 확장
+      styles.top = "100px";
       styles.bottom = "16px";
+      styles.transform = "none"; // CSS의 translateY(-50%) 차단
     }
 
     return styles;
@@ -939,16 +941,15 @@
     const nav = document.getElementById(NAV_ID);
     if (!nav) return;
 
-    // 모든 위치 속성 리셋
-    nav.style.left      = "";
-    nav.style.right     = "";
-    nav.style.top       = "";
-    nav.style.bottom    = "";
-    nav.style.transform = "";
+    // 모든 위치/변환 속성 명시적 리셋
+    nav.style.left      = "auto";
+    nav.style.right     = "auto";
+    nav.style.top       = "auto";
+    nav.style.bottom    = "auto";
+    nav.style.transform = "none";
     nav.style.display   = "";
 
     if (state.position === "auto") {
-      // 기존 콘텐츠 옆 동적 배치 (top/transform은 CSS에서 기본 설정됨)
       nav.style.top       = "50%";
       nav.style.transform = "translateY(-50%)";
       updateNavPosition();
