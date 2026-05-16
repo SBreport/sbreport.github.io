@@ -2,7 +2,7 @@
 // 4개 기능 토글 상태를 chrome.storage.sync에 저장/불러오기.
 
 const FEATURE_KEYS = ["blogCleaner", "searchNavigator", "searchHighlighter", "searchVolume"];
-const COLOR_KEYS   = ["searchHighlighterColor"];
+const OPTION_KEYS  = ["searchHighlighterColor", "searchNavigatorPosition"];
 
 const DEFAULTS = {
   blogCleaner: true,
@@ -10,12 +10,14 @@ const DEFAULTS = {
   searchHighlighter: true,
   searchVolume: false, // 백엔드 미완성 → 기본 OFF
   searchHighlighterColor: "blue",
+  searchNavigatorPosition: "auto",
 };
 
 document.addEventListener("DOMContentLoaded", async () => {
   const toggles  = document.querySelectorAll("input.toggle");
-  const segments = document.querySelectorAll(".segmented");
-  const allKeys  = [...FEATURE_KEYS, ...COLOR_KEYS];
+  // .segmented 와 .position-picker 모두 data-segmented 속성으로 통합 처리
+  const segments = document.querySelectorAll("[data-segmented]");
+  const allKeys  = [...FEATURE_KEYS, ...OPTION_KEYS];
   const stored   = await chrome.storage.sync.get(allKeys);
 
   // 토글 초기값 반영
@@ -37,7 +39,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
-  // segmented 초기값 반영 + 클릭 이벤트
+  // segmented / position-picker 초기값 반영 + 클릭 이벤트
   segments.forEach((seg) => {
     const key     = seg.dataset.segmented;
     const current = stored[key] ?? DEFAULTS[key];
@@ -48,7 +50,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         const val = btn.dataset.value;
         applySegmentedValue(seg, val);
         await chrome.storage.sync.set({ [key]: val });
-        flashStatus(`색상: ${labelOfColor(val)}`);
+        const labelFn = key === "searchHighlighterColor" ? labelOfColor : labelOfPosition;
+        flashStatus(`${labelOfKey(key)}: ${labelFn(val)}`);
       });
     });
   });
@@ -79,6 +82,21 @@ function labelOf(key) {
 
 function labelOfColor(v) {
   return { green: "녹색", yellow: "노랑", blue: "하늘" }[v] ?? v;
+}
+
+function labelOfPosition(v) {
+  return {
+    auto: "자동(콘텐츠 옆)",
+    "left-top": "좌상", "left-middle": "좌중", "left-bottom": "좌하",
+    "right-top": "우상", "right-middle": "우중", "right-bottom": "우하",
+  }[v] ?? v;
+}
+
+function labelOfKey(k) {
+  return {
+    searchHighlighterColor: "색상",
+    searchNavigatorPosition: "위치",
+  }[k] ?? k;
 }
 
 function flashStatus(text) {

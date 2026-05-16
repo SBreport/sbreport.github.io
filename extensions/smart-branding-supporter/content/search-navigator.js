@@ -7,9 +7,20 @@
 
   // ─── 상수 ────────────────────────────────────────────────────────────────────
 
-  const STORAGE_KEY = "searchNavigator";
-  const NAV_ID      = "sbs-nav";
-  const STYLE_ID    = "sbs-nav-style";
+  const STORAGE_KEY  = "searchNavigator";
+  const POSITION_KEY = "searchNavigatorPosition";
+  const NAV_ID       = "sbs-nav";
+  const STYLE_ID     = "sbs-nav-style";
+
+  // 고정 위치 모드별 CSS 속성 매핑
+  const POSITION_CONFIGS = {
+    "left-top":     { left: "16px",  top: "16px" },
+    "left-middle":  { left: "16px",  top: "50%",  transform: "translateY(-50%)" },
+    "left-bottom":  { left: "16px",  bottom: "16px" },
+    "right-top":    { right: "16px", top: "16px" },
+    "right-middle": { right: "16px", top: "50%",  transform: "translateY(-50%)" },
+    "right-bottom": { right: "16px", bottom: "16px" },
+  };
 
   // 섹션 ID → 라벨 / UGC 여부 / 광고 여부 매핑
   // 키: areaId의 접두사. startsWith()로 매칭.
@@ -50,6 +61,7 @@
 
   let state = {
     enabled:          false,
+    position:         "auto", // searchNavigatorPosition 값
     sections:         [],   // { areaId, element, label, isUgc, isAd }
     closed:           false, // 사용자가 × 눌러서 닫았는지
     activeAreaId:     null,
@@ -818,7 +830,7 @@
     document.body.appendChild(nav);
 
     // DOM 생성 직후 위치 설정
-    updateNavPosition();
+    applyNavPosition();
 
     // 렌더 후 활성 상태 강제 재계산 (early return 회피)
     state.activeAreaId = null;
@@ -863,6 +875,37 @@
     }
     nav.style.display = "";
     nav.style.left = `${desired}px`;
+  }
+
+  /**
+   * state.position 값에 따라 네비게이터 위치를 적용.
+   * "auto"이면 콘텐츠 좌측 동적 계산(기존 updateNavPosition).
+   * 나머지 6개 고정 모드는 POSITION_CONFIGS의 CSS 속성을 직접 적용.
+   */
+  function applyNavPosition() {
+    const nav = document.getElementById(NAV_ID);
+    if (!nav) return;
+
+    // 모든 위치 속성 리셋
+    nav.style.left      = "";
+    nav.style.right     = "";
+    nav.style.top       = "";
+    nav.style.bottom    = "";
+    nav.style.transform = "";
+    nav.style.display   = "";
+
+    if (state.position === "auto") {
+      // 기존 콘텐츠 옆 동적 배치 (top/transform은 CSS에서 기본 설정됨)
+      nav.style.top       = "50%";
+      nav.style.transform = "translateY(-50%)";
+      updateNavPosition();
+      return;
+    }
+
+    const cfg = POSITION_CONFIGS[state.position];
+    if (cfg) {
+      Object.assign(nav.style, cfg);
+    }
   }
 
   /** 네비게이터 DOM 제거 */
@@ -1161,27 +1204,42 @@
   // ─── storage 토글 연동 ────────────────────────────────────────────────────────
 
   // 페이지 로드 시 저장된 설정 읽기 (기본값 true)
-  chrome.storage.sync.get(STORAGE_KEY).then((stored) => {
-    state.enabled = stored[STORAGE_KEY] ?? true;
+  chrome.storage.sync.get([STORAGE_KEY, POSITION_KEY]).then((stored) => {
+    state.enabled  = stored[STORAGE_KEY]  ?? true;
+    state.position = stored[POSITION_KEY] ?? "auto";
     if (state.enabled) init();
   });
 
-  // 팝업에서 토글 변경 시 실시간 반응
+  // 팝업에서 토글/위치 변경 시 실시간 반응
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "sync" || !(STORAGE_KEY in changes)) return;
-    const next = changes[STORAGE_KEY].newValue;
-    if (next === state.enabled) return;
-    state.enabled = next;
+    if (area !== "sync") return;
 
-    if (state.enabled) {
-      state.closed = false;  // 토글 ON 시 닫힘 상태 초기화
-      init();
-    } else {
-      teardown();
+    // 위치 변경: 페이지 새로고침 없이 즉시 반영
+    if (POSITION_KEY in changes) {
+      const next = changes[POSITION_KEY].newValue ?? "auto";
+      if (next !== state.position) {
+        state.position = next;
+        if (state.enabled) applyNavPosition();
+      }
+    }
+
+    // 토글 ON/OFF
+    if (STORAGE_KEY in changes) {
+      const next = changes[STORAGE_KEY].newValue;
+      if (next === state.enabled) return;
+      state.enabled = next;
+
+      if (state.enabled) {
+        state.closed = false;  // 토글 ON 시 닫힘 상태 초기화
+        init();
+      } else {
+        teardown();
+      }
     }
   });
 
   // 창 크기 변경 감지: 좁아지면 숨기고, 넓어지면 재표시 + 위치 재계산
+  // 1200px 미만 자동 숨김은 모든 위치 모드에 동일하게 적용
   window.addEventListener("resize", () => {
     if (!state.enabled) return;
     if (window.innerWidth < 1200) {
@@ -1190,8 +1248,8 @@
     } else if (!document.getElementById(NAV_ID) && !state.closed) {
       init();
     } else {
-      // 창 너비 변경 시 콘텐츠 위치가 달라질 수 있으므로 위치 재계산
-      updateNavPosition();
+      // 창 너비 변경 시 위치 재계산 (auto 모드면 콘텐츠 기준, 고정 모드는 no-op에 가까움)
+      applyNavPosition();
     }
   });
 })();
