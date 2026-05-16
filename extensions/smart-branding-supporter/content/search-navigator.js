@@ -12,15 +12,8 @@
   const NAV_ID       = "sbs-nav";
   const STYLE_ID     = "sbs-nav-style";
 
-  // 고정 위치 모드별 CSS 속성 매핑
-  const POSITION_CONFIGS = {
-    "left-top":     { left: "16px",  top: "16px" },
-    "left-middle":  { left: "16px",  top: "50%",  transform: "translateY(-50%)" },
-    "left-bottom":  { left: "16px",  bottom: "16px" },
-    "right-top":    { right: "16px", top: "16px" },
-    "right-middle": { right: "16px", top: "50%",  transform: "translateY(-50%)" },
-    "right-bottom": { right: "16px", bottom: "16px" },
-  };
+  // 검색창·탭 아래 첫 콘텐츠가 보이는 위치 (휴리스틱 오프셋)
+  const TOP_OFFSET = 100;
 
   // 섹션 ID → 라벨 / UGC 여부 / 광고 여부 매핑
   // 키: areaId의 접두사. startsWith()로 매칭.
@@ -840,23 +833,83 @@
   // ─── 네비게이터 위치 계산 ─────────────────────────────────────────────────────
 
   const NAV_WIDTH = 200;
-  const NAV_GAP   = 16; // 콘텐츠 좌측 모서리와 네비게이터 사이 간격
+  const NAV_GAP   = 16; // 콘텐츠 경계와 네비게이터 사이 간격
 
   /**
-   * 검색 결과 콘텐츠 영역의 viewport 기준 left 좌표를 반환.
+   * 검색 결과 콘텐츠 영역의 DOMRect를 반환.
    * 앵커 우선순위: .api_subject_bx → #main_pack → .content_wrap
    * 너비가 0이면(숨겨진 요소) 건너뜀.
-   * @returns {number|null}
+   * @returns {DOMRect|null}
    */
-  function getContentLeft() {
+  function getContentRect() {
     const anchors = [".api_subject_bx", "#main_pack", ".content_wrap"];
     for (const sel of anchors) {
       const el = document.querySelector(sel);
       if (!el) continue;
       const rect = el.getBoundingClientRect();
-      if (rect.width > 0) return rect.left;
+      if (rect.width > 0) return rect;
     }
     return null;
+  }
+
+  /**
+   * 콘텐츠 영역의 left 좌표만 반환 (auto 모드 updateNavPosition용).
+   * @returns {number|null}
+   */
+  function getContentLeft() {
+    const rect = getContentRect();
+    return rect ? rect.left : null;
+  }
+
+  /**
+   * position 문자열("left-top" 등)을 받아 콘텐츠 영역 기준으로
+   * 네비게이터에 적용할 CSS 속성 객체를 동적으로 계산해 반환.
+   *
+   * 가로:
+   *   left-* → 콘텐츠 left 경계 - NAV_WIDTH - GAP (콘텐츠 왼쪽 바깥)
+   *   right-* → window.innerWidth - 콘텐츠 right - NAV_WIDTH - GAP (right CSS 값)
+   *   콘텐츠 못 찾으면 16px 폴백.
+   *
+   * 세로:
+   *   -top    → top: TOP_OFFSET px
+   *   -middle → top: 50% + translateY(-50%)
+   *   -bottom → bottom: 16px
+   *
+   * @param {string} pos  "left-top" | "left-middle" | "left-bottom" |
+   *                      "right-top" | "right-middle" | "right-bottom"
+   * @returns {Object}  nav.style에 assign할 CSS 속성 객체
+   */
+  function computePositionStyles(pos) {
+    const rect = getContentRect();
+    const styles = {};
+
+    // 가로
+    if (pos.startsWith("left-")) {
+      if (rect) {
+        styles.left = `${Math.max(10, rect.left - NAV_WIDTH - NAV_GAP)}px`;
+      } else {
+        styles.left = "16px";
+      }
+    } else if (pos.startsWith("right-")) {
+      if (rect) {
+        const desired = window.innerWidth - rect.right - NAV_WIDTH - NAV_GAP;
+        styles.right = `${Math.max(10, desired)}px`;
+      } else {
+        styles.right = "16px";
+      }
+    }
+
+    // 세로
+    if (pos.endsWith("-top")) {
+      styles.top = `${TOP_OFFSET}px`;
+    } else if (pos.endsWith("-middle")) {
+      styles.top = "50%";
+      styles.transform = "translateY(-50%)";
+    } else if (pos.endsWith("-bottom")) {
+      styles.bottom = "16px";
+    }
+
+    return styles;
   }
 
   /**
@@ -880,7 +933,7 @@
   /**
    * state.position 값에 따라 네비게이터 위치를 적용.
    * "auto"이면 콘텐츠 좌측 동적 계산(기존 updateNavPosition).
-   * 나머지 6개 고정 모드는 POSITION_CONFIGS의 CSS 속성을 직접 적용.
+   * 나머지 6개 고정 모드는 computePositionStyles()로 콘텐츠 영역 기준 동적 계산.
    */
   function applyNavPosition() {
     const nav = document.getElementById(NAV_ID);
@@ -902,10 +955,8 @@
       return;
     }
 
-    const cfg = POSITION_CONFIGS[state.position];
-    if (cfg) {
-      Object.assign(nav.style, cfg);
-    }
+    const styles = computePositionStyles(state.position);
+    Object.assign(nav.style, styles);
   }
 
   /** 네비게이터 DOM 제거 */
