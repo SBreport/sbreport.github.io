@@ -17,7 +17,8 @@
   };
 
   // 블로그로 판정할 호스트 목록
-  const BLOG_HOSTS = ["blog.naver.com", "m.blog.naver.com"];
+  // in.naver.com: 네이버 인플루언서 콘텐츠 (사용자 인식상 블로그와 동일)
+  const BLOG_HOSTS = ["blog.naver.com", "m.blog.naver.com", "in.naver.com"];
 
   // 링크 검사 시 시스템 도메인은 건너뜀
   const SYSTEM_DOMAINS = new Set([

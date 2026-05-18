@@ -26,9 +26,12 @@
     // 신규 네이버 ID 체계 (현행 — 6글자 접두사)
     "pwl_":   { label: "파워링크",       isUgc: false, isAd: true  },
     "urB_":   { label: "통합검색",         isUgc: false, isAd: false, isMixed: true },
-    "ugB_":   { label: "브랜드 콘텐츠",  isUgc: false, isAd: false },
+    "ugB_":   { label: null, isMixed: true, isUgc: false, isAd: false },
     "nmb_":   { label: "플레이스",       isUgc: false, isAd: false },
     "kwX_":   { label: "함께 많이 찾는", isUgc: false, isAd: false },
+    "nws_":   { label: null,             isUgc: false, isAd: false }, // 뉴스 신형
+    "vdB_":   { label: null,             isUgc: false, isAd: false }, // 비디오/네이버 클립 (vdB_cpC 등)
+    "web_":   { label: "관련 사이트",    isUgc: false, isAd: false }, // 일반 웹사이트 결과 (web_gen 등 — 모두닥/하이닥 같은 외부 사이트, 헤더 없어서 명시 라벨)
 
     // 옛 짧은 코드 (다른 검색어에서 나올 수 있음)
     "blg":    { label: "블로그",         isUgc: true,  isAd: false },
@@ -45,6 +48,16 @@
     "smart":  { label: "스마트블록",     isUgc: false, isAd: false },
     "pwl":    { label: "파워링크",       isUgc: false, isAd: true  },
   };
+
+  // data-meta-area도 nx_cr_area_info에도 없는 특수 영역 — 별도 셀렉터로 인식
+  // 향후 다른 특수 영역(쇼핑, 지도 변종 등) 발견 시 이 배열에 추가
+  const SPECIAL_SECTIONS = [
+    {
+      selector: "#place-app-root",
+      label: "플레이스",
+      areaId: "__place_app_root",
+    },
+  ];
 
   // SECTION_MAP 키를 길이 내림차순으로 정렬한 배열 — 긴 접두사 우선 매칭
   const SECTION_MAP_KEYS_SORTED = Object.keys(SECTION_MAP).sort(
@@ -212,6 +225,7 @@
 .sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-blog { background: #fff; color: #2db400; }
 .sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-cafe { background: #fff; color: #f97224; }
 .sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-kin  { background: #fff; color: #4a8af4; }
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-ad   { background: #fff; color: #6c757d; }
 .sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-web  { background: #fff; color: #555; }
 
 /* 활성 항목 안의 +N more 표시도 흰색 */
@@ -225,9 +239,11 @@
 
 .sbs-nav-label {
   display: block;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: keep-all;
+  line-height: 1.3;
   flex: 1;
   min-width: 0;
 }
@@ -268,6 +284,7 @@
 .sbs-nav-comp-blog { background: #2db400; }
 .sbs-nav-comp-cafe { background: #f97224; }
 .sbs-nav-comp-kin  { background: #4a8af4; }
+.sbs-nav-comp-ad   { background: #6c757d; }
 .sbs-nav-comp-web  { background: #b0b0b0; }
 .sbs-nav-comp-more {
   display: inline-flex;
@@ -420,9 +437,22 @@
    * @returns {string|null}
    */
   function extractHeading(container) {
-    const candidates = container.querySelectorAll(
-      "h2, h3, .api_title, .title, .mod_title"
-    );
+    // 좁은 셀렉터부터 시도 — 신형 SDS 컴포넌트, 구형 api 박스, 광범위 h2/h3 순
+    const selectorGroups = [
+      ".sds-comps-header h2, .sds-comps-header h3",
+      // 신형 SDS 컴포넌트(sdsFeedSearchHeader 등)는 h2 대신 span.sds-comps-text-type-headline*에 라벨이 들어감
+      ".sds-comps-header [class*='sds-comps-text-type-headline']",
+      ".api_subject_bx h2, .api_subject_bx h3",
+      ".api_title, .title, .mod_title",
+      "h2, h3",
+    ];
+    const seen = new Set();
+    const candidates = [];
+    for (const sel of selectorGroups) {
+      for (const el of container.querySelectorAll(sel)) {
+        if (!seen.has(el)) { seen.add(el); candidates.push(el); }
+      }
+    }
     for (const h of candidates) {
       let text = "";
 
@@ -486,7 +516,11 @@
     return sections.map((s) => {
       if (counts[s.label] > 1) {
         seen[s.label] = (seen[s.label] || 0) + 1;
-        return { ...s, label: `${s.label} ${seen[s.label]}` };
+        // 숫자 대신 알파벳(A/B/C…)으로 — "통합검색 1 (10건"의 1과 10이 시각적으로 붙어 헷갈리는 문제 회피
+        // 26개 초과 시 숫자 폴백
+        const n = seen[s.label];
+        const suffix = n <= 26 ? String.fromCharCode(64 + n) : n.toString();
+        return { ...s, label: `${s.label} ${suffix}` };
       }
       return s;
     });
@@ -498,7 +532,7 @@
   const SYSTEM_DOMAINS = new Set([
     "search.naver.com",
     "keep.naver.com",
-    "ader.naver.com",
+    // ader.naver.com 은 광고 카드 분류를 위해 제외 (CARD_TYPE_RULES "ad" 항목으로 매칭)
     "kup.naver.com",
     "help.naver.com",
     "datalab.tools",
@@ -506,9 +540,10 @@
   ]);
 
   const CARD_TYPE_RULES = [
-    { type: "블로그",   key: "blog", color: "#2db400", hosts: ["blog.naver.com", "m.blog.naver.com"] },
+    { type: "블로그",   key: "blog", color: "#2db400", hosts: ["blog.naver.com", "m.blog.naver.com", "in.naver.com"] },
     { type: "카페",     key: "cafe", color: "#f97224", hosts: ["cafe.naver.com", "m.cafe.naver.com"] },
     { type: "지식인",   key: "kin",  color: "#4a8af4", hosts: ["kin.naver.com", "m.kin.naver.com"] },
+    { type: "광고",     key: "ad",   color: "#6c757d", hosts: ["ader.naver.com"] },
     { type: "웹사이트", key: "web",  color: "#b0b0b0", hosts: [] }, // 폴백
   ];
 
@@ -519,7 +554,8 @@
     ".fds-web-doc-root",               // 신형 통합검색 카드 (개별 카드 단위)
     ".fds-ugc-block-mod",              // UGC 카드 (구형)
     "[data-template-id='ugcItem']",    // UGC (신형 모바일/PC 공용)
-    "[data-template-id='ugcItemDesk']" // UGC (신형 PC 데스크탑)
+    "[data-template-id='ugcItemDesk']", // UGC (신형 PC 데스크탑)
+    "._fe_view_power_content",          // 건강·의학 인기글 등 ugB_ 섹션 카드
   ];
 
   /**
@@ -1114,6 +1150,32 @@
   // ─── 섹션 로드 ───────────────────────────────────────────────────────────────
 
   /**
+   * SPECIAL_SECTIONS 셀렉터로 매칭되는 특수 영역을 mapped 배열에 추가.
+   * 이미 등록된 element와 중복인 경우 skip.
+   * @param {Array} mapped
+   * @returns {Array}
+   */
+  function appendSpecialSections(mapped) {
+    for (const spec of SPECIAL_SECTIONS) {
+      const el = document.querySelector(spec.selector);
+      if (!el) continue;
+      // 중복 방지: 이미 mapped에 같은 element가 들어 있으면 skip
+      if (mapped.some((s) => s.element === el)) continue;
+      mapped.push({
+        areaId:      spec.areaId,
+        element:     el,
+        label:       spec.label,
+        isUgc:       false,
+        isAd:        false,
+        isMixed:     false,
+        composition: null,
+        count:       null,
+      });
+    }
+    return mapped;
+  }
+
+  /**
    * nx_cr_area_info 파싱 → SECTION_MAP 필터 → DOM 요소 탐색 →
    * heading 우선 라벨 결정 → 중복 넘버링 → 렌더.
    * 파싱 실패 시 최대 retry회 재시도 (500ms 간격).
@@ -1135,7 +1197,28 @@
     const mapped = raw
       .map((s) => {
         const meta = getSectionMeta(s.n);
-        if (!meta) return null;
+        if (!meta) {
+          // 자동 적응: SECTION_MAP에 없지만 블/카/지 카드가 있는 영역은 자동 등록
+          const element = findSectionElement(s.n);
+          if (!element) return null;
+          const composition = analyzeMixedBlock(element, s.n);
+          if (!composition || composition.length === 0) return null;
+          const meaningful = composition.filter(
+            (c) => c.key === "blog" || c.key === "cafe" || c.key === "kin"
+          );
+          if (meaningful.length === 0) return null;
+          const label = resolveLabel(element, null, s.n);
+          return {
+            areaId: s.n,
+            element,
+            label,
+            isUgc: false,
+            isAd: false,
+            isMixed: true,
+            composition,
+            count: composition.length,
+          };
+        }
         const element = findSectionElement(s.n);
         if (!element) return null;
         const label = resolveLabel(element, meta.label, s.n);
@@ -1166,6 +1249,13 @@
       })
       .filter(Boolean);
 
+    appendSpecialSections(mapped);
+    mapped.sort((a, b) => {
+      const aTop = a.element.getBoundingClientRect().top;
+      const bTop = b.element.getBoundingClientRect().top;
+      return aTop - bTop;
+    });
+
     // 중복 라벨 넘버링 적용 후 시그니처 비교 — 변화가 있을 때만 재생성
     const newSig = signatureOf(mapped);
     const numbered = applyDuplicateNumbering(mapped);
@@ -1194,7 +1284,27 @@
       if (!areaId || seen.has(areaId)) continue;
       seen.add(areaId);
       const meta = getSectionMeta(areaId);
-      if (!meta) continue;
+      if (!meta) {
+        // 자동 적응: SECTION_MAP에 없지만 블/카/지 카드가 있는 영역은 자동 등록
+        const composition = analyzeMixedBlock(el, areaId);
+        if (!composition || composition.length === 0) continue;
+        const meaningful = composition.filter(
+          (c) => c.key === "blog" || c.key === "cafe" || c.key === "kin"
+        );
+        if (meaningful.length === 0) continue;
+        const label = resolveLabel(el, null, areaId);
+        mapped.push({
+          areaId,
+          element: el,
+          label,
+          isUgc: false,
+          isAd: false,
+          isMixed: true,
+          composition,
+          count: composition.length,
+        });
+        continue;
+      }
       const label = resolveLabel(el, meta.label, areaId);
 
       // 통합검색(isMixed)이면 내부 카드 분석
@@ -1221,6 +1331,13 @@
         count,       // null 또는 숫자
       });
     }
+
+    appendSpecialSections(mapped);
+    mapped.sort((a, b) => {
+      const aTop = a.element.getBoundingClientRect().top;
+      const bTop = b.element.getBoundingClientRect().top;
+      return aTop - bTop;
+    });
 
     // 중복 라벨 넘버링 적용 후 시그니처 비교 — 변화가 있을 때만 재생성
     const newSig = signatureOf(mapped);

@@ -263,7 +263,11 @@
       if (!currentPanel) return;
       renderAllSections(currentPanel, items, keyword);
     } catch (err) {
-      console.warn('[SBS] 검색량 조회 실패:', err);
+      // "Failed to fetch" / AbortError는 페이지 reload·네비게이션 중 자연 발생 → 노이즈 방지
+      const isTransient = err.name === 'AbortError' || /Failed to fetch/i.test(String(err.message || err));
+      if (!isTransient) {
+        console.warn('[SBS] 검색량 조회 실패:', err);
+      }
       if (extractKeyword() !== keyword) return;
       const currentPanel = document.getElementById('sbs-nav');
       if (!currentPanel) return;
