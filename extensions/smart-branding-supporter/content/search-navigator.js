@@ -535,8 +535,6 @@
     // ader.naver.com 은 광고 카드 분류를 위해 제외 (CARD_TYPE_RULES "ad" 항목으로 매칭)
     "kup.naver.com",
     "help.naver.com",
-    "datalab.tools",
-    "app.datalab.tools",
   ]);
 
   const CARD_TYPE_RULES = [

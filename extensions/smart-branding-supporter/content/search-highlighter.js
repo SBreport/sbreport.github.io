@@ -27,8 +27,6 @@
     "ader.naver.com",
     "kup.naver.com",
     "help.naver.com",
-    "datalab.tools",
-    "app.datalab.tools",
   ]);
 
   // 카드 단위 셀렉터 (Phase 2 검증 완료)
