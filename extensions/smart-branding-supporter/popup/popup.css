@@ -1,6 +1,27 @@
 /* SBS popup — 기본 톤 */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* 웹페이지 이동 CTA */
+.popup-site-cta {
+  padding: 10px 16px 4px;
+  border-top: 1px solid #eee;
+}
+.popup-site-cta button {
+  width: 100%;
+  background: #1684F2;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.popup-site-cta button:hover { background: #0d6fd9; }
+.popup-site-cta button:active { transform: scale(0.99); }
+
 body {
   width: 320px;
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;

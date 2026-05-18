@@ -15,12 +15,23 @@ const DEFAULTS = {
   searchNavigatorPosition: "left-top",
 };
 
+// 스마트브랜딩 웹페이지 URL (정식 사이트 출시 시 1줄 교체)
+const SITE_URL = "https://sbsupport.netlify.app/";
+
 document.addEventListener("DOMContentLoaded", async () => {
   const toggles  = document.querySelectorAll("input.toggle");
   // .segmented 와 .position-picker 모두 data-segmented 속성으로 통합 처리
   const segments = document.querySelectorAll("[data-segmented]");
   const allKeys  = [...FEATURE_KEYS, ...OPTION_KEYS];
   const stored   = await chrome.storage.sync.get(allKeys);
+
+  // 웹페이지 이동 버튼
+  const siteBtn = document.getElementById("openSiteBtn");
+  if (siteBtn) {
+    siteBtn.addEventListener("click", () => {
+      chrome.tabs.create({ url: SITE_URL });
+    });
+  }
 
   // 토글 초기값 반영
   toggles.forEach((input) => {
