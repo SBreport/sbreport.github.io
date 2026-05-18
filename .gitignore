@@ -10,3 +10,7 @@ _세션/
 
 # 로컬 claude 설정 (개인 권한 등)
 .claude/settings.local.json
+
+# 확장 패키징 산출물 (ZIP은 git 포함 금지 — 외부 호스팅 사용)
+*.zip
+*.crx

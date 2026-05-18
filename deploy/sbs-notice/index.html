@@ -11,6 +11,8 @@
   --text: #1a1a1a;
   --text-muted: #666;
   --bg: #f5f7fa;
+  --soft: #f0f7ff;
+  --border: #ececec;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -18,123 +20,269 @@ body {
   color: var(--text);
   background: var(--bg);
   min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
+  padding: 40px 20px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
+.wrap {
+  max-width: 560px;
+  margin: 0 auto;
+}
 .card {
-  max-width: 520px;
-  width: 100%;
   background: #fff;
   border-radius: 14px;
-  padding: 48px 36px 40px;
+  padding: 40px 32px 32px;
   box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+  margin-bottom: 16px;
+}
+.header {
   text-align: center;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 28px;
 }
 .icon {
-  width: 96px;
-  height: 96px;
-  margin: 0 auto 24px;
-  border-radius: 22px;
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 18px;
+  border-radius: 18px;
   overflow: hidden;
 }
 .icon img { width: 100%; height: 100%; display: block; }
 h1 {
   font-size: 22px;
   font-weight: 700;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 .subtitle {
   font-size: 12px;
   color: var(--text-muted);
   letter-spacing: 0.05em;
-  margin-bottom: 28px;
   text-transform: uppercase;
 }
-.message {
-  font-size: 15px;
-  color: var(--text);
-  margin-bottom: 32px;
-  padding: 20px 22px;
-  background: #f0f7ff;
-  border-radius: 10px;
-  border-left: 3px solid var(--brand);
-  text-align: left;
-  line-height: 1.7;
+
+/* 베타 다운로드 섹션 */
+.section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--brand);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
 }
-.message strong { color: var(--brand); font-weight: 700; }
-.features {
-  list-style: none;
-  text-align: left;
-  margin: 0 0 32px;
-  padding: 0 8px;
+h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 16px;
 }
-.features li {
-  padding: 10px 0;
-  font-size: 14px;
-  color: var(--text);
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  border-bottom: 1px dashed #ececec;
-}
-.features li:last-child { border-bottom: none; }
-.features .icon-dot {
-  flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--brand);
-  margin-top: 9px;
-}
-.features strong { color: var(--text); font-weight: 700; }
-.tagline {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-bottom: 12px;
-}
-.close-btn {
+.version-tag {
   display: inline-block;
-  background: none;
+  font-size: 11px;
+  background: var(--soft);
+  color: var(--brand);
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.download-cta {
+  display: block;
+  width: 100%;
+  background: var(--brand);
+  color: #fff;
+  padding: 16px 24px;
+  border-radius: 10px;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 700;
   border: none;
-  color: var(--text-muted);
-  font-size: 13px;
-  padding: 8px 12px;
   cursor: pointer;
   font-family: inherit;
+  transition: background 0.15s, transform 0.1s;
+  text-align: center;
+  margin-bottom: 8px;
 }
-.close-btn:hover { color: var(--text); }
-.footer {
-  margin-top: 12px;
+.download-cta:hover { background: var(--brand-dark); }
+.download-cta:active { transform: scale(0.99); }
+.download-meta {
+  text-align: center;
   font-size: 12px;
   color: var(--text-muted);
+  margin-bottom: 24px;
+}
+
+/* 설치 가이드 */
+.guide-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.steps {
+  list-style: none;
+  counter-reset: step;
+  padding: 0;
+  margin: 0;
+}
+.steps li {
+  position: relative;
+  padding: 10px 0 10px 36px;
+  font-size: 13.5px;
+  color: var(--text);
+  border-bottom: 1px dashed var(--border);
+  counter-increment: step;
+}
+.steps li:last-child { border-bottom: none; }
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 10px;
+  width: 24px;
+  height: 24px;
+  background: var(--brand);
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.steps code {
+  background: #f0f0f0;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--brand-dark);
+}
+.steps .note {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* 정식 분석기 안내 */
+.coming-soon {
+  background: linear-gradient(135deg, #fafafa 0%, #f5f7fa 100%);
+  border-radius: 12px;
+  padding: 24px 22px;
+  text-align: center;
+}
+.coming-soon .badge {
+  display: inline-block;
+  font-size: 10.5px;
+  background: #fff;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 12px;
+  margin-bottom: 10px;
+  letter-spacing: 0.05em;
+}
+.coming-soon h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.coming-soon p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+.features {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 14px;
+}
+.features li {
+  font-size: 12.5px;
+  color: var(--text);
+  padding-left: 12px;
+  position: relative;
+}
+.features li::before {
+  content: "•";
+  color: var(--brand);
+  position: absolute;
+  left: 0;
+  font-weight: 700;
+}
+
+/* footer */
+.tagline {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 24px;
+}
+.tagline strong { color: var(--brand); }
+.copyright {
+  text-align: center;
+  font-size: 11px;
+  color: #aaa;
+  margin-top: 16px;
 }
 </style>
 </head>
 <body>
-<main class="card">
-  <div class="icon"><img src="icon.png" alt="스마트브랜딩"></div>
-  <h1>네이버 키워드 분석</h1>
-  <p class="subtitle">Coming Soon</p>
-  <div class="message">
-    <strong>서비스 준비 중입니다.</strong><br>
-    여러 키워드를 동시에 입력해<br>
-    플레이스 · 통합검색 · 브랜드 콘텐츠 순위와<br>
-    검색량을 한눈에 비교할 수 있는<br>
-    스마트브랜딩 정식 분석 사이트가 곧 출시됩니다.
+<div class="wrap">
+  <div class="card">
+    <div class="header">
+      <div class="icon"><img src="icon.png" alt="스마트브랜딩"></div>
+      <h1>스마트브랜딩</h1>
+      <p class="subtitle">네이버 키워드 분석</p>
+    </div>
+
+    <p class="section-title">⚡ 지금 사용 가능</p>
+    <h2>Chrome 확장 베타<span class="version-tag">v0.3.0</span></h2>
+
+    <!-- TODO: href를 실제 ZIP 호스팅 URL로 교체 (Google Drive / OneDrive / R2 등) -->
+    <a href="#" id="downloadBtn" class="download-cta" onclick="if(this.getAttribute('href')==='#'){alert('다운로드 URL 준비 중입니다');return false;}">
+      ↓ 베타 다운로드 (ZIP · 53 KB)
+    </a>
+    <p class="download-meta">Chrome · Manifest V3 · 무료</p>
+
+    <p class="guide-title">📖 설치 방법</p>
+    <ol class="steps">
+      <li>다운로드한 ZIP을 원하는 폴더에 압축 해제
+        <span class="note">⚠️ 압축 해제한 폴더는 사용 중 삭제 X — 그대로 둬야 작동</span>
+      </li>
+      <li>Chrome 주소창에 입력: <code>chrome://extensions/</code></li>
+      <li>우상단 <strong>개발자 모드</strong> 토글을 ON</li>
+      <li>좌상단 <strong>"압축해제된 확장 프로그램을 로드합니다"</strong> 클릭 → 1번 폴더 선택</li>
+      <li>확장 목록에 "스마트 브랜딩 서포터"가 나타나면 완료
+        <span class="note">toolbar 우상단에 파랑 전구 아이콘 표시됨</span>
+      </li>
+    </ol>
   </div>
-  <ul class="features">
-    <li><span class="icon-dot"></span><span><strong>다중 키워드 비교</strong> — 한 번에 여러 키워드 분석</span></li>
-    <li><span class="icon-dot"></span><span><strong>구좌별 순위 시각화</strong> — 플레이스/블로그/카페/광고 위치</span></li>
-    <li><span class="icon-dot"></span><span><strong>검색량·경쟁도</strong> — PC/모바일 분리 + 경쟁 강도</span></li>
-    <li><span class="icon-dot"></span><span><strong>CSV 내보내기</strong> — 분석 결과 즉시 다운로드</span></li>
-  </ul>
-  <p class="tagline">병원 마케팅은 스마트 브랜딩</p>
-  <button type="button" class="close-btn" onclick="window.close()">창 닫기 ×</button>
-  <p class="footer">SBreport · 2026</p>
-</main>
+
+  <div class="card">
+    <div class="coming-soon">
+      <span class="badge">COMING SOON</span>
+      <h3>정식 분석 사이트</h3>
+      <p>여러 키워드를 동시에 입력해 구좌별 순위와 검색량을<br>한눈에 비교하는 정식 사이트가 곧 출시됩니다.</p>
+      <ul class="features">
+        <li>다중 키워드 비교</li>
+        <li>구좌별 순위 시각화</li>
+        <li>검색량 · 경쟁도</li>
+        <li>CSV 내보내기</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="tagline"><strong>병원 마케팅은 스마트 브랜딩</strong></p>
+  <p class="copyright">SBreport · 2026</p>
+</div>
 </body>
 </html>
