@@ -1255,10 +1255,16 @@
 
   // ─── storage 토글 연동 ────────────────────────────────────────────────────────
 
-  // 페이지 로드 시 저장된 설정 읽기 (기본값 true)
-  chrome.storage.sync.get([STORAGE_KEY, POSITION_KEY]).then((stored) => {
-    state.enabled  = stored[STORAGE_KEY]  ?? true;
-    state.position = stored[POSITION_KEY] ?? "auto";
+  // 페이지 로드 시 저장된 설정 읽기 (기본값 true / left-top)
+  chrome.storage.sync.get([STORAGE_KEY, POSITION_KEY]).then(async (stored) => {
+    state.enabled = stored[STORAGE_KEY] ?? true;
+    let pos = stored[POSITION_KEY] ?? "left-top";
+    // 기존 "auto" 저장값을 "left-top"으로 자동 마이그레이션
+    if (pos === "auto") {
+      pos = "left-top";
+      await chrome.storage.sync.set({ [POSITION_KEY]: "left-top" });
+    }
+    state.position = pos;
     if (state.enabled) init();
   });
 
@@ -1268,7 +1274,7 @@
 
     // 위치 변경: 페이지 새로고침 없이 즉시 반영
     if (POSITION_KEY in changes) {
-      const next = changes[POSITION_KEY].newValue ?? "auto";
+      const next = changes[POSITION_KEY].newValue ?? "left-top";
       if (next !== state.position) {
         state.position = next;
         if (state.enabled) applyNavPosition();
