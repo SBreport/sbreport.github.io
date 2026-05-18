@@ -69,13 +69,35 @@
         </div>
       </li>
 
-      <li class="feature-item feature-disabled">
+      <li class="feature-item">
         <label class="feature-label">
           <div class="feature-text">
             <span class="feature-title">검색량 표시</span>
-            <span class="feature-desc">PC·모바일 검색량 표시. (백엔드 셋업 후 활성)</span>
+            <span class="feature-desc">PC·모바일 월간 검색량 표시.</span>
           </div>
-          <input type="checkbox" class="toggle" data-feature="searchVolume" disabled>
+          <input type="checkbox" class="toggle" data-feature="searchVolume">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </li>
+
+      <li class="feature-item">
+        <label class="feature-label">
+          <div class="feature-text">
+            <span class="feature-title">연관 검색어 표시</span>
+            <span class="feature-desc">검색량 패널 하단 연관 검색어 표시.</span>
+          </div>
+          <input type="checkbox" class="toggle" data-feature="relatedKeywords" checked>
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </li>
+
+      <li class="feature-item">
+        <label class="feature-label">
+          <div class="feature-text">
+            <span class="feature-title">블로그 카운트 강조</span>
+            <span class="feature-desc">통합검색 라벨에 블로그 개수 표시.</span>
+          </div>
+          <input type="checkbox" class="toggle" data-feature="blogCount" checked>
           <span class="toggle-track"><span class="toggle-thumb"></span></span>
         </label>
       </li>

@@ -1,14 +1,16 @@
 // 스마트 브랜딩 서포터 — popup
 // 4개 기능 토글 상태를 chrome.storage.sync에 저장/불러오기.
 
-const FEATURE_KEYS = ["blogCleaner", "searchNavigator", "searchHighlighter", "searchVolume"];
+const FEATURE_KEYS = ["blogCleaner", "searchNavigator", "searchHighlighter", "searchVolume", "relatedKeywords", "blogCount"];
 const OPTION_KEYS  = ["searchHighlighterColor", "searchNavigatorPosition"];
 
 const DEFAULTS = {
   blogCleaner: true,
   searchNavigator: true,
   searchHighlighter: true,
-  searchVolume: false, // 백엔드 미완성 → 기본 OFF
+  searchVolume: true,
+  relatedKeywords: true,
+  blogCount: true,
   searchHighlighterColor: "blue",
   searchNavigatorPosition: "left-top",
 };
@@ -77,6 +79,8 @@ function labelOf(key) {
     searchNavigator: "좌측 섹션 네비게이터",
     searchHighlighter: "블로그 결과 강조",
     searchVolume: "검색량 표시",
+    relatedKeywords: "연관 검색어 표시",
+    blogCount: "블로그 카운트 강조",
   }[key] ?? key;
 }
 

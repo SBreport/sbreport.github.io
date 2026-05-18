@@ -15,7 +15,8 @@
     "https://blog.naver.com/*",
     "https://m.blog.naver.com/*",
     "https://*.editor.naver.com/*",
-    "https://search.naver.com/*"
+    "https://search.naver.com/*",
+    "https://naver-searchad-proxy.sbreport.workers.dev/*"
   ],
 
   "background": {

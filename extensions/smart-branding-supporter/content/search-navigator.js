@@ -7,10 +7,11 @@
 
   // ─── 상수 ────────────────────────────────────────────────────────────────────
 
-  const STORAGE_KEY  = "searchNavigator";
-  const POSITION_KEY = "searchNavigatorPosition";
-  const NAV_ID       = "sbs-nav";
-  const STYLE_ID     = "sbs-nav-style";
+  const STORAGE_KEY     = "searchNavigator";
+  const POSITION_KEY    = "searchNavigatorPosition";
+  const BLOG_COUNT_KEY  = "blogCount";
+  const NAV_ID          = "sbs-nav";
+  const STYLE_ID        = "sbs-nav-style";
 
   // 검색창·탭 아래 첫 콘텐츠가 보이는 위치 (휴리스틱 오프셋)
   const TOP_OFFSET = 100;
@@ -209,7 +210,7 @@
 }
 /* 활성 항목 안의 배지: 흰 배경 + 색 글자로 반전 (녹색 위 녹색 회피) */
 .sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-blog { background: #fff; color: #2db400; }
-.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-cafe { background: #fff; color: #67ac5b; }
+.sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-cafe { background: #fff; color: #f97224; }
 .sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-kin  { background: #fff; color: #4a8af4; }
 .sbs-nav-item.sbs-nav-item--active .sbs-nav-comp-web  { background: #fff; color: #555; }
 
@@ -265,9 +266,9 @@
   flex-shrink: 0;
 }
 .sbs-nav-comp-blog { background: #2db400; }
-.sbs-nav-comp-cafe { background: #67ac5b; }
+.sbs-nav-comp-cafe { background: #f97224; }
 .sbs-nav-comp-kin  { background: #4a8af4; }
-.sbs-nav-comp-web  { background: #888;    }
+.sbs-nav-comp-web  { background: #b0b0b0; }
 .sbs-nav-comp-more {
   display: inline-flex;
   height: 16px;
@@ -277,6 +278,10 @@
   color: #888;
   padding: 0 3px;
 }
+
+/* 토글 OFF 시 숨김 클래스 */
+#sbs-nav.sbs-nav-hide-related .sbs-nav-section-volume-related { display: none !important; }
+#sbs-nav.sbs-nav-hide-blog-count .sbs-nav-blog-count { display: none !important; }
     `.trim();
   }
 
@@ -502,9 +507,9 @@
 
   const CARD_TYPE_RULES = [
     { type: "블로그",   key: "blog", color: "#2db400", hosts: ["blog.naver.com", "m.blog.naver.com"] },
-    { type: "카페",     key: "cafe", color: "#67ac5b", hosts: ["cafe.naver.com", "m.cafe.naver.com"] },
+    { type: "카페",     key: "cafe", color: "#f97224", hosts: ["cafe.naver.com", "m.cafe.naver.com"] },
     { type: "지식인",   key: "kin",  color: "#4a8af4", hosts: ["kin.naver.com", "m.kin.naver.com"] },
-    { type: "웹사이트", key: "web",  color: "#888",    hosts: [] }, // 폴백
+    { type: "웹사이트", key: "web",  color: "#b0b0b0", hosts: [] }, // 폴백
   ];
 
   const WEB_TYPE = CARD_TYPE_RULES.find(r => r.key === "web");
@@ -760,12 +765,22 @@
       dot.setAttribute("aria-hidden", "true");
 
       // 라벨 (N건 접미사 포함)
-      const countSuffix = sec.count != null && sec.count > 0 ? ` (${sec.count}건)` : "";
-      const labelText = `${sec.label}${countSuffix}`;
       const labelSpan = document.createElement("span");
       labelSpan.className = "sbs-nav-label";
-      labelSpan.title = labelText;
-      labelSpan.textContent = labelText;
+      if (sec.isMixed && sec.composition && sec.count != null && sec.count > 0) {
+        const blogCount = sec.composition.filter(c => c.key === "blog").length;
+        const blogSpanHtml = blogCount > 0
+          ? `<span class="sbs-nav-blog-count">, 블 ${blogCount}</span>`
+          : "";
+        const plainText = `${sec.label} (${sec.count}건${blogCount > 0 ? `, 블 ${blogCount}` : ""})`;
+        labelSpan.title = plainText;
+        labelSpan.innerHTML = `${escapeHtml(sec.label)} (${sec.count}건${blogSpanHtml})`;
+      } else {
+        const countSuffix = sec.count != null && sec.count > 0 ? ` (${sec.count}건)` : "";
+        const labelText = `${sec.label}${countSuffix}`;
+        labelSpan.title = labelText;
+        labelSpan.textContent = labelText;
+      }
 
       btn.appendChild(dot);
       btn.appendChild(labelSpan);
@@ -819,6 +834,7 @@
 
     const nav = buildNavDom(state.sections);
     document.body.appendChild(nav);
+    nav.dispatchEvent(new CustomEvent('sbs-nav-rendered', { bubbles: true, detail: { panel: nav } }));
 
     // DOM 생성 직후 위치 설정
     applyNavPosition();
@@ -826,6 +842,11 @@
     // 렌더 후 활성 상태 강제 재계산 (early return 회피)
     state.activeAreaId = null;
     updateActive();
+
+    // blogCount 토글 상태 즉시 반영
+    chrome.storage.sync.get(BLOG_COUNT_KEY).then((stored) => {
+      applyBlogCountClass(stored[BLOG_COUNT_KEY] ?? true);
+    });
   }
 
   // ─── 네비게이터 위치 계산 ─────────────────────────────────────────────────────
@@ -1253,10 +1274,18 @@
     state.lastSignature = "";
   }
 
+  // ─── 블로그 카운트 표시 클래스 헬퍼 ────────────────────────────────────────────
+
+  function applyBlogCountClass(enabled) {
+    const nav = document.getElementById(NAV_ID);
+    if (!nav) return;
+    nav.classList.toggle("sbs-nav-hide-blog-count", !enabled);
+  }
+
   // ─── storage 토글 연동 ────────────────────────────────────────────────────────
 
   // 페이지 로드 시 저장된 설정 읽기 (기본값 true / left-top)
-  chrome.storage.sync.get([STORAGE_KEY, POSITION_KEY]).then(async (stored) => {
+  chrome.storage.sync.get([STORAGE_KEY, POSITION_KEY, BLOG_COUNT_KEY]).then(async (stored) => {
     state.enabled = stored[STORAGE_KEY] ?? true;
     let pos = stored[POSITION_KEY] ?? "left-top";
     // 기존 "auto" 저장값을 "left-top"으로 자동 마이그레이션
@@ -1266,6 +1295,10 @@
     }
     state.position = pos;
     if (state.enabled) init();
+    // blogCount 초기 클래스 적용 (init 이후 nav가 생성됐을 수 있으나
+    // renderNav 호출 시에도 적용되므로 여기선 예비 적용)
+    const blogCountEnabled = stored[BLOG_COUNT_KEY] ?? true;
+    applyBlogCountClass(blogCountEnabled);
   });
 
   // 팝업에서 토글/위치 변경 시 실시간 반응
@@ -1279,6 +1312,11 @@
         state.position = next;
         if (state.enabled) applyNavPosition();
       }
+    }
+
+    // 블로그 카운트 표시 토글
+    if (BLOG_COUNT_KEY in changes) {
+      applyBlogCountClass(changes[BLOG_COUNT_KEY].newValue ?? true);
     }
 
     // 토글 ON/OFF

@@ -1,9 +1,12 @@
 // SBS 확장 + 차세대 키워드 분석 대시보드용 네이버 검색광고 API 프록시
 
+// 정확 매칭 + 접두사 매칭 분리: prefix 매칭만 쓰면 도메인 위조에 취약함
+// (예: https://sbreport.github.io.evil.com 이 startsWith로 통과되는 문제)
 const ALLOWED_ORIGINS = [
-  'chrome-extension://',
-  'http://localhost:',
-  'https://sbreport.github.io',
+  { type: 'exact', value: 'https://search.naver.com' },
+  { type: 'exact', value: 'https://sbreport.github.io' },
+  { type: 'prefix', value: 'chrome-extension://' },
+  { type: 'prefix', value: 'http://localhost:' },
 ];
 
 export default {
@@ -31,7 +34,9 @@ export default {
 // --- CORS ---
 
 function getCorsHeaders(origin) {
-  const allowed = ALLOWED_ORIGINS.some((prefix) => origin.startsWith(prefix));
+  const allowed = ALLOWED_ORIGINS.some(({ type, value }) =>
+    type === 'exact' ? origin === value : origin.startsWith(value)
+  );
   if (!allowed) return null;
 
   return {
@@ -84,9 +89,11 @@ async function handleSearchVolume(request, env, ctx, corsHeaders) {
     return jsonResponse({ error: 'missing query parameter "keywords"' }, 400, corsHeaders);
   }
 
+  // 네이버 keywordstool은 공백 포함 키워드를 거부 (code 11001).
+  // 공백을 모두 제거해서 동일 의미의 변형들이 같은 캐시 키를 갖도록 정규화.
   const keywords = raw
     .split(',')
-    .map((k) => k.trim())
+    .map((k) => k.replace(/\s+/g, ''))
     .filter(Boolean);
 
   if (keywords.length === 0) {
