@@ -12,8 +12,9 @@
   const BLOG_COUNT_KEY  = "blogCount";
   const NAV_ID          = "sbs-nav";
   const STYLE_ID        = "sbs-nav-style";
-  // 메인 사이트 URL (추후 정식 사이트 출시 시 1줄 변경)
-  const SITE_URL        = "https://sbsupport.netlify.app/";
+  // 분석기 사이트 URL — 베타 종료 페이지(sbsupport.netlify.app/)와는 별개 경로
+  // 정식 사이트 출시 시 이 한 줄만 교체
+  const SITE_URL        = "https://sbsupport.netlify.app/analyzer/";
 
   // 검색창·탭 아래 첫 콘텐츠가 보이는 위치 (휴리스틱 오프셋)
   const TOP_OFFSET = 100;

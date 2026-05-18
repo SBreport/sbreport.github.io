@@ -100,6 +100,10 @@ h1 {
   text-decoration: none;
   font-size: 13px;
   padding: 8px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
 }
 .cta-secondary:hover { color: var(--text); }
 .footer {
@@ -123,7 +127,7 @@ h1 {
   </div>
   <a href="#" class="cta" id="storeLink">정식 버전 출시 알림 받기 →</a>
   <div>
-    <a href="https://sbreport.github.io/" class="cta-secondary">사이트 메인으로 ←</a>
+    <button type="button" class="cta-secondary" onclick="window.close()">창 닫기 ×</button>
   </div>
   <p class="footer">SBreport · 2026</p>
 </main>

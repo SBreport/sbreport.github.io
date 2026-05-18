@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>스마트브랜딩 — 네이버 키워드 분석</title>
+<style>
+:root {
+  --brand: #1684F2;
+  --brand-dark: #0d6fd9;
+  --text: #1a1a1a;
+  --text-muted: #666;
+  --bg: #f5f7fa;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.card {
+  max-width: 520px;
+  width: 100%;
+  background: #fff;
+  border-radius: 14px;
+  padding: 48px 36px 40px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+  text-align: center;
+}
+.icon {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 24px;
+  border-radius: 22px;
+  overflow: hidden;
+}
+.icon img { width: 100%; height: 100%; display: block; }
+h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  margin-bottom: 28px;
+  text-transform: uppercase;
+}
+.message {
+  font-size: 15px;
+  color: var(--text);
+  margin-bottom: 32px;
+  padding: 20px 22px;
+  background: #f0f7ff;
+  border-radius: 10px;
+  border-left: 3px solid var(--brand);
+  text-align: left;
+  line-height: 1.7;
+}
+.message strong { color: var(--brand); font-weight: 700; }
+.features {
+  list-style: none;
+  text-align: left;
+  margin: 0 0 32px;
+  padding: 0 8px;
+}
+.features li {
+  padding: 10px 0;
+  font-size: 14px;
+  color: var(--text);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-bottom: 1px dashed #ececec;
+}
+.features li:last-child { border-bottom: none; }
+.features .icon-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand);
+  margin-top: 9px;
+}
+.features strong { color: var(--text); font-weight: 700; }
+.tagline {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.close-btn {
+  display: inline-block;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.close-btn:hover { color: var(--text); }
+.footer {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="icon"><img src="../icon.png" alt="스마트브랜딩"></div>
+  <h1>네이버 키워드 분석</h1>
+  <p class="subtitle">Coming Soon</p>
+  <div class="message">
+    <strong>서비스 준비 중입니다.</strong><br>
+    여러 키워드를 동시에 입력해<br>
+    플레이스 · 통합검색 · 브랜드 콘텐츠 순위와<br>
+    검색량을 한눈에 비교할 수 있는<br>
+    스마트브랜딩 정식 분석 사이트가 곧 출시됩니다.
+  </div>
+  <ul class="features">
+    <li><span class="icon-dot"></span><span><strong>다중 키워드 비교</strong> — 한 번에 여러 키워드 분석</span></li>
+    <li><span class="icon-dot"></span><span><strong>구좌별 순위 시각화</strong> — 플레이스/블로그/카페/광고 위치</span></li>
+    <li><span class="icon-dot"></span><span><strong>검색량·경쟁도</strong> — PC/모바일 분리 + 경쟁 강도</span></li>
+    <li><span class="icon-dot"></span><span><strong>CSV 내보내기</strong> — 분석 결과 즉시 다운로드</span></li>
+  </ul>
+  <p class="tagline">병원 마케팅은 스마트 브랜딩</p>
+  <button type="button" class="close-btn" onclick="window.close()">창 닫기 ×</button>
+  <p class="footer">SBreport · 2026</p>
+</main>
+</body>
+</html>
