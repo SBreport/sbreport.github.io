@@ -104,19 +104,22 @@
 
   /**
    * 페이지 전체에서 카드 요소를 수집하고, 중첩(부모-자식 관계) 카드를 제거
-   * → leaf-level 카드만 반환
+   * → 가장 작은 단위(leaf-level) 카드만 반환
+   *
+   * 통합영역([data-meta-area="ugB_..."])과 그 안의 개별 카드([data-template-id="ugcItem"])가
+   * 둘 다 매칭될 때, 큰 영역이 강조되면 그 안 모든 카드(카페 포함)가 같이 강조되는 문제 발생.
+   * → 자신 안에 다른 카드가 있으면 자기는 컨테이너이므로 제거.
    */
   function findAllCards() {
     const cards = new Set();
     for (const sel of CARD_SELECTORS) {
       document.querySelectorAll(sel).forEach(el => cards.add(el));
     }
-    // 다른 카드가 조상인 경우 제거 — leaf-level만 유지
-    return Array.from(cards).filter(card => {
-      let p = card.parentElement;
-      while (p && p !== document.body) {
-        if (cards.has(p)) return false;
-        p = p.parentElement;
+    const cardArr = Array.from(cards);
+    return cardArr.filter(card => {
+      // 자신 안에 다른 카드 있으면 자기는 컨테이너 = 제거 (작은 단위 우선)
+      for (const other of cardArr) {
+        if (other !== card && card.contains(other)) return false;
       }
       return true;
     });
