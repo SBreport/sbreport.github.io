@@ -104,6 +104,9 @@ input.toggle:disabled + .toggle-track { background: #e0e0e0; }
   gap: 8px;
   margin-top: -6px;
 }
+.feature-sub[hidden] {
+  display: none !important;
+}
 .feature-sub-label {
   font-size: 11.5px;
   color: #888;
