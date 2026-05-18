@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>스마트 브랜딩 서포터 — 베타 종료 안내</title>
+<title>스마트브랜딩 — 네이버 키워드 분석</title>
 <style>
 :root {
   --brand: #1684F2;
@@ -26,7 +26,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 .card {
-  max-width: 480px;
+  max-width: 520px;
   width: 100%;
   background: #fff;
   border-radius: 14px;
@@ -40,20 +40,12 @@ body {
   margin: 0 auto 24px;
   border-radius: 22px;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
-.icon img {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
+.icon img { width: 100%; height: 100%; display: block; }
 h1 {
   font-size: 22px;
   font-weight: 700;
   margin-bottom: 6px;
-  color: var(--text);
 }
 .subtitle {
   font-size: 12px;
@@ -66,48 +58,57 @@ h1 {
   font-size: 15px;
   color: var(--text);
   margin-bottom: 32px;
-  padding: 18px 20px;
+  padding: 20px 22px;
   background: #f0f7ff;
   border-radius: 10px;
   border-left: 3px solid var(--brand);
   text-align: left;
   line-height: 1.7;
 }
-.message strong {
-  color: var(--brand);
-  font-weight: 700;
+.message strong { color: var(--brand); font-weight: 700; }
+.features {
+  list-style: none;
+  text-align: left;
+  margin: 0 0 32px;
+  padding: 0 8px;
 }
-.cta {
-  display: inline-block;
+.features li {
+  padding: 10px 0;
+  font-size: 14px;
+  color: var(--text);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-bottom: 1px dashed #ececec;
+}
+.features li:last-child { border-bottom: none; }
+.features .icon-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
   background: var(--brand);
-  color: #fff;
-  padding: 14px 36px;
-  border-radius: 10px;
-  text-decoration: none;
-  font-size: 15px;
-  font-weight: 600;
-  transition: background 0.15s, transform 0.1s;
-  border: none;
-  cursor: pointer;
-  font-family: inherit;
+  margin-top: 9px;
 }
-.cta:hover { background: var(--brand-dark); }
-.cta:active { transform: scale(0.98); }
-.cta-secondary {
-  display: inline-block;
-  margin-top: 10px;
-  color: var(--text-muted);
-  text-decoration: none;
+.features strong { color: var(--text); font-weight: 700; }
+.tagline {
   font-size: 13px;
-  padding: 8px 12px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.close-btn {
+  display: inline-block;
   background: none;
   border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 8px 12px;
   cursor: pointer;
   font-family: inherit;
 }
-.cta-secondary:hover { color: var(--text); }
+.close-btn:hover { color: var(--text); }
 .footer {
-  margin-top: 24px;
+  margin-top: 12px;
   font-size: 12px;
   color: var(--text-muted);
 }
@@ -115,20 +116,24 @@ h1 {
 </head>
 <body>
 <main class="card">
-  <div class="icon"><img src="icon.png" alt="스마트 브랜딩 서포터"></div>
-  <h1>스마트 브랜딩 서포터</h1>
-  <p class="subtitle">Beta Notice</p>
+  <div class="icon"><img src="icon.png" alt="스마트브랜딩"></div>
+  <h1>네이버 키워드 분석</h1>
+  <p class="subtitle">Coming Soon</p>
   <div class="message">
-    <strong>베타 버전이 종료되었습니다.</strong><br>
-    더 안정적인 정식 버전이 준비 중이며,<br>
-    크롬 웹스토어를 통해 곧 출시될 예정입니다.<br><br>
-    그동안 베타 사용으로 함께해주신<br>
-    여러분께 진심으로 감사드립니다.
+    <strong>서비스 준비 중입니다.</strong><br>
+    여러 키워드를 동시에 입력해<br>
+    플레이스 · 통합검색 · 브랜드 콘텐츠 순위와<br>
+    검색량을 한눈에 비교할 수 있는<br>
+    스마트브랜딩 정식 분석 사이트가 곧 출시됩니다.
   </div>
-  <a href="#" class="cta" id="storeLink">정식 버전 출시 알림 받기 →</a>
-  <div>
-    <button type="button" class="cta-secondary" onclick="window.close()">창 닫기 ×</button>
-  </div>
+  <ul class="features">
+    <li><span class="icon-dot"></span><span><strong>다중 키워드 비교</strong> — 한 번에 여러 키워드 분석</span></li>
+    <li><span class="icon-dot"></span><span><strong>구좌별 순위 시각화</strong> — 플레이스/블로그/카페/광고 위치</span></li>
+    <li><span class="icon-dot"></span><span><strong>검색량·경쟁도</strong> — PC/모바일 분리 + 경쟁 강도</span></li>
+    <li><span class="icon-dot"></span><span><strong>CSV 내보내기</strong> — 분석 결과 즉시 다운로드</span></li>
+  </ul>
+  <p class="tagline">병원 마케팅은 스마트 브랜딩</p>
+  <button type="button" class="close-btn" onclick="window.close()">창 닫기 ×</button>
   <p class="footer">SBreport · 2026</p>
 </main>
 </body>
