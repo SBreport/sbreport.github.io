@@ -69,6 +69,11 @@
    * 3단계: 카드 내 첫 본문 링크 도메인이 blog.naver.com 계열 → 블로그, 강조 O
    */
   function isBlogCard(card) {
+    // 0단계: 비디오/클립 영역(vdB_)은 콘텐츠 유형이 영상이라 블로그 강조 대상 아님
+    // (in.naver.com이 BLOG_HOSTS에 포함되어 클립 카드가 잘못 매칭되는 케이스 회피)
+    const parentArea = card.closest("[data-meta-area]")?.getAttribute("data-meta-area") || "";
+    if (parentArea.startsWith("vdB_")) return false;
+
     // 1단계: 프로필 영역에 도메인 텍스트 → 외부 웹사이트
     for (const sel of PROFILE_SELECTORS) {
       const pe = card.querySelector(sel);

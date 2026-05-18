@@ -12,6 +12,8 @@
   const BLOG_COUNT_KEY  = "blogCount";
   const NAV_ID          = "sbs-nav";
   const STYLE_ID        = "sbs-nav-style";
+  // 메인 사이트 URL (추후 정식 사이트 출시 시 1줄 변경)
+  const SITE_URL        = "https://sbsupport.netlify.app/";
 
   // 검색창·탭 아래 첫 콘텐츠가 보이는 위치 (휴리스틱 오프셋)
   const TOP_OFFSET = 100;
@@ -58,6 +60,21 @@
       areaId: "__place_app_root",
     },
   ];
+
+  /**
+   * 영역이 사실상 보이는지 체크. 네이버는 검색어에 따라 영역을 등록만 하고
+   * 콘텐츠는 안 채우는 경우가 있어 (height:0) 박스에 잘못 표시됨.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function isElementVisible(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    return true;
+  }
 
   // SECTION_MAP 키를 길이 내림차순으로 정렬한 배열 — 긴 접두사 우선 매칭
   const SECTION_MAP_KEYS_SORTED = Object.keys(SECTION_MAP).sort(
@@ -260,6 +277,32 @@
   vertical-align: middle;
   flex-shrink: 0;
   line-height: 1.4;
+}
+
+/* 박스 footer — 메인 사이트 CTA + 슬로건 */
+.sbs-nav-footer {
+  margin-top: 6px;
+  padding: 12px 12px 10px;
+  border-top: 1px solid #ececec;
+  background: #f8faff;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s;
+}
+.sbs-nav-footer:hover {
+  background: #ebf4ff;
+}
+.sbs-nav-footer-cta {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #1684F2;
+  letter-spacing: -0.005em;
+}
+.sbs-nav-footer-slogan {
+  font-size: 10.5px;
+  color: #888;
+  margin-top: 3px;
+  letter-spacing: -0.005em;
 }
 
 /* 신스블 내부 카드 구성 인디케이터 */
@@ -817,9 +860,8 @@
       }
 
       btn.appendChild(dot);
-      btn.appendChild(labelSpan);
 
-      // 광고 배지
+      // 광고 배지 — labelSpan 앞에 두어 라벨 읽기 전에 광고 여부를 먼저 인지 (긴 라벨에서도 즉시 식별)
       if (sec.isAd) {
         const badge = document.createElement("span");
         badge.className = "sbs-nav-badge";
@@ -827,6 +869,8 @@
         badge.setAttribute("aria-label", "광고");
         btn.appendChild(badge);
       }
+
+      btn.appendChild(labelSpan);
 
       // 클릭 → 해당 섹션으로 부드러운 스크롤 (상단 70px 여유)
       btn.addEventListener("click", () => {
@@ -853,6 +897,24 @@
     }
 
     aside.appendChild(ul);
+
+    // 박스 footer — 메인 사이트로 안내 CTA + 슬로건
+    const footer = document.createElement("div");
+    footer.className = "sbs-nav-footer";
+    footer.innerHTML = `
+      <div class="sbs-nav-footer-cta">키워드 전문 분석하기 →</div>
+      <div class="sbs-nav-footer-slogan">병원 마케팅은 스마트 브랜딩</div>
+    `;
+    footer.addEventListener("click", () => {
+      const params = new URLSearchParams(location.search);
+      const keyword = params.get("query") || params.get("q") || "";
+      const url = keyword
+        ? `${SITE_URL}?q=${encodeURIComponent(keyword.replace(/\s+/g, ""))}`
+        : SITE_URL;
+      window.open(url, "_blank", "noopener,noreferrer");
+    });
+    aside.appendChild(footer);
+
     return aside;
   }
 
@@ -1157,6 +1219,8 @@
     for (const spec of SPECIAL_SECTIONS) {
       const el = document.querySelector(spec.selector);
       if (!el) continue;
+      // 빈 영역 skip: height:0 등 실제 콘텐츠 없는 경우 제외
+      if (!isElementVisible(el)) continue;
       // 중복 방지: 이미 mapped에 같은 element가 들어 있으면 skip
       if (mapped.some((s) => s.element === el)) continue;
       mapped.push({
@@ -1199,6 +1263,8 @@
           // 자동 적응: SECTION_MAP에 없지만 블/카/지 카드가 있는 영역은 자동 등록
           const element = findSectionElement(s.n);
           if (!element) return null;
+          // 빈 영역 skip: height:0 등 실제 콘텐츠 없는 경우 제외
+          if (!isElementVisible(element)) return null;
           const composition = analyzeMixedBlock(element, s.n);
           if (!composition || composition.length === 0) return null;
           const meaningful = composition.filter(
@@ -1219,6 +1285,8 @@
         }
         const element = findSectionElement(s.n);
         if (!element) return null;
+        // 빈 영역 skip: height:0 등 실제 콘텐츠 없는 경우 제외
+        if (!isElementVisible(element)) return null;
         const label = resolveLabel(element, meta.label, s.n);
 
         // 통합검색(isMixed)이면 내부 카드 분석
@@ -1284,6 +1352,8 @@
       const meta = getSectionMeta(areaId);
       if (!meta) {
         // 자동 적응: SECTION_MAP에 없지만 블/카/지 카드가 있는 영역은 자동 등록
+        // 빈 영역 skip: height:0 등 실제 콘텐츠 없는 경우 제외
+        if (!isElementVisible(el)) continue;
         const composition = analyzeMixedBlock(el, areaId);
         if (!composition || composition.length === 0) continue;
         const meaningful = composition.filter(
@@ -1303,6 +1373,8 @@
         });
         continue;
       }
+      // 빈 영역 skip: height:0 등 실제 콘텐츠 없는 경우 제외
+      if (!isElementVisible(el)) continue;
       const label = resolveLabel(el, meta.label, areaId);
 
       // 통합검색(isMixed)이면 내부 카드 분석

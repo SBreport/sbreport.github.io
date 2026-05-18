@@ -2,8 +2,14 @@
   "manifest_version": 3,
   "name": "스마트 브랜딩 서포터",
   "short_name": "SBS",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "네이버 블로그/검색 분석을 위한 통합 도구. 글감 패널 숨기기, 검색 결과 네비게이터, 블로그 강조, 검색량 표시.",
+
+  "icons": {
+    "16":  "icons/icon-16.png",
+    "48":  "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
 
   "permissions": [
     "storage",
@@ -26,7 +32,12 @@
 
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "스마트 브랜딩 서포터"
+    "default_title": "스마트 브랜딩 서포터",
+    "default_icon": {
+      "16":  "icons/icon-16.png",
+      "48":  "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
 
   "content_scripts": [

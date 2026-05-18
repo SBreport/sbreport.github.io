@@ -82,6 +82,20 @@ function handleHealth(corsHeaders) {
 }
 
 async function handleSearchVolume(request, env, ctx, corsHeaders) {
+  // 베타 종료 차단: secret BETA_ENDED=true 설정 시 모든 호출 410으로 차단하고 안내 URL 반환
+  // 사용자가 정식 버전 출시 시점에 `wrangler secret put BETA_ENDED` true 로 즉시 적용
+  if (env.BETA_ENDED === 'true' || env.BETA_ENDED === true) {
+    return jsonResponse(
+      {
+        error: 'beta_ended',
+        message: '베타 버전이 종료되었습니다.',
+        redirect_url: env.BETA_REDIRECT_URL || '',
+      },
+      410,
+      corsHeaders
+    );
+  }
+
   const url = new URL(request.url);
   const raw = url.searchParams.get('keywords');
 

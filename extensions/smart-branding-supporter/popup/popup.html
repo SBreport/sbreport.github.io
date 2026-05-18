@@ -9,7 +9,7 @@
   <main class="popup">
     <header class="popup-header">
       <h1>스마트 브랜딩 서포터</h1>
-      <span class="popup-version">v0.1.0</span>
+      <span class="popup-version">v0.3.0</span>
     </header>
 
     <ul class="feature-list">
@@ -86,12 +86,13 @@
             <span class="feature-title">연관 검색어 표시</span>
             <span class="feature-desc">검색량 패널 하단 연관 검색어 표시.</span>
           </div>
-          <input type="checkbox" class="toggle" data-feature="relatedKeywords" checked>
+          <input type="checkbox" class="toggle" data-feature="relatedKeywords">
           <span class="toggle-track"><span class="toggle-thumb"></span></span>
         </label>
       </li>
 
-      <li class="feature-item">
+      <!-- 블로그 카운트 강조: 기본 ON, 사용자 옵션 노출 안 함 (필요 시 hidden 제거) -->
+      <li class="feature-item" hidden>
         <label class="feature-label">
           <div class="feature-text">
             <span class="feature-title">블로그 카운트 강조</span>

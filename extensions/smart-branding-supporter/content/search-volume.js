@@ -87,6 +87,28 @@
   padding: 4px 0;
 }
 .sbs-nav-volume-error { color: #c0392b; }
+
+/* 베타 종료 안내 (Worker 410 응답) */
+.sbs-nav-beta-message {
+  font-size: 12.5px;
+  color: #c0392b;
+  font-weight: 600;
+  margin: 4px 0 10px;
+}
+.sbs-nav-beta-cta {
+  display: inline-block;
+  background: #1684F2;
+  color: #fff;
+  border: none;
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.sbs-nav-beta-cta:hover { background: #0d6fd9; }
 `;
     document.head.appendChild(style);
   }
@@ -130,6 +152,14 @@
   async function fetchVolume(keyword) {
     const url = `${WORKER_URL}?keywords=${encodeURIComponent(keyword)}`;
     const res = await fetch(url, { credentials: 'omit' });
+    // 410 Gone = Worker가 BETA_ENDED 차단 응답. 별도 코드로 구분해 UI 분기
+    if (res.status === 410) {
+      const data = await res.json().catch(() => ({}));
+      const err = new Error('beta_ended');
+      err.code = 'BETA_ENDED';
+      err.redirectUrl = data.redirect_url || '';
+      throw err;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return data.keywords || [];
@@ -229,6 +259,28 @@
     header.insertAdjacentElement('afterend', section);
   }
 
+  function renderBetaEnded(panel, redirectUrl) {
+    removeAllSections(panel);
+    const header = panel.querySelector('.sbs-nav-header');
+    if (!header) return;
+
+    const section = document.createElement('div');
+    section.className = SECTION_CLASS_TOP + ' sbs-nav-section-beta';
+    section.innerHTML = `
+      <div class="sbs-nav-volume-title">알림</div>
+      <div class="sbs-nav-beta-message">베타 버전이 종료되었습니다</div>
+      <button type="button" class="sbs-nav-beta-cta">공지 확인 →</button>
+    `;
+
+    const cta = section.querySelector('.sbs-nav-beta-cta');
+    cta.addEventListener('click', () => {
+      const url = redirectUrl || 'https://sbreport.github.io/';
+      window.open(url, '_blank', 'noopener,noreferrer');
+    });
+
+    header.insertAdjacentElement('afterend', section);
+  }
+
   // ─── 메인 핸들러 ────────────────────────────────────────────────────────────
 
   async function handleNavRendered(panel) {
@@ -263,6 +315,14 @@
       if (!currentPanel) return;
       renderAllSections(currentPanel, items, keyword);
     } catch (err) {
+      // 베타 종료(410): 검색량 박스 자리에 안내 + CTA 표시
+      if (err.code === 'BETA_ENDED') {
+        if (extractKeyword() !== keyword) return;
+        const currentPanel = document.getElementById('sbs-nav');
+        if (!currentPanel) return;
+        renderBetaEnded(currentPanel, err.redirectUrl);
+        return;
+      }
       // "Failed to fetch" / AbortError는 페이지 reload·네비게이션 중 자연 발생 → 노이즈 방지
       const isTransient = err.name === 'AbortError' || /Failed to fetch/i.test(String(err.message || err));
       if (!isTransient) {
@@ -293,7 +353,7 @@
     handleNavRendered(panel);
     // 연관 검색어 토글 상태 즉시 반영
     chrome.storage.sync.get(RELATED_KEYWORDS_KEY).then((stored) => {
-      applyRelatedClass(stored[RELATED_KEYWORDS_KEY] ?? true);
+      applyRelatedClass(stored[RELATED_KEYWORDS_KEY] ?? false);
     });
   });
 
@@ -303,7 +363,7 @@
 
     // 연관 검색어 표시 토글
     if (RELATED_KEYWORDS_KEY in changes) {
-      applyRelatedClass(changes[RELATED_KEYWORDS_KEY].newValue ?? true);
+      applyRelatedClass(changes[RELATED_KEYWORDS_KEY].newValue ?? false);
     }
 
     if (!('searchVolume' in changes)) return;

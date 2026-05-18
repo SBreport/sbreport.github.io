@@ -9,7 +9,7 @@ const DEFAULTS = {
   searchNavigator: true,
   searchHighlighter: true,
   searchVolume: true,
-  relatedKeywords: true,
+  relatedKeywords: false,
   blogCount: true,
   searchHighlighterColor: "blue",
   searchNavigatorPosition: "left-top",
