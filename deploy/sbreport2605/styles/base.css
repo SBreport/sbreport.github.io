@@ -1,0 +1,97 @@
+/* ============================================================
+   base.css — 색·폰트·리셋·타이포
+   이 파일만 수정하면 전역 색상·서체 변경 가능
+   ============================================================ */
+
+/* Pretendard 폰트 */
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+
+/* ── 디자인 토큰 ── */
+:root {
+  --color-bg:       #f8f7f4;
+  --color-text:     #1a2a44;
+  --color-sub:      #5a6a7d;
+  --color-point:    #2563eb;
+  --color-border:   #e2e4e8;
+  --color-card-bg:  #ffffff;
+
+  --font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* 모바일 기본 */
+  --fs-headline: 24px;
+  --fs-body:     16px;
+  --fs-label:    13px;
+  --fs-source:   12px;
+
+  --fw-bold:    700;
+  --fw-medium:  500;
+  --fw-regular: 400;
+
+  --lh-headline: 1.35;
+  --lh-body:     1.7;
+}
+
+/* ── 리셋 ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  line-height: var(--lh-body);
+  font-weight: var(--fw-regular);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── 타이포그래피 기본 ── */
+h1, h2, h3, h4 {
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-headline);
+  color: var(--color-text);
+}
+
+p {
+  line-height: var(--lh-body);
+  color: var(--color-text);
+}
+
+strong {
+  font-weight: var(--fw-bold);
+  color: var(--color-point);
+}
+
+/* strong이 카드 내 특수 컨텍스트에서 포인트 색 없이 볼드만 쓰고 싶을 때 */
+.text-strong {
+  font-weight: var(--fw-bold);
+  color: inherit;
+}
+
+/* ── 공통 유틸 ── */
+.text-sub   { color: var(--color-sub); }
+.text-point { color: var(--color-point); }
+.text-label {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-medium);
+  color: var(--color-sub);
+  letter-spacing: 0.02em;
+}
+
+/* ── PC 폰트 스케일 업 ── */
+@media (min-width: 768px) {
+  :root {
+    --fs-headline: 32px;
+    --fs-body:     18px;
+    --fs-label:    14px;
+    --fs-source:   13px;
+  }
+}

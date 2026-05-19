@@ -1,0 +1,132 @@
+/* ============================================================
+   cards.css — 카드별 특수 스타일
+   공통 컴포넌트로 처리 안 되는 카드 단위 오버라이드만 여기에
+   ============================================================ */
+
+/* ── CARD 1: 표지 ── */
+.card-cover {
+  justify-content: center;
+}
+
+.card-cover .cover-tag {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-medium);
+  color: var(--color-point);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.card-cover .cover-headline {
+  font-size: clamp(28px, 6vw, 44px);
+  font-weight: var(--fw-bold);
+  color: var(--color-text);
+  line-height: 1.25;
+  margin-bottom: 16px;
+}
+
+.card-cover .cover-subtitle {
+  font-size: clamp(16px, 3vw, 20px);
+  color: var(--color-sub);
+  font-weight: var(--fw-medium);
+}
+
+.card-cover .cover-divider {
+  width: 40px;
+  height: 3px;
+  background-color: var(--color-point);
+  border-radius: 2px;
+  margin: 28px 0;
+}
+
+/* ── 표지 목차 박스 ── */
+.card-cover .cover-contents {
+  margin-top: 36px;
+  padding: 20px 24px;
+  background: #f0f5ff;
+  border-left: 3px solid var(--color-point);
+  border-radius: 0 8px 8px 0;
+}
+
+.card-cover .cover-contents-label {
+  display: block;
+  font-size: var(--fs-source);
+  font-weight: var(--fw-medium);
+  color: var(--color-point);
+  letter-spacing: 0.2em;
+  margin-bottom: 14px;
+}
+
+.card-cover .cover-contents-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.card-cover .cover-contents-item {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-size: var(--fs-body);
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
+.card-cover .cover-contents-number {
+  flex-shrink: 0;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-medium);
+  color: var(--color-point);
+  letter-spacing: 0.05em;
+  min-width: 24px;
+}
+
+/* ── CARD 7: 마무리 ── */
+.card-closing {
+  justify-content: center;
+  text-align: left;
+}
+
+.card-closing .closing-headline {
+  font-size: var(--fs-headline);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-headline);
+  color: var(--color-text);
+}
+
+.card-closing .closing-body {
+  font-size: var(--fs-body);
+  color: var(--color-sub);
+  line-height: var(--lh-body);
+}
+
+.card-closing .closing-brand {
+  margin-top: auto;
+  padding-top: 32px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-closing .closing-brand-name {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-medium);
+  color: var(--color-point);
+  letter-spacing: 0.05em;
+}
+
+.card-closing .closing-brand-line {
+  width: 24px;
+  height: 2px;
+  background-color: var(--color-point);
+  border-radius: 1px;
+}
+
+/* 마무리 카드 링크 박스 — 본문에서 적당히 떨어뜨림 */
+.card-closing .link-box {
+  margin-top: 32px;
+  align-self: flex-start;
+}

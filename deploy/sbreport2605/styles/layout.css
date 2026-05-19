@@ -1,0 +1,159 @@
+/* ============================================================
+   layout.css — 카드 컨테이너·스냅 스크롤·반응형·진행 표시
+   ============================================================ */
+
+/* ── 전체 레이아웃 ── */
+html, body {
+  height: 100%;
+  overflow: hidden; /* 페이지 자체 스크롤 차단 — 스냅 컨테이너가 담당 */
+}
+
+/* ── 스냅 컨테이너 ── */
+#card-container {
+  height: 100vh;
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox */
+}
+
+#card-container::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
+/* ── 개별 카드 슬롯 ── */
+.card-slot {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  height: 100vh;
+  width: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+/* ── 카드 내부 래퍼 (모바일: 풀스크린) ── */
+.card-inner {
+  width: 100%;
+  max-width: 100%;
+  background-color: var(--color-card-bg);
+  display: flex;
+  flex-direction: column;
+  padding: 48px 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ── PC: 중앙 정렬 + max-width ── */
+@media (min-width: 768px) {
+  .card-slot {
+    padding: 20px 0;
+    background-color: var(--color-bg);
+    align-items: center;
+  }
+
+  .card-inner {
+    max-width: 720px;
+    width: 100%;
+    height: 100%;
+    border-radius: 12px;
+    box-shadow: 0 2px 16px rgba(26, 42, 68, 0.07);
+  }
+}
+
+/* ── 카드 우측 하단 페이지 번호 (N / 7) ── */
+.card-page-number {
+  position: absolute;
+  bottom: 20px;
+  right: 24px;
+  font-size: var(--fs-source);
+  font-weight: var(--fw-medium);
+  color: var(--color-sub);
+  letter-spacing: 0.08em;
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+/* ── 우측 진행 표시 (점 네비게이터) ── */
+#progress-nav {
+  position: fixed;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+}
+
+.progress-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-border);
+  cursor: pointer;
+  transition: background-color 0.25s ease, transform 0.25s ease;
+}
+
+.progress-dot.active {
+  background-color: var(--color-point);
+  transform: scale(1.5);
+}
+
+@media (min-width: 768px) {
+  #progress-nav {
+    right: calc(50% - 380px); /* 카드 우측 바깥에 배치 */
+  }
+}
+
+/* ── 로딩 메시지 ── */
+#loading-msg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  font-size: var(--fs-body);
+  color: var(--color-sub);
+}
+
+/* ── CORS 에러 fallback ── */
+#cors-error {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: var(--color-bg);
+  z-index: 9999;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  text-align: center;
+  gap: 16px;
+}
+
+#cors-error.visible {
+  display: flex;
+}
+
+#cors-error h2 {
+  font-size: 20px;
+  color: var(--color-text);
+}
+
+#cors-error p {
+  font-size: var(--fs-body);
+  color: var(--color-sub);
+  max-width: 480px;
+  line-height: 1.65;
+}
+
+#cors-error code {
+  display: inline-block;
+  background: #eef2ff;
+  color: var(--color-point);
+  border-radius: 6px;
+  padding: 12px 20px;
+  font-family: 'Courier New', monospace;
+  font-size: 15px;
+  margin: 4px 0;
+}
