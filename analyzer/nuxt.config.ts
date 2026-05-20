@@ -36,4 +36,13 @@ export default defineNuxtConfig({
   typescript: {
     strict: true,
   },
+
+  // Cloudflare Pages 배포용 Nitro preset
+  // NITRO_PRESET 환경변수가 자동 주입되면 그쪽이 우선되므로 충돌 없음
+  nitro: {
+    preset: 'cloudflare_pages',
+    cloudflare: {
+      nodeCompat: true,
+    },
+  },
 })
