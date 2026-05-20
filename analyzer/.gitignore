@@ -6,6 +6,9 @@
 .cache
 dist
 
+# Wrangler / Cloudflare 빌드 캐시
+.wrangler
+
 # Node dependencies
 node_modules
 

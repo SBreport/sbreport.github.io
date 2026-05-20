@@ -37,12 +37,12 @@ export default defineNuxtConfig({
     strict: true,
   },
 
-  // Cloudflare Pages 배포용 Nitro preset
-  // NITRO_PRESET 환경변수가 자동 주입되면 그쪽이 우선되므로 충돌 없음
+  // Cloudflare Workers (Static Assets) 배포용 Nitro preset
+  // wrangler deploy 명령과 호환되는 cloudflare_module preset 사용
   nitro: {
-    preset: 'cloudflare_pages',
+    preset: 'cloudflare_module',
     cloudflare: {
-      nodeCompat: true,
+      deployConfig: true,  // 빌드 시 .output/wrangler.json 자동 생성
     },
   },
 })
