@@ -1,0 +1,38 @@
+/* -----------------------------------------------
+   전체 스크롤 박멸 룰 (기획서 4.5)
+   html, body는 절대 스크롤하지 않는다.
+   스크롤은 본문 flex-1 min-h-0 overflow-y-auto 영역에서만.
+   Nuxt UI v3가 Tailwind v4를 자체 주입하므로 여기서 @import 불필요.
+----------------------------------------------- */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 폰트: Pretendard (CDN은 nuxt.config head.link에서 로드) */
+body {
+  font-family: 'Pretendard', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/*
+  브랜드 블루 팔레트 (기획서 4.1)
+  H≈210, 500 단계를 정확히 #1684F2로 고정.
+  Nuxt UI v3 + Tailwind v4 방식: @theme static 으로 커스텀 색 팔레트 정의.
+  app.config.ts에서 ui.colors.primary: 'brand' 로 연결.
+*/
+@theme static {
+  --color-brand-50:  #eef6ff;
+  --color-brand-100: #daeeff;
+  --color-brand-200: #b8dcfe;
+  --color-brand-300: #7ec2fd;
+  --color-brand-400: #3ea4f9;
+  --color-brand-500: #1684f2;
+  --color-brand-600: #0b65d4;
+  --color-brand-700: #0a4fab;
+  --color-brand-800: #0d408a;
+  --color-brand-900: #103873;
+  --color-brand-950: #0b2247;
+}

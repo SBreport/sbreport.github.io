@@ -1,0 +1,39 @@
+// https://nuxt.com/docs/api/configuration/nuxt-config
+export default defineNuxtConfig({
+  compatibilityDate: '2024-11-01',
+
+  devtools: { enabled: true },
+
+  modules: [
+    '@nuxt/ui',
+    '@pinia/nuxt',
+  ],
+
+  // Nuxt UI v3 색상 토큰 커스터마이즈는 app.config.ts에서 처리
+  // Tailwind v4 커스텀 팔레트는 assets/css/main.css의 @theme static 블록에서 정의
+  // (Tailwind v4는 tailwind.config.ts를 사용하지 않음)
+
+  css: ['~/assets/css/main.css'],
+
+  app: {
+    head: {
+      title: 'SB Analyzer — 네이버 키워드 분석기',
+      meta: [
+        { charset: 'utf-8' },
+        { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+        { name: 'description', content: '네이버 키워드 구좌 구성 · 검색량 분석 웹앱' },
+      ],
+      link: [
+        {
+          rel: 'stylesheet',
+          href: 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css',
+        },
+      ],
+    },
+  },
+
+  // TypeScript 엄격 모드
+  typescript: {
+    strict: true,
+  },
+})
