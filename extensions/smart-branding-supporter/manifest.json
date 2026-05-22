@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "스마트 브랜딩 서포터",
   "short_name": "SBS",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "네이버 블로그/검색 분석을 위한 통합 도구. 글감 패널 숨기기, 검색 결과 네비게이터, 블로그 강조, 검색량 표시.",
 
   "icons": {
