@@ -172,9 +172,8 @@
     panel.querySelector(`.${SECTION_CLASS_RELATED}`)?.remove();
   }
 
-  function renderTopSection(panel, currentItem) {
+  function renderTopSection(panel, currentItem, currentKeyword) {
     panel.querySelector(`.${SECTION_CLASS_TOP}`)?.remove();
-    if (!currentItem) return;
 
     const header = panel.querySelector('.sbs-nav-header');
     if (!header) return;
@@ -182,18 +181,29 @@
     const section = document.createElement('div');
     section.className = SECTION_CLASS_TOP;
 
-    const total = formatNum(currentItem.total || 0);
-    const pc = formatNum(currentItem.pc || 0);
-    const mobile = formatNum(currentItem.mobile || 0);
-    const kw = escapeHtml(currentItem.keyword);
-
-    section.innerHTML = `
-      <div class="sbs-nav-volume-title">검색량 (월간)</div>
-      <div class="sbs-nav-volume-current">
-        <div class="sbs-nav-volume-current-keyword">${kw} (${total})</div>
-        <div class="sbs-nav-volume-current-detail">M ${mobile} + P ${pc}</div>
-      </div>
-    `;
+    if (currentItem) {
+      // 검색량 데이터 있음 (0이어도 표시 — 검색량 0도 유효한 정보)
+      const total = formatNum(currentItem.total || 0);
+      const pc = formatNum(currentItem.pc || 0);
+      const mobile = formatNum(currentItem.mobile || 0);
+      const kw = escapeHtml(currentItem.keyword);
+      section.innerHTML = `
+        <div class="sbs-nav-volume-title">검색량 (월간)</div>
+        <div class="sbs-nav-volume-current">
+          <div class="sbs-nav-volume-current-keyword">${kw} (${total})</div>
+          <div class="sbs-nav-volume-current-detail">M ${mobile} + P ${pc}</div>
+        </div>
+      `;
+    } else {
+      // 네이버 응답에 키워드 자체가 없음 — 데이터 없음 안내 (박스가 사라지지 않게)
+      section.innerHTML = `
+        <div class="sbs-nav-volume-title">검색량 (월간)</div>
+        <div class="sbs-nav-volume-current">
+          <div class="sbs-nav-volume-current-keyword">${escapeHtml(currentKeyword || '')}</div>
+          <div class="sbs-nav-volume-current-detail">검색량 데이터 없음</div>
+        </div>
+      `;
+    }
     header.insertAdjacentElement('afterend', section);
   }
 
@@ -222,12 +232,14 @@
 
   function renderAllSections(panel, items, currentKeyword) {
     const validItems = items.filter(it => (it.total || 0) > 0);
-    const current = validItems.find(it => it.keyword === currentKeyword) || null;
+    // 현재 키워드는 검색량 0이어도 표시 — 전체 items에서 찾음 (validItems 아님)
+    const current = items.find(it => it.keyword === currentKeyword) || null;
+    // 연관 검색어는 검색량 0 제외 (노이즈 방지)
     const related = validItems
       .filter(it => it.keyword !== currentKeyword)
       .sort((a, b) => (b.total || 0) - (a.total || 0))
       .slice(0, 6);
-    renderTopSection(panel, current);
+    renderTopSection(panel, current, currentKeyword);
     renderRelatedSection(panel, related);
   }
 
