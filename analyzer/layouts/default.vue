@@ -1,3 +1,9 @@
+<script setup lang="ts">
+import { useAuthStore } from '~/stores/auth'
+
+const authStore = useAuthStore()
+</script>
+
 <template>
   <!--
     default 레이아웃: 헤더(56px, shrink-0) + 사이드바(240↔56px, shrink-0) + 본문(flex-1 min-h-0 overflow-y-auto)
@@ -13,10 +19,15 @@
       <!-- 사이드바: 너비만 변함, 줄어들지 않음 -->
       <AppSidebar class="shrink-0" />
 
-      <!-- 본문 영역: 남은 공간 + 스크롤은 여기서만 -->
-      <main class="flex-1 min-h-0 overflow-y-auto p-6">
-        <slot />
-      </main>
+      <!-- 본문 + admin 배지 영역 -->
+      <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <!-- 본문 영역: 남은 공간 + 스크롤은 여기서만 -->
+        <main class="flex-1 min-h-0 overflow-y-auto p-6">
+          <slot />
+        </main>
+        <!-- admin 전용 배포 배지 -->
+        <AppDeployBadge v-if="authStore.isAdmin" class="shrink-0" />
+      </div>
     </div>
   </div>
 </template>

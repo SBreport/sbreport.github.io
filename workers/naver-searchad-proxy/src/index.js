@@ -68,6 +68,10 @@ export default {
       return handleApiHistory(request, env, corsHeaders);
     }
 
+    if (url.pathname === '/api/version' && request.method === 'GET') {
+      return handleVersion(request, env, corsHeaders);
+    }
+
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
 };
@@ -741,6 +745,20 @@ async function handleApiHistory(request, env, corsHeaders) {
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, corsHeaders);
   }
+}
+
+// --- GET /api/version 핸들러 ---
+
+function handleVersion(request, env, corsHeaders) {
+  if (!corsHeaders) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
+  return jsonResponse({
+    id: env.CF_VERSION_METADATA?.id ?? null,
+    tag: env.CF_VERSION_METADATA?.tag ?? null,
+    timestamp: env.CF_VERSION_METADATA?.timestamp ?? null,
+  }, 200, corsHeaders);
 }
 
 // --- search_history INSERT 헬퍼 ---
