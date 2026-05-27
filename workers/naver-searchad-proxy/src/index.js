@@ -17,6 +17,9 @@ const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 // data-block-id 값 → { type, label } 매핑
 const BLOCK_ID_MAP = [
   { pattern: /^review\/.*blog/i,            type: 'blog',          label: '블로그' },
+  // review/ugc.* — blog 외 UGC 단일 의도 추천 (블로그 매칭 안 되는 추천형 섹션)
+  { pattern: /^review\/.*ugc/i,             type: 'related',       label: '추천' },
+  { pattern: /^image\//i,                   type: 'image',         label: '이미지' },
   { pattern: /^kin\//i,                     type: 'kin',           label: '지식인' },
   { pattern: /^web\//i,                     type: 'web',           label: '웹사이트' },
   { pattern: /^news\//i,                    type: 'news',          label: '뉴스' },
