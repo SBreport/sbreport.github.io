@@ -738,7 +738,7 @@ async function handleApiHistory(request, env, corsHeaders) {
 
   try {
     const { results } = await env.DB.prepare(
-      'SELECT id, keyword, pc_volume, mobile_volume, competition, created_at FROM search_history WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
+      'SELECT id, keyword, pc_volume, mobile_volume, competition, created_at FROM (SELECT id, keyword, pc_volume, mobile_volume, competition, created_at, ROW_NUMBER() OVER (PARTITION BY keyword ORDER BY created_at DESC) AS rn FROM search_history WHERE user_id = ?) WHERE rn = 1 ORDER BY created_at DESC LIMIT ?'
     ).bind(authResult.user.id, limit).all();
 
     return jsonResponse({ history: results ?? [] }, 200, corsHeaders);
