@@ -417,7 +417,8 @@ function resolveBlockId(blockId) {
       return { type, label };
     }
   }
-  // 알 수 없는 block-id: fallback (모니터링용)
+  // 미매칭 block-id 모니터링 — Cloudflare Workers Logs(Tail)에서 "[UNMAPPED_BLOCK_ID]" 검색해 발견된 신규 패턴 보강
+  console.log(`[UNMAPPED_BLOCK_ID] ${blockId}`);
   return { type: blockId, label: blockId };
 }
 
