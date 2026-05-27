@@ -19,6 +19,7 @@ const BLOCK_ID_MAP = [
   { pattern: /^review\/.*blog/i,            type: 'blog',          label: '블로그' },
   // review/ugc.* — blog 외 UGC 단일 의도 추천 (블로그 매칭 안 되는 추천형 섹션)
   { pattern: /^review\/.*ugc/i,             type: 'related',       label: '추천' },
+  { pattern: /^ai-briefing\//i,             type: 'ai_briefing',   label: 'AI 브리핑' },
   { pattern: /^image\//i,                   type: 'image',         label: '이미지' },
   { pattern: /^kin\//i,                     type: 'kin',           label: '지식인' },
   { pattern: /^web\//i,                     type: 'web',           label: '웹사이트' },
@@ -246,7 +247,7 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
   const normalizedKeyword = rawKeyword.trim().replace(/\s+/g, '');
 
   // 캐시 확인 (24h TTL)
-  const cacheUrl = `https://cache.internal/v3/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
+  const cacheUrl = `https://cache.internal/v4/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
   const cache = caches.default;
 
   const cached = await cache.match(cacheUrl);
