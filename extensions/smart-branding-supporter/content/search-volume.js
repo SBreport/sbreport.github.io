@@ -231,13 +231,12 @@
   }
 
   function renderAllSections(panel, items, currentKeyword) {
-    const validItems = items.filter(it => (it.total || 0) > 0);
-    // 현재 키워드는 검색량 0이어도 표시 — 전체 items에서 찾음 (validItems 아님)
+    // 현재 키워드는 검색량 0이어도 표시 — 전체 items에서 찾음
     const current = items.find(it => it.keyword === currentKeyword) || null;
-    // 연관 검색어는 검색량 0 제외 (노이즈 방지)
-    const related = validItems
-      .filter(it => it.keyword !== currentKeyword)
-      .sort((a, b) => (b.total || 0) - (a.total || 0))
+    // 연관 검색어는 네이버 응답 순서(관련도 순) 보존.
+    // 검색량 절대값으로 재정렬하면 광범위 키워드가 위로 와서 네이버 광고도구 UI와 결과가 어긋남.
+    const related = items
+      .filter(it => it.keyword !== currentKeyword && (it.total || 0) > 0)
       .slice(0, 6);
     renderTopSection(panel, current, currentKeyword);
     renderRelatedSection(panel, related);
