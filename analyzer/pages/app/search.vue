@@ -700,7 +700,7 @@ onMounted(async () => {
 
           <!-- 구좌 구성 세로 펼침 -->
           <div>
-            <p class="text-xs text-gray-400 mb-2 font-medium">구좌 구성 (SERP 순서)</p>
+            <p class="text-xs text-gray-400 mb-2 font-medium">구좌 구성 <span class="text-gray-300">· 모바일 SERP 순서</span></p>
             <div
               v-if="selectedRow.result.sections.length === 0"
               class="text-sm text-gray-400"

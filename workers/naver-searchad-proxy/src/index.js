@@ -250,7 +250,7 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
   const normalizedKeyword = rawKeyword.trim().replace(/\s+/g, '');
 
   // 캐시 확인 (24h TTL)
-  const cacheUrl = `https://cache.internal/v5/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
+  const cacheUrl = `https://cache.internal/v6/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
   const cache = caches.default;
 
   const cached = await cache.match(cacheUrl);
@@ -375,11 +375,15 @@ function parseNaverSections(html) {
   const seen = new Set(); // 중복 type 방지 (같은 구좌가 여러 번 등장 시 첫 번째 순서 유지)
   let order = 1;
 
-  // 1) power_link (파워링크 광고) — data-block-id보다 먼저 등장하는 경우가 많음
-  const powerLinkCount = countOccurrences(html, 'power_link');
-  if (powerLinkCount > 0) {
-    sections.push({ order: order++, type: 'powerlink', label: '파워링크', count: powerLinkCount });
-    seen.add('powerlink');
+  // 1) 파워링크 광고 — 영역 컨테이너(id=power_link_body)가 있으면, 그 안의 개별 광고 카드 수를 카운트
+  //    카드 마커 `data-sv-log="pwl"`은 광고 카드 각각에 1번씩 부여됨 (모바일 SERP 기준).
+  //    주의: 모바일 SERP는 첫 fetch 시점에 광고 일부만 노출 → PC SERP와 광고 수가 다를 수 있다.
+  if (html.includes('id="power_link_body"') || html.includes('power_link')) {
+    const adCardCount = countOccurrences(html, 'data-sv-log="pwl"');
+    if (adCardCount > 0) {
+      sections.push({ order: order++, type: 'powerlink', label: '파워링크', count: adCardCount });
+      seen.add('powerlink');
+    }
   }
 
   // 2) data-block-id 등장 순서대로 수집
