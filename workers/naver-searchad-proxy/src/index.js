@@ -63,6 +63,10 @@ export default {
       return handleMe(request, env, corsHeaders);
     }
 
+    if (url.pathname === '/api/history' && request.method === 'GET') {
+      return handleApiHistory(request, env, corsHeaders);
+    }
+
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
 };
@@ -238,8 +242,18 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
 
   const cached = await cache.match(cacheUrl);
   if (cached) {
-    const body = await cached.json();
-    return jsonResponse(body, 200, corsHeaders, { 'X-Cache': 'HIT' });
+    const cachedBody = await cached.json();
+    const history_id = crypto.randomUUID();
+    ctx.waitUntil(insertSearchHistory(env, {
+      id: history_id,
+      user_id: authResult.user.id,
+      keyword: rawKeyword.trim(),
+      pc_volume: cachedBody.pc_volume,
+      mobile_volume: cachedBody.mobile_volume,
+      competition: cachedBody.competition,
+      sections_json: JSON.stringify(cachedBody.sections),
+    }));
+    return jsonResponse({ ...cachedBody, history_id }, 200, corsHeaders, { 'X-Cache': 'HIT' });
   }
 
   // 검색광고 API + m.search.naver.com 병렬 호출
@@ -295,7 +309,7 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
     fetched_at: new Date().toISOString(),
   };
 
-  // 캐시 저장 (비동기)
+  // 캐시 저장 (history_id 제외한 payload 저장)
   const cacheResponse = new Response(JSON.stringify(payload), {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -304,7 +318,18 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
   });
   ctx.waitUntil(cache.put(cacheUrl, cacheResponse));
 
-  return jsonResponse(payload, 200, corsHeaders, { 'X-Cache': 'MISS' });
+  const history_id = crypto.randomUUID();
+  ctx.waitUntil(insertSearchHistory(env, {
+    id: history_id,
+    user_id: authResult.user.id,
+    keyword: rawKeyword.trim(),
+    pc_volume: payload.pc_volume,
+    mobile_volume: payload.mobile_volume,
+    competition: payload.competition,
+    sections_json: JSON.stringify(sections),
+  }));
+
+  return jsonResponse({ ...payload, history_id }, 200, corsHeaders, { 'X-Cache': 'MISS' });
 }
 
 // --- m.search.naver.com fetch + 구좌 파싱 ---
@@ -677,6 +702,56 @@ async function requireApprovedUser(request, env) {
   }
 
   return { user };
+}
+
+// --- GET /api/history 핸들러 ---
+
+async function handleApiHistory(request, env, corsHeaders) {
+  if (!corsHeaders) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse(
+      { error: authResult.error, message: authResult.message },
+      authResult.status,
+      corsHeaders
+    );
+  }
+
+  const url = new URL(request.url);
+  const rawLimit = url.searchParams.get('limit');
+  let limit = 5;
+  if (rawLimit !== null) {
+    const parsed = parseInt(rawLimit, 10);
+    if (!Number.isInteger(parsed) || isNaN(parsed) || parsed <= 0) {
+      return jsonResponse({ error: 'invalid_param', message: 'limit은 1 이상의 정수여야 합니다' }, 400, corsHeaders);
+    }
+    limit = Math.min(parsed, 50);
+  }
+
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT id, keyword, pc_volume, mobile_volume, competition, created_at FROM search_history WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
+    ).bind(authResult.user.id, limit).all();
+
+    return jsonResponse({ history: results ?? [] }, 200, corsHeaders);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, corsHeaders);
+  }
+}
+
+// --- search_history INSERT 헬퍼 ---
+
+async function insertSearchHistory(env, { id, user_id, keyword, pc_volume, mobile_volume, competition, sections_json }) {
+  try {
+    await env.DB.prepare(
+      'INSERT INTO search_history (id, user_id, keyword, pc_volume, mobile_volume, competition, sections_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(id, user_id, keyword, pc_volume ?? null, mobile_volume ?? null, competition ?? null, sections_json, new Date().toISOString()).run();
+  } catch (err) {
+    console.error('search_history INSERT failed:', err.message);
+  }
 }
 
 // TODO: 관리자 엔드포인트 (다음 단계)

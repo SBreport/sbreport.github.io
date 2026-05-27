@@ -1,6 +1,5 @@
 -- 분석기 웹앱 D1 스키마 (기획서 8장)
--- 이번 마이그레이션: users 테이블만 (승인제용)
--- search_history는 다음 단계 (홈 "최근 분석" 구현 시)
+-- 마이그레이션: users 테이블 (승인제) + search_history 테이블 (검색 이력)
 
 CREATE TABLE IF NOT EXISTS users (
   id              TEXT PRIMARY KEY,
@@ -18,3 +17,16 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+
+CREATE TABLE IF NOT EXISTS search_history (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  keyword       TEXT NOT NULL,
+  pc_volume     INTEGER,
+  mobile_volume INTEGER,
+  competition   TEXT,
+  sections_json TEXT,
+  keyword_type  INTEGER,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history(user_id, created_at DESC);

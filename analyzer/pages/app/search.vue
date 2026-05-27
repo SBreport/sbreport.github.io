@@ -270,6 +270,17 @@ const hasResults = computed(() => rows.value.length > 0)
 const hasDoneRows = computed(() => rows.value.some(r => r.status === 'done'))
 const keywordCount = computed(() => parseKeywords(inputText.value).length)
 const overLimit = computed(() => keywordCount.value > 5)
+
+// ─── URL ?q= 자동 실행 ────────────────────────────────────────────────────────
+
+onMounted(async () => {
+  const q = useRoute().query.q
+  if (typeof q === 'string' && q.trim()) {
+    inputText.value = q.trim()
+    await nextTick()
+    runAnalysis()
+  }
+})
 </script>
 
 <template>
