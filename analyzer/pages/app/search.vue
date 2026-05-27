@@ -48,6 +48,21 @@ const inputText = ref('')
 const rows = ref<Row[]>([])
 const isAnalyzing = ref(false)
 
+type SortKey = 'keyword' | 'source' | 'total' | 'competition'
+type SortDir = 'asc' | 'desc'
+
+const sortKey = ref<SortKey | null>(null)
+const sortDir = ref<SortDir>('desc')
+
+function handleSort(key: SortKey) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'desc' ? 'asc' : 'desc'
+  } else {
+    sortKey.value = key
+    sortDir.value = 'desc'
+  }
+}
+
 const optAutocomplete = ref(false)
 const optRelated = ref(false)
 const optExpand = computed(() => optAutocomplete.value || optRelated.value)
@@ -235,13 +250,15 @@ async function fetchKeyword(keyword: string, idx: number, signal: AbortSignal) {
   }
 }
 
-async function retryRow(idx: number) {
-  const kw = rows.value[idx].keyword
-  const src = rows.value[idx].source
-  rows.value[idx] = { keyword: kw, status: 'loading', result: null, error: null, source: src }
+async function retryRow(row: Row) {
+  const origIdx = rows.value.indexOf(row)
+  if (origIdx === -1) return
+  const kw = row.keyword
+  const src = row.source
+  rows.value[origIdx] = { keyword: kw, status: 'loading', result: null, error: null, source: src }
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 30_000)
-  await fetchKeyword(kw, idx, controller.signal)
+  await fetchKeyword(kw, origIdx, controller.signal)
   clearTimeout(timeoutId)
 }
 
@@ -350,6 +367,35 @@ const hasDoneRows = computed(() => rows.value.some(r => r.status === 'done'))
 const keywordCount = computed(() => parseKeywords(inputText.value).length)
 const overLimit = computed(() => keywordCount.value > (optExpand.value ? 3 : 5))
 
+const sortedRows = computed(() => {
+  if (!sortKey.value) return rows.value
+  const key = sortKey.value
+  const dir = sortDir.value
+  const arr = [...rows.value]
+
+  const competitionOrder: Record<string, number> = { '높음': 3, '중간': 2, '낮음': 1 }
+  const sourceOrder: Record<RowSource, number> = { seed: 3, autocomplete: 2, related: 1 }
+
+  arr.sort((a, b) => {
+    let cmp = 0
+    if (key === 'keyword') {
+      cmp = a.keyword.localeCompare(b.keyword, 'ko-KR')
+    } else if (key === 'total') {
+      const at = a.result ? (a.result.total ?? ((a.result.pc_volume ?? 0) + (a.result.mobile_volume ?? 0))) : -1
+      const bt = b.result ? (b.result.total ?? ((b.result.pc_volume ?? 0) + (b.result.mobile_volume ?? 0))) : -1
+      cmp = at - bt
+    } else if (key === 'competition') {
+      const ac = competitionOrder[a.result?.competition ?? ''] ?? 0
+      const bc = competitionOrder[b.result?.competition ?? ''] ?? 0
+      cmp = ac - bc
+    } else if (key === 'source') {
+      cmp = (sourceOrder[a.source] ?? 0) - (sourceOrder[b.source] ?? 0)
+    }
+    return dir === 'desc' ? -cmp : cmp
+  })
+  return arr
+})
+
 // ─── URL ?q= 자동 실행 ────────────────────────────────────────────────────────
 
 onMounted(async () => {
@@ -448,17 +494,38 @@ onMounted(async () => {
           <table class="w-full text-sm border-collapse">
             <thead class="sticky top-0 z-10 bg-gray-50">
               <tr class="h-11">
-                <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-32">
-                  키워드
+                <th
+                  class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-32 cursor-pointer hover:bg-gray-100 select-none"
+                  @click="handleSort('keyword')"
+                >
+                  <span class="inline-flex items-center gap-1">
+                    키워드
+                    <UIcon v-if="sortKey === 'keyword'" :name="sortDir === 'desc' ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-up'" class="w-3 h-3" />
+                    <UIcon v-else name="i-heroicons-chevron-up-down" class="w-3 h-3 text-gray-300" />
+                  </span>
                 </th>
-                <th class="px-3 text-right font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-40">
-                  검색량 (P+M)
+                <th
+                  class="px-3 text-right font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-40 cursor-pointer hover:bg-gray-100 select-none"
+                  @click="handleSort('total')"
+                >
+                  <span class="inline-flex items-center gap-1 justify-end w-full">
+                    검색량
+                    <UIcon v-if="sortKey === 'total'" :name="sortDir === 'desc' ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-up'" class="w-3 h-3" />
+                    <UIcon v-else name="i-heroicons-chevron-up-down" class="w-3 h-3 text-gray-300" />
+                  </span>
                 </th>
                 <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200">
                   구좌 구성
                 </th>
-                <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">
-                  경쟁도 / 유형
+                <th
+                  class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28 cursor-pointer hover:bg-gray-100 select-none"
+                  @click="handleSort('competition')"
+                >
+                  <span class="inline-flex items-center gap-1">
+                    경쟁도 / 유형
+                    <UIcon v-if="sortKey === 'competition'" :name="sortDir === 'desc' ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-up'" class="w-3 h-3" />
+                    <UIcon v-else name="i-heroicons-chevron-up-down" class="w-3 h-3 text-gray-300" />
+                  </span>
                 </th>
                 <th class="px-3 text-right font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-12">
                   상세
@@ -467,7 +534,7 @@ onMounted(async () => {
             </thead>
             <tbody>
               <tr
-                v-for="(row, idx) in rows"
+                v-for="(row, idx) in sortedRows"
                 :key="row.keyword + idx"
                 class="border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors"
                 :class="{ 'cursor-pointer': row.status === 'done' }"
@@ -487,22 +554,22 @@ onMounted(async () => {
                 </td>
 
                 <!-- 검색량 -->
-                <td class="px-3 py-2.5 align-top text-right text-gray-700 whitespace-nowrap">
-                  <!-- 로딩 -->
+                <td class="px-3 py-2.5 align-top text-right whitespace-nowrap">
                   <template v-if="row.status === 'loading'">
                     <USkeleton class="h-4 w-28 ml-auto" />
                   </template>
-                  <!-- 에러 -->
                   <template v-else-if="row.status === 'error'">
                     <span class="text-red-500 text-xs">-</span>
                   </template>
-                  <!-- 완료 -->
                   <template v-else-if="row.status === 'done' && row.result">
-                    <span class="tabular-nums">
-                      {{ formatNumber(row.result.pc_volume) }}
-                      <span class="text-gray-400 mx-0.5">+</span>
-                      {{ formatNumber(row.result.mobile_volume) }}
-                    </span>
+                    <div class="flex flex-col items-end gap-0.5">
+                      <span class="tabular-nums text-base font-semibold text-gray-900">
+                        {{ formatNumber(row.result.total ?? ((row.result.pc_volume ?? 0) + (row.result.mobile_volume ?? 0))) }}
+                      </span>
+                      <span class="tabular-nums text-xs text-gray-400">
+                        PC {{ formatNumber(row.result.pc_volume) }} · M {{ formatNumber(row.result.mobile_volume) }}
+                      </span>
+                    </div>
                   </template>
                 </td>
 
@@ -523,7 +590,7 @@ onMounted(async () => {
                         size="xs"
                         color="neutral"
                         variant="ghost"
-                        @click.stop="retryRow(idx)"
+                        @click.stop="retryRow(row)"
                       />
                     </div>
                   </template>
@@ -590,6 +657,20 @@ onMounted(async () => {
           v-if="selectedRow && selectedRow.result"
           class="flex flex-col gap-5 p-5 h-full overflow-y-auto"
         >
+          <!-- 네이버 검색 결과 확인 버튼 -->
+          <UButton
+            label="네이버에서 검색 결과 확인하기"
+            :href="`https://search.naver.com/search.naver?query=${encodeURIComponent(selectedRow.result.keyword)}`"
+            as="a"
+            target="_blank"
+            rel="noopener"
+            icon="i-heroicons-arrow-top-right-on-square"
+            color="primary"
+            variant="outline"
+            size="sm"
+            class="self-start"
+          />
+
           <!-- 키워드 제목 -->
           <div>
             <p class="text-xs text-gray-400 mb-0.5">키워드</p>
