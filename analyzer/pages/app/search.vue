@@ -97,6 +97,7 @@ function sectionColorClass(type: string): string {
     influencer:    'bg-violet-100 text-violet-700',
     powercontents: 'bg-purple-100 text-purple-700',
     video:         'bg-teal-100 text-teal-700',
+    clip:          'bg-fuchsia-100 text-fuchsia-700',
     news:          'bg-gray-100 text-gray-600',
     web:           'bg-gray-100 text-gray-600',
     qra:           'bg-cyan-100 text-cyan-700',

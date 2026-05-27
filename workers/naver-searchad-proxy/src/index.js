@@ -24,6 +24,7 @@ const BLOCK_ID_MAP = [
   { pattern: /^web\//i,                     type: 'web',           label: '웹사이트' },
   { pattern: /^news\//i,                    type: 'news',          label: '뉴스' },
   { pattern: /^video\//i,                   type: 'video',         label: '동영상' },
+  { pattern: /^clip\//i,                    type: 'clip',          label: '클립' },
   { pattern: /^qra\//i,                     type: 'qra',           label: '함께 많이 찾는' },
   { pattern: /^ugc\/.*influencer/i,         type: 'influencer',    label: '인플루언서' },
   { pattern: /^ugc\/.*powercontents/i,      type: 'powercontents', label: '파워컨텐츠' },
