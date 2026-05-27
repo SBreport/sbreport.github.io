@@ -4,10 +4,15 @@ import { WORKER_BASE } from '~/composables/useWorkerBase'
 const TOKEN_KEY = 'sba-auth-token'
 
 interface User {
+  id?: string
   sub: string
   email: string
   name: string
   picture: string
+  status?: 'pending' | 'approved' | 'suspended'
+  plan?: string
+  plan_expires_at?: string | null
+  role?: 'user' | 'admin'
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -16,6 +21,12 @@ export const useAuthStore = defineStore('auth', () => {
   const isReady = ref<boolean>(false)
 
   const isAuthed = computed(() => !!token.value && !!user.value)
+
+  /** status === 'approved' 일 때만 true */
+  const isApproved = computed(() => user.value?.status === 'approved')
+
+  /** role === 'admin' 일 때만 true */
+  const isAdmin = computed(() => user.value?.role === 'admin')
 
   /**
    * /api/me 호출하여 user 정보 갱신.
@@ -95,6 +106,8 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     isReady,
     isAuthed,
+    isApproved,
+    isAdmin,
     setToken,
     logout,
     restore,

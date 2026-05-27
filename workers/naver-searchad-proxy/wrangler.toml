@@ -16,3 +16,10 @@ compatibility_date = "2026-05-01"
 [vars]
 # 공개해도 무방한 설정값만 여기 둔다.
 # 허용 Origin은 코드 안에서 화이트리스트로 관리한다.
+
+# D1 데이터베이스 (분석기 웹앱 users 테이블)
+# 코드에서 env.DB 로 접근
+[[d1_databases]]
+binding = "DB"
+database_name = "smartsupport-db"
+database_id = "7a1e304f-91d9-429b-9d61-8619327b393c"

@@ -46,6 +46,9 @@ const selectedRow = ref<Row | null>(null)
 
 const WORKER_URL = 'https://naver-searchad-proxy.sbreport.workers.dev/api/search'
 
+// 403 pending_approval 감지 시 /pending으로 이동
+const pendingRedirectShown = ref(false)
+
 // ─── 헬퍼 ────────────────────────────────────────────────────────────────────
 
 function parseKeywords(text: string): string[] {
@@ -144,10 +147,22 @@ async function fetchKeyword(keyword: string, idx: number, signal: AbortSignal) {
 
     if (!res.ok) {
       let message = `오류 ${res.status}`
+      let errorCode = ''
       try {
-        const body = await res.json() as { message?: string }
+        const body = await res.json() as { error?: string, message?: string }
+        if (body.error) errorCode = body.error
         if (body.message) message = body.message
       } catch { /* ignore */ }
+
+      // 403 pending_approval: 미들웨어가 놓친 경우 (직접 URL 진입 등) → /pending 이동
+      if (res.status === 403 && errorCode === 'pending_approval') {
+        if (!pendingRedirectShown.value) {
+          pendingRedirectShown.value = true
+          navigateTo('/pending', { replace: true })
+        }
+        return
+      }
+
       rows.value[idx] = { keyword, status: 'error', result: null, error: message }
       return
     }

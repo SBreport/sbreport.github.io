@@ -39,6 +39,9 @@ const userInitial = computed(() => {
   const name = authStore.user?.name || authStore.user?.email || '?'
   return name.charAt(0).toUpperCase()
 })
+
+const isAdmin = computed(() => authStore.isAdmin)
+const isPending = computed(() => authStore.user?.status === 'pending')
 </script>
 
 <template>
@@ -86,6 +89,20 @@ const userInitial = computed(() => {
           </div>
           <!-- 이메일 -->
           <span class="text-xs text-slate-600 max-w-36 truncate">{{ authStore.user.email }}</span>
+          <!-- 관리자 배지 -->
+          <span
+            v-if="isAdmin"
+            class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-primary-100 text-primary-700 leading-none"
+          >
+            Admin
+          </span>
+          <!-- 승인 대기 배지 -->
+          <span
+            v-else-if="isPending"
+            class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 leading-none"
+          >
+            대기
+          </span>
           <!-- 화살표 -->
           <svg
             class="w-3 h-3 text-slate-400 transition-transform"

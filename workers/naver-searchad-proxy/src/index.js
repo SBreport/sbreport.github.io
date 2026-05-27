@@ -199,6 +199,16 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
     return new Response('Forbidden', { status: 403 });
   }
 
+  // 승인된 사용자만 접근 가능 — 핵심 보안 게이트
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse(
+      { error: authResult.error, message: authResult.message },
+      authResult.status,
+      corsHeaders
+    );
+  }
+
   // 입력 파싱
   let body;
   try {
@@ -468,7 +478,7 @@ function handleAuthGoogle(request, env) {
 }
 
 // GET /api/auth/google/callback?code=...
-// 브라우저 redirect 수신 → 구글 토큰 교환 → JWT 발급 → 프론트 fragment redirect
+// 브라우저 redirect 수신 → 구글 토큰 교환 → D1 users INSERT/UPDATE → JWT 발급 → 프론트 fragment redirect
 async function handleAuthGoogleCallback(request, env) {
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
@@ -525,15 +535,41 @@ async function handleAuthGoogleCallback(request, env) {
     return Response.redirect(`${FRONTEND_CALLBACK_URL}#error=id_token_invalid`, 302);
   }
 
-  // 3) 우리 JWT 발급
+  // 3) D1 users 테이블 INSERT/UPDATE
   const { sub, email, name, picture } = googlePayload;
+  const nowIso = new Date().toISOString();
+
+  try {
+    const existing = await env.DB.prepare(
+      'SELECT id, status FROM users WHERE google_sub = ?'
+    ).bind(sub).first();
+
+    if (existing) {
+      // 기존 사용자: last_login_at + 프로필 정보 갱신
+      await env.DB.prepare(
+        'UPDATE users SET last_login_at = ?, email = ?, name = ?, picture = ? WHERE google_sub = ?'
+      ).bind(nowIso, email, name, picture, sub).run();
+    } else {
+      // 신규 사용자: pending 상태로 등록
+      const uuid = crypto.randomUUID();
+      await env.DB.prepare(
+        "INSERT INTO users (id, google_sub, email, name, picture, status, plan, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, 'pending', 'free', ?, ?)"
+      ).bind(uuid, sub, email, name, picture, nowIso, nowIso).run();
+    }
+  } catch (err) {
+    // D1 오류 시 콜백 실패로 처리 (JWT 없이 redirect)
+    return Response.redirect(`${FRONTEND_CALLBACK_URL}#error=db_error`, 302);
+  }
+
+  // 4) JWT 발급 — status와 무관하게 항상 발급 (승인 대기 화면에서도 로그인 상태 유지)
+  // status는 JWT에 포함하지 않음 — 승인 변경 시 즉시 반영을 위해 매 요청마다 D1 조회
   const jwt = await issueJwt({ sub, email, name, picture }, env.JWT_SECRET);
 
   return Response.redirect(`${FRONTEND_CALLBACK_URL}#token=${jwt}`, 302);
 }
 
 // GET /api/me
-// Authorization: Bearer <JWT> → payload 반환
+// Authorization: Bearer <JWT> → D1에서 사용자 정보 조회 후 반환 (status, plan, role 포함)
 async function handleMe(request, env, corsHeaders) {
   // OPTIONS preflight는 fetch 핸들러 상단에서 처리됨
   if (!corsHeaders) {
@@ -554,9 +590,97 @@ async function handleMe(request, env, corsHeaders) {
     return jsonResponse({ error: 'unauthorized', message: err.message }, 401, corsHeaders);
   }
 
-  const { sub, email, name, picture } = payload;
-  return jsonResponse({ sub, email, name, picture }, 200, corsHeaders);
+  // JWT payload.sub(= google_sub)로 D1에서 최신 상태 조회
+  let user;
+  try {
+    user = await getUserFromDB(env, payload.sub);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: 'DB 조회 실패' }, 500, corsHeaders);
+  }
+
+  if (!user) {
+    // DB에 사용자 없음 — 이상 케이스 (콜백 전 JWT 사용 등)
+    return jsonResponse({ error: 'user_not_found', message: '사용자 정보를 찾을 수 없습니다' }, 401, corsHeaders);
+  }
+
+  return jsonResponse({
+    id: user.id,
+    sub: user.google_sub,
+    email: user.email,
+    name: user.name,
+    picture: user.picture,
+    status: user.status,
+    plan: user.plan,
+    plan_expires_at: user.plan_expires_at,
+    role: user.role,
+  }, 200, corsHeaders);
 }
+
+// --- D1 사용자 헬퍼 ---
+
+// D1에서 사용자 조회 + role 결정 (admin: ADMIN_EMAILS 기반, user: 기본)
+async function getUserFromDB(env, googleSub) {
+  const row = await env.DB.prepare(
+    'SELECT id, google_sub, email, name, picture, status, plan, plan_expires_at FROM users WHERE google_sub = ?'
+  ).bind(googleSub).first();
+
+  if (!row) return null;
+
+  // role 결정: ADMIN_EMAILS 환경변수 없으면 admin 0명 (안전 fallback)
+  const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
+  row.role = adminEmails.includes(row.email) ? 'admin' : 'user';
+
+  return row;
+}
+
+// JWT 검증 + D1 조회 + status='approved' 확인 헬퍼
+// 통과 시: { user }  /  실패 시: { error, status, message? }
+async function requireApprovedUser(request, env) {
+  const auth = request.headers.get('Authorization') || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+
+  if (!token) {
+    return { error: 'unauthorized', status: 401, message: '인증 토큰이 없습니다' };
+  }
+
+  let payload;
+  try {
+    payload = await verifyJwt(token, env.JWT_SECRET);
+  } catch {
+    return { error: 'invalid_token', status: 401, message: '유효하지 않은 토큰입니다' };
+  }
+
+  let user;
+  try {
+    user = await getUserFromDB(env, payload.sub);
+  } catch {
+    return { error: 'db_error', status: 500, message: 'DB 조회 중 오류가 발생했습니다' };
+  }
+
+  if (!user) {
+    return { error: 'user_not_found', status: 401, message: '사용자 정보를 찾을 수 없습니다' };
+  }
+
+  if (user.status === 'pending') {
+    return { error: 'pending_approval', status: 403, message: '관리자 승인 대기 중입니다' };
+  }
+
+  if (user.status === 'suspended') {
+    return { error: 'suspended', status: 403, message: '계정이 정지되었습니다' };
+  }
+
+  if (user.status !== 'approved') {
+    return { error: 'forbidden', status: 403, message: '접근 권한이 없습니다' };
+  }
+
+  return { user };
+}
+
+// TODO: 관리자 엔드포인트 (다음 단계)
+// GET  /api/admin/users            — 사용자 목록 (role='admin' 전용)
+// POST /api/admin/users/:id/approve — 사용자 승인
+// POST /api/admin/users/:id/suspend — 사용자 정지
+// requireApprovedUser + user.role === 'admin' 추가 확인 필요
 
 // --- JWT 유틸리티 (HS256, crypto.subtle 직접 구현) ---
 
