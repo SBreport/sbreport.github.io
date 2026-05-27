@@ -660,24 +660,20 @@ onMounted(async () => {
           v-if="selectedRow && selectedRow.result"
           class="flex flex-col gap-5 p-5 h-full overflow-y-auto"
         >
-          <!-- 네이버 검색 결과 확인 버튼 -->
-          <UButton
-            label="네이버에서 검색 결과 확인하기"
-            :href="`https://search.naver.com/search.naver?query=${encodeURIComponent(selectedRow.result.keyword)}`"
-            as="a"
-            target="_blank"
-            rel="noopener"
-            icon="i-heroicons-arrow-top-right-on-square"
-            color="primary"
-            variant="outline"
-            size="sm"
-            class="self-start"
-          />
-
-          <!-- 키워드 제목 -->
+          <!-- 키워드 제목 + 네이버 검색 이동 N 아이콘 -->
           <div>
             <p class="text-xs text-gray-400 mb-0.5">키워드</p>
-            <h2 class="text-base font-semibold text-gray-900">{{ selectedRow.result.keyword }}</h2>
+            <div class="flex items-center gap-2">
+              <h2 class="text-base font-semibold text-gray-900">{{ selectedRow.result.keyword }}</h2>
+              <a
+                :href="`https://search.naver.com/search.naver?query=${encodeURIComponent(selectedRow.result.keyword)}`"
+                target="_blank"
+                rel="noopener"
+                class="inline-flex items-center justify-center w-5 h-5 rounded bg-[#03C75A] text-white text-xs font-bold hover:opacity-80 transition-opacity shrink-0"
+                title="네이버에서 검색 결과 보기"
+                aria-label="네이버에서 검색"
+              >N</a>
+            </div>
           </div>
 
           <!-- 검색량 수치 -->
