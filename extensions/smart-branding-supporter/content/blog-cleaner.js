@@ -94,7 +94,8 @@
         overflow: hidden !important;
       }
     `;
-    (doc.head || doc.documentElement).appendChild(style);
+    // 빈/로드 전 iframe document는 head·documentElement 모두 null일 수 있음 → skip
+    (doc.head || doc.documentElement)?.appendChild(style);
   }
 
   /** 지정 document에서 글감 숨김 CSS 태그를 제거한다. */
