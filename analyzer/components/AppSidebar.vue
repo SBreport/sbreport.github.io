@@ -24,16 +24,13 @@ const menuItems = [
 ] as const
 
 // 구분선 이후 메뉴
+// '이용권 안내'는 유료 출시 시점에 노출. 초기엔 메뉴에서 숨김.
+// /app/plan 라우트와 페이지 코드는 유지 — 메뉴 한 줄만 다시 추가하면 노출됨.
 const bottomMenuItems = [
   {
     label: '설정',
     to: '/app/settings',
     icon: 'i-heroicons-cog-6-tooth',
-  },
-  {
-    label: '이용권 안내',
-    to: '/app/plan',
-    icon: 'i-heroicons-credit-card',
   },
 ] as const
 
