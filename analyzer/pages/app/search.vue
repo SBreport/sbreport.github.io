@@ -311,8 +311,11 @@ onMounted(async () => {
             class="w-full text-sm"
             :disabled="isAnalyzing"
           />
+          <p class="text-xs text-gray-500">
+            한 줄에 하나씩 · 한 번에 <span class="font-medium text-gray-700">최대 5개 권장</span> · 결과는 아래에 누적됩니다
+          </p>
           <p v-if="overLimit" class="text-xs text-amber-600">
-            한 번에 5개 초과 입력 시 처리 속도가 느려질 수 있습니다 (입력: {{ keywordCount }}개).
+            5개 초과 입력 시 처리 속도가 느려지거나 일부 키워드가 실패할 수 있습니다 (입력: {{ keywordCount }}개).
           </p>
         </div>
         <UButton
