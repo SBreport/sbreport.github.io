@@ -29,6 +29,9 @@ const BLOCK_ID_MAP = [
   { pattern: /^qra\//i,                     type: 'qra',           label: '함께 많이 찾는' },
   { pattern: /^ugc\/.*influencer/i,         type: 'influencer',    label: '인플루언서' },
   { pattern: /^ugc\/.*powercontents/i,      type: 'powercontents', label: '파워컨텐츠' },
+  // 구체 패턴(influencer/powercontents)이 먼저 매칭되도록 위에. default는 일반 UGC 통합.
+  { pattern: /^ugc\/.*popular_article/i,    type: 'popular_article', label: '인기글' },
+  { pattern: /^ugc\/.*default/i,            type: 'ugc',           label: '스마트블록' },
 ];
 
 export default {
@@ -247,7 +250,7 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
   const normalizedKeyword = rawKeyword.trim().replace(/\s+/g, '');
 
   // 캐시 확인 (24h TTL)
-  const cacheUrl = `https://cache.internal/v4/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
+  const cacheUrl = `https://cache.internal/v5/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
   const cache = caches.default;
 
   const cached = await cache.match(cacheUrl);

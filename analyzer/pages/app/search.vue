@@ -126,6 +126,8 @@ function sectionColorClass(type: string): string {
     video:         'bg-teal-100 text-teal-700',
     clip:          'bg-fuchsia-100 text-fuchsia-700',
     ai_briefing:   'bg-indigo-100 text-indigo-700',
+    popular_article: 'bg-yellow-100 text-yellow-700',
+    ugc:           'bg-lime-100 text-lime-700',
     news:          'bg-gray-100 text-gray-600',
     web:           'bg-gray-100 text-gray-600',
     qra:           'bg-cyan-100 text-cyan-700',
