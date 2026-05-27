@@ -37,6 +37,14 @@ export default defineNuxtConfig({
     strict: true,
   },
 
+  // 색상 모드: MVP는 라이트 고정 (시스템 다크 따라가지 않음).
+  // Nuxt UI 컴포넌트만 다크 변형을 갖고 직접 짠 컴포넌트는 라이트 고정이라
+  // 화면이 어정쩡하게 섞이는 문제 회피. 다크 완전 지원은 추후 별도 작업.
+  colorMode: {
+    preference: 'light',
+    fallback: 'light',
+  },
+
   // Cloudflare Workers (Static Assets) 배포용 Nitro preset
   // wrangler deploy 명령과 호환되는 cloudflare_module preset 사용
   nitro: {
