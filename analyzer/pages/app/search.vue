@@ -34,6 +34,9 @@ interface Row {
 
 // ─── 상태 ────────────────────────────────────────────────────────────────────
 
+// 인증된 사용자만 Worker /api/search 호출 가능 (Authorization Bearer 헤더)
+const authStore = useAuthStore()
+
 const inputText = ref('')
 const rows = ref<Row[]>([])
 const isAnalyzing = ref(false)
@@ -140,7 +143,10 @@ async function fetchKeyword(keyword: string, idx: number, signal: AbortSignal) {
   try {
     const res = await fetch(WORKER_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authStore.token ? { Authorization: `Bearer ${authStore.token}` } : {}),
+      },
       body: JSON.stringify({ keyword }),
       signal,
     })
