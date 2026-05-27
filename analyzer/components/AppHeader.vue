@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { useUiStore } from '~/stores/ui'
+/**
+ * 공통 헤더 (기획서 4.4, 부록 C.1)
+ * - 좌측: 햄버거 + 로고
+ * - 우측: 로그인 상태면 아바타+이메일+드롭다운, 아니면 로그인 링크
+ * 높이 56px (h-14) — layout에서 shrink-0으로 고정
+ */
 
 const uiStore = useUiStore()
+const authStore = useAuthStore()
 
 // Ctrl+B 단축키: 사이드바 토글 (기획서 4.8)
 onMounted(() => {
@@ -14,24 +20,37 @@ onMounted(() => {
   window.addEventListener('keydown', handler)
   onUnmounted(() => window.removeEventListener('keydown', handler))
 })
+
+// 드롭다운 열림 상태
+const dropdownOpen = ref(false)
+
+function handleLogout() {
+  dropdownOpen.value = false
+  authStore.logout()
+}
+
+// 이미지 로드 실패 시 이니셜 폴백
+const avatarError = ref(false)
+watch(() => authStore.user?.picture, () => {
+  avatarError.value = false
+})
+
+const userInitial = computed(() => {
+  const name = authStore.user?.name || authStore.user?.email || '?'
+  return name.charAt(0).toUpperCase()
+})
 </script>
 
 <template>
-  <!--
-    AppHeader: 헤더 56px, shrink-0
-    좌: 햄버거(사이드바 토글) + 로고
-    우: 유저 아바타 자리 (다음 단계에서 실제 구현)
-    기획서 부록 C.1
-  -->
-  <header class="flex items-center gap-3 px-4 border-b border-slate-200 bg-white">
-    <!-- 햄버거 버튼: 사이드바 여닫이 -->
+  <header class="h-14 flex items-center px-3 border-b border-slate-200 bg-white gap-2">
+    <!-- 햄버거 버튼 -->
     <button
       type="button"
-      class="flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:bg-slate-100 transition-colors"
+      class="flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:bg-slate-100 transition-colors shrink-0"
       :aria-label="uiStore.sidebarOpen ? '사이드바 닫기' : '사이드바 열기'"
       @click="uiStore.toggleSidebar()"
     >
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
       </svg>
     </button>
@@ -41,10 +60,95 @@ onMounted(() => {
       SB Analyzer
     </NuxtLink>
 
-    <!-- 우측 영역: 유저 정보 자리 (다음 단계 구현) -->
-    <div class="ml-auto flex items-center gap-2">
-      <!-- TODO: 다음 단계 — 로그인 사용자 이메일 + 아바타 드롭다운 -->
-      <span class="text-xs text-slate-400">user@… [아바타]</span>
+    <!-- 우측 여백 밀기 -->
+    <div class="flex-1 min-w-0" />
+
+    <!-- 인증 영역 -->
+    <div class="shrink-0">
+      <!-- 로그인 상태 -->
+      <div v-if="authStore.user" class="relative">
+        <button
+          type="button"
+          class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
+          @click="dropdownOpen = !dropdownOpen"
+        >
+          <!-- 아바타 -->
+          <div class="w-7 h-7 rounded-full overflow-hidden bg-slate-200 flex items-center justify-center shrink-0">
+            <img
+              v-if="authStore.user.picture && !avatarError"
+              :src="authStore.user.picture"
+              :alt="authStore.user.name"
+              class="w-full h-full object-cover"
+              referrerpolicy="no-referrer"
+              @error="avatarError = true"
+            >
+            <span v-else class="text-xs font-medium text-slate-600">{{ userInitial }}</span>
+          </div>
+          <!-- 이메일 -->
+          <span class="text-xs text-slate-600 max-w-36 truncate">{{ authStore.user.email }}</span>
+          <!-- 화살표 -->
+          <svg
+            class="w-3 h-3 text-slate-400 transition-transform"
+            :class="dropdownOpen ? 'rotate-180' : ''"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        <!-- 드롭다운 -->
+        <Transition name="fade">
+          <div
+            v-if="dropdownOpen"
+            class="absolute right-0 top-full mt-1 w-44 bg-white border border-slate-200 rounded-md py-1 z-50"
+          >
+            <div class="px-3 py-2 border-b border-slate-100">
+              <p class="text-xs font-medium text-slate-900 truncate">{{ authStore.user.name }}</p>
+              <p class="text-xs text-slate-400 truncate">{{ authStore.user.email }}</p>
+            </div>
+            <button
+              type="button"
+              class="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+              @click="handleLogout"
+            >
+              로그아웃
+            </button>
+          </div>
+        </Transition>
+
+        <!-- 드롭다운 외부 클릭 닫기 (z-40으로 드롭다운 뒤에) -->
+        <div
+          v-if="dropdownOpen"
+          class="fixed inset-0 z-40"
+          aria-hidden="true"
+          @click="dropdownOpen = false"
+        />
+      </div>
+
+      <!-- 비로그인 상태 -->
+      <NuxtLink
+        v-else
+        to="/login"
+        class="text-xs text-primary-600 hover:text-primary-700 px-2 py-1"
+      >
+        로그인
+      </NuxtLink>
     </div>
   </header>
 </template>
+
+<style scoped>
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.1s, transform 0.1s;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+</style>

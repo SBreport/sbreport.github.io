@@ -10,6 +10,10 @@ const ALLOWED_ORIGINS = [
   { type: 'prefix', value: 'http://localhost:' },
 ];
 
+const GOOGLE_REDIRECT_URI = 'https://naver-searchad-proxy.sbreport.workers.dev/api/auth/google/callback';
+const FRONTEND_CALLBACK_URL = 'https://smartsupport.sbreport.workers.dev/auth/callback';
+const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
+
 // data-block-id 값 → { type, label } 매핑
 const BLOCK_ID_MAP = [
   { pattern: /^review\/.*blog/i,            type: 'blog',          label: '블로그' },
@@ -44,6 +48,18 @@ export default {
       return handleApiSearch(request, env, ctx, corsHeaders);
     }
 
+    if (url.pathname === '/api/auth/google' && request.method === 'GET') {
+      return handleAuthGoogle(request, env);
+    }
+
+    if (url.pathname === '/api/auth/google/callback' && request.method === 'GET') {
+      return handleAuthGoogleCallback(request, env);
+    }
+
+    if (url.pathname === '/api/me' && request.method === 'GET') {
+      return handleMe(request, env, corsHeaders);
+    }
+
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
 };
@@ -59,7 +75,7 @@ function getCorsHeaders(origin) {
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Vary': 'Origin',
   };
 }
@@ -428,6 +444,201 @@ function normalizeResult(naverData) {
       competition: item.compIdx || null,
     };
   });
+}
+
+// --- Google OAuth 핸들러 ---
+
+// GET /api/auth/google
+// 인증 없음. 브라우저 직접 navigate → CORS 불필요. 302 redirect만 반환.
+function handleAuthGoogle(request, env) {
+  const state = crypto.randomUUID(); // MVP: 생성만, 검증은 추후 (stateless Worker에서 검증하려면 KV 필요)
+
+  const params = new URLSearchParams({
+    client_id: env.GOOGLE_CLIENT_ID,
+    redirect_uri: GOOGLE_REDIRECT_URI,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'online',
+    prompt: 'select_account',
+    state,
+  });
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+  return Response.redirect(authUrl, 302);
+}
+
+// GET /api/auth/google/callback?code=...
+// 브라우저 redirect 수신 → 구글 토큰 교환 → JWT 발급 → 프론트 fragment redirect
+async function handleAuthGoogleCallback(request, env) {
+  const url = new URL(request.url);
+  const code = url.searchParams.get('code');
+  const error = url.searchParams.get('error');
+
+  if (error || !code) {
+    // 사용자가 취소하거나 오류 발생 — 로그인 페이지로 돌려보냄
+    return Response.redirect(`${FRONTEND_CALLBACK_URL}#error=${encodeURIComponent(error || 'no_code')}`, 302);
+  }
+
+  // 1) 구글 토큰 교환
+  let tokenRes;
+  try {
+    tokenRes = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        client_id: env.GOOGLE_CLIENT_ID,
+        client_secret: env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: GOOGLE_REDIRECT_URI,
+      }),
+    });
+  } catch (err) {
+    return Response.redirect(`${FRONTEND_CALLBACK_URL}#error=token_exchange_failed`, 302);
+  }
+
+  if (!tokenRes.ok) {
+    return Response.redirect(`${FRONTEND_CALLBACK_URL}#error=token_exchange_failed`, 302);
+  }
+
+  const tokenData = await tokenRes.json();
+  const idToken = tokenData.id_token;
+  if (!idToken) {
+    return Response.redirect(`${FRONTEND_CALLBACK_URL}#error=no_id_token`, 302);
+  }
+
+  // 2) id_token 기본 검증 (MVP: iss, aud, exp만 확인. JWKS 서명 검증은 추후)
+  let googlePayload;
+  try {
+    googlePayload = decodeJwtPayload(idToken);
+  } catch {
+    return Response.redirect(`${FRONTEND_CALLBACK_URL}#error=invalid_id_token`, 302);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (
+    !googlePayload.sub ||
+    googlePayload.exp < now ||
+    (googlePayload.aud !== env.GOOGLE_CLIENT_ID) ||
+    (!googlePayload.iss.startsWith('https://accounts.google.com'))
+  ) {
+    return Response.redirect(`${FRONTEND_CALLBACK_URL}#error=id_token_invalid`, 302);
+  }
+
+  // 3) 우리 JWT 발급
+  const { sub, email, name, picture } = googlePayload;
+  const jwt = await issueJwt({ sub, email, name, picture }, env.JWT_SECRET);
+
+  return Response.redirect(`${FRONTEND_CALLBACK_URL}#token=${jwt}`, 302);
+}
+
+// GET /api/me
+// Authorization: Bearer <JWT> → payload 반환
+async function handleMe(request, env, corsHeaders) {
+  // OPTIONS preflight는 fetch 핸들러 상단에서 처리됨
+  if (!corsHeaders) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
+  const authHeader = request.headers.get('Authorization') || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return jsonResponse({ error: 'unauthorized', message: '토큰이 없습니다' }, 401, corsHeaders);
+  }
+
+  let payload;
+  try {
+    payload = await verifyJwt(token, env.JWT_SECRET);
+  } catch (err) {
+    return jsonResponse({ error: 'unauthorized', message: err.message }, 401, corsHeaders);
+  }
+
+  const { sub, email, name, picture } = payload;
+  return jsonResponse({ sub, email, name, picture }, 200, corsHeaders);
+}
+
+// --- JWT 유틸리티 (HS256, crypto.subtle 직접 구현) ---
+
+function base64urlEncode(buf) {
+  // ArrayBuffer 또는 Uint8Array → base64url 문자열
+  const bytes = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf;
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64urlDecode(str) {
+  // base64url → Uint8Array
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=');
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function decodeJwtPayload(token) {
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('JWT 형식 오류');
+  const payloadJson = new TextDecoder().decode(base64urlDecode(parts[1]));
+  return JSON.parse(payloadJson);
+}
+
+async function getHmacKey(secret) {
+  const keyBytes = new TextEncoder().encode(secret);
+  return crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign', 'verify']
+  );
+}
+
+async function issueJwt(payload, secret) {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const iat = Math.floor(Date.now() / 1000);
+  const exp = iat + 7 * 24 * 60 * 60; // 7일
+
+  const headerB64 = base64urlEncode(new TextEncoder().encode(JSON.stringify(header)));
+  const payloadB64 = base64urlEncode(new TextEncoder().encode(JSON.stringify({ ...payload, iat, exp })));
+  const signingInput = `${headerB64}.${payloadB64}`;
+
+  const key = await getHmacKey(secret);
+  const sigBuf = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signingInput));
+  const sigB64 = base64urlEncode(sigBuf);
+
+  return `${signingInput}.${sigB64}`;
+}
+
+async function verifyJwt(token, secret) {
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('JWT 형식 오류');
+
+  const [headerB64, payloadB64, sigB64] = parts;
+  const signingInput = `${headerB64}.${payloadB64}`;
+
+  // 서명 검증
+  const key = await getHmacKey(secret);
+  const expectedSig = base64urlDecode(sigB64);
+  const valid = await crypto.subtle.verify(
+    'HMAC',
+    key,
+    expectedSig,
+    new TextEncoder().encode(signingInput)
+  );
+  if (!valid) throw new Error('JWT 서명 불일치');
+
+  // 페이로드 파싱
+  const payloadJson = new TextDecoder().decode(base64urlDecode(payloadB64));
+  const payload = JSON.parse(payloadJson);
+
+  // 만료 확인
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.exp < now) throw new Error('JWT 만료');
+
+  return payload;
 }
 
 // --- 시그니처 ---

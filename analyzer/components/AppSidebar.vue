@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { useUiStore } from '~/stores/ui'
-
 const uiStore = useUiStore()
+const authStore = useAuthStore()
 const route = useRoute()
 
 // 사이드바 메뉴 정의 (기획서 5.1)
@@ -107,18 +106,17 @@ function isActive(to: string): boolean {
       </li>
     </ul>
 
-    <!-- 하단: 유저 메뉴 (로그아웃) 자리 — 다음 단계 구현 -->
-    <div class="shrink-0 border-t border-slate-200 p-2">
-      <div class="flex items-center gap-3 px-2 py-2 text-xs text-slate-400">
+    <!-- 하단: 유저 정보 (로그인 상태일 때만 표시) -->
+    <div v-if="authStore.user" class="shrink-0 border-t border-slate-200 p-2">
+      <div class="flex items-center gap-3 px-2 py-2 text-xs text-slate-500">
         <span class="shrink-0 w-5 h-5 flex items-center justify-center">
           <UIcon name="i-heroicons-user-circle" class="w-5 h-5" />
         </span>
         <span
-          class="whitespace-nowrap overflow-hidden transition-opacity duration-200"
+          class="whitespace-nowrap overflow-hidden transition-opacity duration-200 truncate"
           :class="uiStore.sidebarOpen ? 'opacity-100' : 'opacity-0 w-0'"
         >
-          <!-- TODO: 다음 단계 — 로그인 사용자 이메일 + 로그아웃 버튼 -->
-          user@example.com
+          {{ authStore.user.email }}
         </span>
       </div>
     </div>
