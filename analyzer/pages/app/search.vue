@@ -13,13 +13,18 @@ interface Section {
   count: number | null
 }
 
+interface RelatedKeyword {
+  keyword: string
+  total: number
+}
+
 interface SearchResult {
   keyword: string
   pc_volume: number | null
   mobile_volume: number | null
   total: number | null
   competition: string | null
-  related_keywords: string[]
+  related_keywords: RelatedKeyword[]
   sections: Section[]
 }
 
@@ -111,27 +116,27 @@ async function runAnalysis() {
   const keywords = parseKeywords(inputText.value)
   if (keywords.length === 0) return
 
-  if (keywords.length > 5) {
-    // 5개 초과 안내 (처리는 막지 않음)
-    // UNotification 대신 간단히 계속 진행
-  }
-
   isAnalyzing.value = true
 
-  // 기존 결과 초기화 후 로딩 행 생성
-  rows.value = keywords.map(kw => ({
-    keyword: kw,
-    status: 'loading' as RowStatus,
-    result: null,
-    error: null,
-  }))
+  // 동일 키워드는 기존 행 제거 (최신 결과만 남김)
+  rows.value = rows.value.filter(r => !keywords.includes(r.keyword))
 
-  // 병렬 호출 (Promise.allSettled — 일부 실패해도 나머지 계속)
+  // 신규 행 append + 신규 행 시작 index 기억
+  const startIdx = rows.value.length
+  for (const kw of keywords) {
+    rows.value.push({
+      keyword: kw,
+      status: 'loading' as RowStatus,
+      result: null,
+      error: null,
+    })
+  }
+
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 20_000)
 
-  const promises = keywords.map((kw, idx) =>
-    fetchKeyword(kw, idx, controller.signal)
+  const promises = keywords.map((kw, i) =>
+    fetchKeyword(kw, startIdx + i, controller.signal)
   )
 
   await Promise.allSettled(promises)
@@ -265,6 +270,10 @@ function exportCsv() {
   URL.revokeObjectURL(url)
 }
 
+function clearAll() {
+  rows.value = []
+}
+
 // ─── 계산된 값 ────────────────────────────────────────────────────────────────
 
 const hasResults = computed(() => rows.value.length > 0)
@@ -332,15 +341,25 @@ onMounted(async () => {
         <!-- 표 상단 액션 바 -->
         <div class="shrink-0 flex items-center justify-between mb-2">
           <p class="text-xs text-gray-500">{{ rows.length }}개 키워드 분석</p>
-          <UButton
-            v-if="hasDoneRows"
-            label="CSV 내보내기"
-            size="xs"
-            color="neutral"
-            variant="outline"
-            icon="i-heroicons-arrow-down-tray"
-            @click="exportCsv"
-          />
+          <div class="flex items-center gap-2">
+            <UButton
+              v-if="hasDoneRows"
+              label="CSV 내보내기"
+              size="xs"
+              color="neutral"
+              variant="outline"
+              icon="i-heroicons-arrow-down-tray"
+              @click="exportCsv"
+            />
+            <UButton
+              label="전체 비우기"
+              size="xs"
+              color="neutral"
+              variant="ghost"
+              icon="i-heroicons-trash"
+              @click="clearAll"
+            />
+          </div>
         </div>
 
         <!-- 표 래퍼: x-overflow 대비 + 내부 스크롤 -->
@@ -544,10 +563,11 @@ onMounted(async () => {
             <div class="flex flex-wrap gap-1.5">
               <span
                 v-for="kw in selectedRow.result.related_keywords.slice(0, 10)"
-                :key="kw"
-                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600 font-medium"
+                :key="kw.keyword"
+                class="inline-flex items-center gap-1.5 pl-2 pr-1.5 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700"
               >
-                {{ kw }}
+                <span class="font-medium">{{ kw.keyword }}</span>
+                <span class="text-gray-400 tabular-nums">{{ formatNumber(kw.total) }}</span>
               </span>
             </div>
           </div>

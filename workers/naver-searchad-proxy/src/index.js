@@ -242,7 +242,7 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
   const normalizedKeyword = rawKeyword.trim().replace(/\s+/g, '');
 
   // 캐시 확인 (24h TTL)
-  const cacheUrl = `https://cache.internal/v2/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
+  const cacheUrl = `https://cache.internal/v3/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
   const cache = caches.default;
 
   const cached = await cache.match(cacheUrl);
