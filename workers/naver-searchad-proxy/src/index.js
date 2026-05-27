@@ -72,6 +72,10 @@ export default {
       return handleVersion(request, env, corsHeaders);
     }
 
+    if (url.pathname === '/api/expand' && request.method === 'POST') {
+      return handleApiExpand(request, env, ctx, corsHeaders);
+    }
+
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
 };
@@ -759,6 +763,103 @@ function handleVersion(request, env, corsHeaders) {
     tag: env.CF_VERSION_METADATA?.tag ?? null,
     timestamp: env.CF_VERSION_METADATA?.timestamp ?? null,
   }, 200, corsHeaders);
+}
+
+// --- POST /api/expand 핸들러 ---
+
+async function handleApiExpand(request, env, ctx, corsHeaders) {
+  if (!corsHeaders) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse(
+      { error: authResult.error, message: authResult.message },
+      authResult.status,
+      corsHeaders
+    );
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, corsHeaders);
+  }
+
+  const { keyword, autocomplete, related } = body ?? {};
+
+  if (!keyword || typeof keyword !== 'string' || keyword.trim() === '') {
+    return jsonResponse({ error: 'missing_keyword', message: '"keyword" 필드가 필요합니다' }, 400, corsHeaders);
+  }
+
+  if (!autocomplete && !related) {
+    return jsonResponse({ error: 'no_option_selected', message: 'autocomplete 또는 related 중 하나 이상을 true로 설정해야 합니다' }, 400, corsHeaders);
+  }
+
+  const [autocompleteSettled, relatedSettled] = await Promise.allSettled([
+    autocomplete ? fetchNaverAutocomplete(keyword) : Promise.resolve([]),
+    related ? fetchRelatedKeywords(keyword, env) : Promise.resolve([]),
+  ]);
+
+  const autocompleteList = autocompleteSettled.status === 'fulfilled' ? autocompleteSettled.value : [];
+  const relatedList = relatedSettled.status === 'fulfilled' ? relatedSettled.value : [];
+
+  const seen = new Set();
+  const keywords = [];
+
+  for (const kw of autocompleteList) {
+    if (!seen.has(kw)) {
+      seen.add(kw);
+      keywords.push({ keyword: kw, source: 'autocomplete' });
+    }
+  }
+
+  for (const kw of relatedList) {
+    if (!seen.has(kw)) {
+      seen.add(kw);
+      keywords.push({ keyword: kw, source: 'related' });
+    }
+  }
+
+  return jsonResponse({ seed: keyword, keywords }, 200, corsHeaders);
+}
+
+async function fetchNaverAutocomplete(keyword) {
+  try {
+    const url = `https://ac.search.naver.com/nx/ac?q=${encodeURIComponent(keyword)}&con=0&frm=nv&ans=2&r_format=json&r_enc=UTF-8&r_unicode=0&t_koreng=1&run=2&rev=4&q_enc=UTF-8&st=100`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+        'Referer': 'https://m.search.naver.com/',
+      },
+    });
+    if (!res.ok) return [];
+
+    const data = await res.json();
+    const items = data?.items?.[0] ?? [];
+    return items
+      .map(it => Array.isArray(it) ? it[0] : it)
+      .filter(s => typeof s === 'string' && s.trim() && s.trim() !== keyword.trim())
+      .slice(0, 5);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchRelatedKeywords(keyword, env) {
+  try {
+    const data = await fetchKeywordVolume([keyword], env);
+    const list = data?.keywordList ?? [];
+    const normalized = keyword.trim().replace(/\s+/g, '');
+    return list
+      .map(item => item.relKeyword)
+      .filter(kw => typeof kw === 'string' && kw && kw !== normalized)
+      .slice(0, 10);
+  } catch {
+    return [];
+  }
 }
 
 // --- search_history INSERT 헬퍼 ---

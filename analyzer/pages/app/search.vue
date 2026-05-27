@@ -29,12 +29,14 @@ interface SearchResult {
 }
 
 type RowStatus = 'pending' | 'loading' | 'done' | 'error'
+type RowSource = 'seed' | 'autocomplete' | 'related'
 
 interface Row {
   keyword: string
   status: RowStatus
   result: SearchResult | null
   error: string | null
+  source: RowSource
 }
 
 // ─── 상태 ────────────────────────────────────────────────────────────────────
@@ -46,6 +48,10 @@ const inputText = ref('')
 const rows = ref<Row[]>([])
 const isAnalyzing = ref(false)
 
+const optAutocomplete = ref(false)
+const optRelated = ref(false)
+const optExpand = computed(() => optAutocomplete.value || optRelated.value)
+
 // 슬라이드 패널
 const slideoverOpen = ref(false)
 const selectedRow = ref<Row | null>(null)
@@ -53,6 +59,7 @@ const selectedRow = ref<Row | null>(null)
 // ─── Worker 엔드포인트 ────────────────────────────────────────────────────────
 
 const WORKER_URL = 'https://naver-searchad-proxy.sbreport.workers.dev/api/search'
+const EXPAND_URL = 'https://naver-searchad-proxy.sbreport.workers.dev/api/expand'
 
 // 403 pending_approval 감지 시 /pending으로 이동
 const pendingRedirectShown = ref(false)
@@ -113,30 +120,69 @@ function sectionColorClass(type: string): string {
 // ─── 분석 실행 ───────────────────────────────────────────────────────────────
 
 async function runAnalysis() {
-  const keywords = parseKeywords(inputText.value)
-  if (keywords.length === 0) return
+  const seeds = parseKeywords(inputText.value)
+  if (seeds.length === 0) return
 
   isAnalyzing.value = true
 
-  // 동일 키워드는 기존 행 제거 (최신 결과만 남김)
-  rows.value = rows.value.filter(r => !keywords.includes(r.keyword))
+  let allKeywords: Array<{ keyword: string, source: RowSource }> = []
 
-  // 신규 행 append + 신규 행 시작 index 기억
+  if (optExpand.value) {
+    const expandController = new AbortController()
+    const expandTimeoutId = setTimeout(() => expandController.abort(), 20_000)
+
+    const expandPromises = seeds.map(seed => fetchExpand(seed, {
+      autocomplete: optAutocomplete.value,
+      related: optRelated.value,
+    }, expandController.signal))
+
+    const expandResults = await Promise.allSettled(expandPromises)
+    clearTimeout(expandTimeoutId)
+
+    const seen = new Set<string>()
+    for (const seed of seeds) {
+      if (!seen.has(seed)) {
+        seen.add(seed)
+        allKeywords.push({ keyword: seed, source: 'seed' })
+      }
+    }
+    for (let i = 0; i < expandResults.length; i++) {
+      const res = expandResults[i]
+      if (res.status !== 'fulfilled' || !res.value) continue
+      for (const item of res.value.keywords) {
+        if (!seen.has(item.keyword)) {
+          seen.add(item.keyword)
+          allKeywords.push({ keyword: item.keyword, source: item.source })
+        }
+      }
+    }
+
+    if (allKeywords.length > 50) {
+      allKeywords = allKeywords.slice(0, 50)
+    }
+  } else {
+    allKeywords = seeds.map(kw => ({ keyword: kw, source: 'seed' as RowSource }))
+  }
+
+  const newKeywords = allKeywords.map(k => k.keyword)
+  rows.value = rows.value.filter(r => !newKeywords.includes(r.keyword))
+
   const startIdx = rows.value.length
-  for (const kw of keywords) {
+  for (const item of allKeywords) {
     rows.value.push({
-      keyword: kw,
+      keyword: item.keyword,
       status: 'loading' as RowStatus,
       result: null,
       error: null,
+      source: item.source,
     })
   }
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 20_000)
+  const timeoutId = setTimeout(() => controller.abort(), 30_000)
 
-  const promises = keywords.map((kw, i) =>
-    fetchKeyword(kw, startIdx + i, controller.signal)
+  const promises = allKeywords.map((item, i) =>
+    fetchKeyword(item.keyword, startIdx + i, controller.signal)
   )
 
   await Promise.allSettled(promises)
@@ -175,27 +221,50 @@ async function fetchKeyword(keyword: string, idx: number, signal: AbortSignal) {
         return
       }
 
-      rows.value[idx] = { keyword, status: 'error', result: null, error: message }
+      rows.value[idx] = { keyword, status: 'error', result: null, error: message, source: rows.value[idx].source }
       return
     }
 
     const data = await res.json() as SearchResult
-    rows.value[idx] = { keyword, status: 'done', result: data, error: null }
+    rows.value[idx] = { keyword, status: 'done', result: data, error: null, source: rows.value[idx].source }
   } catch (e: unknown) {
     const message = e instanceof Error
-      ? (e.name === 'AbortError' ? '요청 시간 초과 (20초)' : e.message)
+      ? (e.name === 'AbortError' ? '요청 시간 초과 (30초)' : e.message)
       : '알 수 없는 오류'
-    rows.value[idx] = { keyword, status: 'error', result: null, error: message }
+    rows.value[idx] = { keyword, status: 'error', result: null, error: message, source: rows.value[idx].source }
   }
 }
 
 async function retryRow(idx: number) {
   const kw = rows.value[idx].keyword
-  rows.value[idx] = { keyword: kw, status: 'loading', result: null, error: null }
+  const src = rows.value[idx].source
+  rows.value[idx] = { keyword: kw, status: 'loading', result: null, error: null, source: src }
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 20_000)
+  const timeoutId = setTimeout(() => controller.abort(), 30_000)
   await fetchKeyword(kw, idx, controller.signal)
   clearTimeout(timeoutId)
+}
+
+async function fetchExpand(
+  keyword: string,
+  options: { autocomplete: boolean, related: boolean },
+  signal: AbortSignal,
+): Promise<{ seed: string, keywords: Array<{ keyword: string, source: RowSource }> } | null> {
+  try {
+    const res = await fetch(EXPAND_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authStore.token ? { Authorization: `Bearer ${authStore.token}` } : {}),
+      },
+      body: JSON.stringify({ keyword, ...options }),
+      signal,
+    })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
 }
 
 // ─── 슬라이드 패널 ───────────────────────────────────────────────────────────
@@ -279,7 +348,7 @@ function clearAll() {
 const hasResults = computed(() => rows.value.length > 0)
 const hasDoneRows = computed(() => rows.value.some(r => r.status === 'done'))
 const keywordCount = computed(() => parseKeywords(inputText.value).length)
-const overLimit = computed(() => keywordCount.value > 5)
+const overLimit = computed(() => keywordCount.value > (optExpand.value ? 3 : 5))
 
 // ─── URL ?q= 자동 실행 ────────────────────────────────────────────────────────
 
@@ -302,6 +371,10 @@ onMounted(async () => {
 
     <!-- ── 입력 영역 (shrink-0) ──────────────────────────────────────── -->
     <div class="shrink-0 flex flex-col gap-3">
+      <div class="flex items-center gap-3 text-sm">
+        <UCheckbox v-model="optAutocomplete" label="자동완성 키워드" />
+        <UCheckbox v-model="optRelated" label="연관검색어" />
+      </div>
       <div class="flex items-start gap-3">
         <div class="flex-1 min-w-0 flex flex-col gap-1">
           <UTextarea
@@ -312,10 +385,15 @@ onMounted(async () => {
             :disabled="isAnalyzing"
           />
           <p class="text-xs text-gray-500">
-            한 줄에 하나씩 · 한 번에 <span class="font-medium text-gray-700">최대 5개 권장</span> · 결과는 아래에 누적됩니다
+            <template v-if="optExpand">
+              한 줄에 하나씩 · 옵션이 켜져 있어 <span class="font-medium text-gray-700">시드 최대 3개 권장</span> · 시드당 풀이 자동 확장됩니다 (자동완성 5 / 연관 10)
+            </template>
+            <template v-else>
+              한 줄에 하나씩 · 한 번에 <span class="font-medium text-gray-700">최대 5개 권장</span> · 결과는 아래에 누적됩니다
+            </template>
           </p>
           <p v-if="overLimit" class="text-xs text-amber-600">
-            5개 초과 입력 시 처리 속도가 느려지거나 일부 키워드가 실패할 수 있습니다 (입력: {{ keywordCount }}개).
+            {{ optExpand ? '시드 3개' : '5개' }} 초과 입력 시 처리 속도가 느려지거나 일부 키워드가 실패할 수 있습니다 (입력: {{ keywordCount }}개).
           </p>
         </div>
         <UButton
@@ -396,8 +474,16 @@ onMounted(async () => {
                 @click="openPanel(row)"
               >
                 <!-- 키워드 -->
-                <td class="px-3 py-2.5 align-top font-medium text-gray-900 whitespace-nowrap">
-                  {{ row.keyword }}
+                <td class="px-3 py-2.5 align-top whitespace-nowrap">
+                  <span class="font-medium text-gray-900">{{ row.keyword }}</span>
+                  <span
+                    v-if="row.source === 'autocomplete'"
+                    class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-600"
+                  >자동완성</span>
+                  <span
+                    v-else-if="row.source === 'related'"
+                    class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-50 text-green-600"
+                  >연관</span>
                 </td>
 
                 <!-- 검색량 -->
