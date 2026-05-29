@@ -149,6 +149,10 @@ const completedPlaceIds = ref<Set<number>>(new Set())
 const csvLoading = ref(false)
 const csvProgress = ref<{ current: number; total: number } | null>(null)
 
+// 삭제
+const deleteConfirmOpen = ref(false)
+const deleteLoading = ref(false)
+
 // ─── 신규 리뷰 판별 (cron 자동 수집으로 처음 적재된 리뷰만 신규로 표시) ─────
 
 function isNewReview(review: Review): boolean {
@@ -654,6 +658,90 @@ async function exportCsv() {
   }
 }
 
+// ─── 삭제 ────────────────────────────────────────────────────────────────────
+
+function openDeleteConfirm() {
+  if (checkedPlaces.value.length === 0 || deleteLoading.value) return
+  deleteConfirmOpen.value = true
+}
+
+function closeDeleteConfirm() {
+  deleteConfirmOpen.value = false
+}
+
+async function confirmDelete() {
+  if (checkedPlaces.value.length === 0 || deleteLoading.value) return
+
+  const targets = [...checkedPlaces.value]
+  deleteLoading.value = true
+  deleteConfirmOpen.value = false
+
+  let successCount = 0
+  const errors: string[] = []
+  const deletedIds = new Set<number>()
+
+  for (const place of targets) {
+    try {
+      const res = await fetch(`${WORKER_BASE}/api/places/${place.id}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      if (!res.ok) {
+        let msg = `${placeName(place)}: 삭제 실패 (${res.status})`
+        try {
+          const body = await res.json() as { message?: string }
+          if (body.message) msg = `${placeName(place)}: ${body.message}`
+        } catch { /* ignore */ }
+        errors.push(msg)
+      } else {
+        successCount++
+        deletedIds.add(place.id)
+      }
+    } catch (e: unknown) {
+      errors.push(`${placeName(place)}: ${e instanceof Error ? e.message : '알 수 없는 오류'}`)
+    }
+  }
+
+  deleteLoading.value = false
+
+  // 선택 목록에서 삭제된 항목 제거
+  const nextChecked = new Set(checkedPlaceIds.value)
+  deletedIds.forEach(id => nextChecked.delete(id))
+  checkedPlaceIds.value = nextChecked
+
+  // 선택된 플레이스가 삭제됐으면 선택 해제 (리뷰표·이력 초기화)
+  if (selectedPlace.value && deletedIds.has(selectedPlace.value.id)) {
+    selectedPlace.value = null
+    reviews.value = []
+    reviewsStatus.value = 'idle'
+    reviewsTotal.value = 0
+    collectionEvents.value = []
+    collectionsStatus.value = 'idle'
+    collectToast.value = null
+  }
+
+  // 목록 새로고침
+  await fetchPlaces()
+
+  // 결과 토스트
+  if (errors.length === 0) {
+    collectToast.value = {
+      type: 'success',
+      message: `${successCount}개 플레이스 삭제됨`,
+    }
+  } else if (successCount > 0) {
+    collectToast.value = {
+      type: 'warn',
+      message: `${successCount}개 삭제됨, ${errors.length}개 실패: ${errors[0]}`,
+    }
+  } else {
+    collectToast.value = {
+      type: 'error',
+      message: `삭제 실패: ${errors[0]}`,
+    }
+  }
+}
+
 // ─── 초기 로드 / 정리 ────────────────────────────────────────────────────────
 
 onMounted(() => {
@@ -775,10 +863,10 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 선택 지점 전체 수집 버튼 -->
+        <!-- 선택 지점 전체 수집 버튼 + 삭제 버튼 -->
         <div
           v-if="checkedPlaces.length > 0"
-          class="shrink-0 px-2 py-1.5 border-b border-gray-200 bg-gray-50"
+          class="shrink-0 px-2 py-1.5 border-b border-gray-200 bg-gray-50 flex flex-col gap-1"
         >
           <UButton
             v-if="!multiBackfillRunning"
@@ -799,6 +887,17 @@ onUnmounted(() => {
             icon="i-heroicons-pause-circle"
             class="w-full"
             @click="stopMultiBackfill"
+          />
+          <UButton
+            :label="`선택 삭제 (${checkedPlaces.length})`"
+            size="xs"
+            color="error"
+            variant="outline"
+            icon="i-heroicons-trash"
+            class="w-full"
+            :disabled="deleteLoading || multiBackfillRunning"
+            :loading="deleteLoading"
+            @click="openDeleteConfirm"
           />
         </div>
 
@@ -1209,4 +1308,46 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
+
+  <!-- 삭제 확인 다이얼로그 -->
+  <UModal v-model:open="deleteConfirmOpen">
+    <template #content>
+      <div class="p-5 flex flex-col gap-4 max-w-sm w-full">
+        <div class="flex flex-col gap-1">
+          <p class="text-sm font-semibold text-gray-900">플레이스 삭제</p>
+          <p class="text-xs text-gray-500">
+            선택한 <span class="font-medium text-red-600">{{ checkedPlaces.length }}개</span> 플레이스와
+            <span class="font-medium">수집된 모든 리뷰·이력이 영구 삭제</span>됩니다. 되돌릴 수 없습니다.
+          </p>
+        </div>
+        <ul class="flex flex-col gap-0.5 max-h-32 overflow-y-auto">
+          <li
+            v-for="p in checkedPlaces"
+            :key="p.id"
+            class="text-xs text-gray-700 px-2 py-1 bg-gray-50 rounded truncate"
+            :title="placeName(p)"
+          >
+            {{ placeName(p) }}
+          </li>
+        </ul>
+        <div class="flex items-center justify-end gap-2">
+          <UButton
+            label="취소"
+            size="sm"
+            color="neutral"
+            variant="outline"
+            @click="closeDeleteConfirm"
+          />
+          <UButton
+            label="삭제"
+            size="sm"
+            color="error"
+            variant="solid"
+            icon="i-heroicons-trash"
+            @click="confirmDelete"
+          />
+        </div>
+      </div>
+    </template>
+  </UModal>
 </template>

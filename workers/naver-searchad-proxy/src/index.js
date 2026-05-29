@@ -112,6 +112,12 @@ export default {
     if (collectionsMatch && request.method === 'GET') {
       return handleGetCollections(request, env, corsHeaders, collectionsMatch[1]);
     }
+    // DELETE /api/places/:id — 플레이스 + 연관 데이터 cascade 삭제
+    // 주의: 정확히 /api/places/{id} 로 끝나는 것만 매칭(하위 경로 없음)
+    const deletePlaceMatch = url.pathname.match(/^\/api\/places\/([^/]+)$/);
+    if (deletePlaceMatch && request.method === 'DELETE') {
+      return handleDeletePlace(request, env, corsHeaders, deletePlaceMatch[1]);
+    }
 
     // --- 관리자 (role='admin' 전용) ---
     if (url.pathname === '/api/admin/users' && request.method === 'GET') {
@@ -144,7 +150,7 @@ function getCorsHeaders(origin) {
 
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Vary': 'Origin',
   };
@@ -2129,6 +2135,61 @@ async function handleGetCollections(request, env, corsHeaders, placeRowId) {
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
+}
+
+/**
+ * DELETE /api/places/:id
+ * 플레이스 + 연관 데이터(place_reviews, place_collection_events, place_review_snapshots) cascade 삭제.
+ * 소유 확인 필수 — 다른 사용자의 플레이스는 삭제 불가.
+ */
+async function handleDeletePlace(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 소유 확인 (handleCollectPlace 패턴과 동일)
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  // 자식부터 부모 순서로 cascade 삭제 — batch로 한 번에 실행
+  let batchResults;
+  try {
+    batchResults = await env.DB.batch([
+      env.DB.prepare('DELETE FROM place_reviews WHERE place_row_id = ?').bind(placeRowId),
+      env.DB.prepare('DELETE FROM place_collection_events WHERE place_row_id = ?').bind(placeRowId),
+      env.DB.prepare('DELETE FROM place_review_snapshots WHERE place_row_id = ?').bind(placeRowId),
+      // user_id 조건 이중 방어 (소유 확인을 이미 했지만 파괴적 작업이므로 한 번 더)
+      env.DB.prepare('DELETE FROM review_places WHERE id = ? AND user_id = ?').bind(placeRowId, authResult.user.id),
+    ]);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  const [reviewsResult, eventsResult, snapshotsResult, placeResult] = batchResults;
+
+  return jsonResponse({
+    deleted: true,
+    place_id: placeRowId,
+    reviews_deleted: reviewsResult.meta?.changes ?? 0,
+    events_deleted: eventsResult.meta?.changes ?? 0,
+    snapshots_deleted: snapshotsResult.meta?.changes ?? 0,
+  }, 200, cors);
 }
 
 // --- 관리자 엔드포인트 (role='admin' 전용) ---
