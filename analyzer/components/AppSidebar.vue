@@ -38,6 +38,13 @@ const bottomMenuItems = [
   },
 ] as const
 
+// 관리자 전용 메뉴 항목 (authStore.isAdmin이 true일 때만 렌더)
+const adminMenuItem = {
+  label: '사용자 관리',
+  to: '/app/admin',
+  icon: 'i-heroicons-users',
+} as const
+
 /**
  * 현재 라우트와 메뉴 아이템이 일치하는지 확인
  * /app은 정확히 일치해야 하고, 나머지는 startsWith
@@ -80,6 +87,27 @@ function isActive(to: string): boolean {
             :class="uiStore.sidebarOpen ? 'opacity-100' : 'opacity-0 w-0'"
           >
             {{ item.label }}
+          </span>
+        </NuxtLink>
+      </li>
+
+      <!-- 관리자 전용: 사용자 관리 (isAdmin일 때만 노출) -->
+      <li v-if="authStore.isAdmin">
+        <NuxtLink
+          :to="adminMenuItem.to"
+          class="flex items-center gap-3 px-2 py-2 rounded-md text-sm transition-colors"
+          :class="isActive(adminMenuItem.to)
+            ? 'bg-primary-50 text-primary-700 font-medium'
+            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'"
+        >
+          <span class="shrink-0 w-5 h-5 flex items-center justify-center">
+            <UIcon :name="adminMenuItem.icon" class="w-5 h-5" />
+          </span>
+          <span
+            class="whitespace-nowrap overflow-hidden transition-opacity duration-200"
+            :class="uiStore.sidebarOpen ? 'opacity-100' : 'opacity-0 w-0'"
+          >
+            {{ adminMenuItem.label }}
           </span>
         </NuxtLink>
       </li>

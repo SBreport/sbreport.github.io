@@ -7,6 +7,7 @@
  * 3. 미인증 + /app/* → /login?redirect=...
  * 4. 인증 + (/login | /) → 승인됐으면 /app, 아니면 /pending
  * 5. 인증 + 미승인 + /app/* → /pending
+ * 5a. 인증 + 승인 + 비-admin + /app/admin/* → /app (admin 전용 가드)
  * 6. 인증 + 승인됨 + /pending → /app
  * 7. 그 외 → 통과
  */
@@ -21,6 +22,7 @@ export default defineNuxtRouteMiddleware((to) => {
 
   const isAuthed = authStore.isAuthed
   const isApproved = authStore.isApproved
+  const isAdmin = authStore.isAdmin
   const path = to.path
 
   // 3. 미인증 + /app/* → /login
@@ -32,7 +34,11 @@ export default defineNuxtRouteMiddleware((to) => {
     if (!isApproved) {
       return navigateTo('/pending', { replace: true })
     }
-    return // 인증 + 승인 → 통과
+    // 5a. 인증 + 승인됐지만 비-admin + /app/admin/* → /app (URL 직접 입력 방어)
+    if (path.startsWith('/app/admin') && !isAdmin) {
+      return navigateTo('/app', { replace: true })
+    }
+    return // 인증 + 승인 + (admin이어야 할 경우 admin) → 통과
   }
 
   // 4. 인증 + (/login | /) → 승인 여부에 따라 분기

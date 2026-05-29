@@ -102,6 +102,15 @@ export default {
       return handleCollectPlace(request, env, corsHeaders, collectMatch[1]);
     }
 
+    // --- 관리자 (role='admin' 전용) ---
+    if (url.pathname === '/api/admin/users' && request.method === 'GET') {
+      return handleAdminListUsers(request, env, corsHeaders);
+    }
+    const adminStatusMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/status$/);
+    if (adminStatusMatch && request.method === 'POST') {
+      return handleAdminSetStatus(request, env, corsHeaders, adminStatusMatch[1]);
+    }
+
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
 };
@@ -1619,11 +1628,110 @@ async function handleCollectPlace(request, env, corsHeaders, placeRowId) {
   return jsonResponse(result, 200, cors);
 }
 
-// TODO: 관리자 엔드포인트 (다음 단계)
-// GET  /api/admin/users            — 사용자 목록 (role='admin' 전용)
-// POST /api/admin/users/:id/approve — 사용자 승인
-// POST /api/admin/users/:id/suspend — 사용자 정지
-// requireApprovedUser + user.role === 'admin' 추가 확인 필요
+// --- 관리자 엔드포인트 (role='admin' 전용) ---
+
+// 관리자 게이트: requireApprovedUser 통과 + user.role === 'admin' 확인.
+// 통과 시 { user } / 실패 시 { error, status, message }.
+async function requireAdmin(request, env) {
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) return authResult;
+  if (authResult.user.role !== 'admin') {
+    return { error: 'forbidden', status: 403, message: '관리자 권한이 필요합니다' };
+  }
+  return authResult;
+}
+
+// GET /api/admin/users — 전체 사용자 목록 (가입 신청 검토용)
+async function handleAdminListUsers(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, email, name, picture, status, plan, created_at, last_login_at, approved_at
+       FROM users ORDER BY created_at DESC`
+    ).all();
+
+    // role은 ADMIN_EMAILS 기반으로 응답 시 계산해 부여 (DB에 role 컬럼 없음)
+    const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
+    const users = (results ?? []).map(u => ({
+      ...u,
+      role: adminEmails.includes(u.email) ? 'admin' : 'user',
+    }));
+
+    return jsonResponse({ users }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+// POST /api/admin/users/:id/status — 사용자 status 변경 (승인/정지/해제)
+// body: { status: 'approved' | 'suspended' | 'pending' }
+async function handleAdminSetStatus(request, env, corsHeaders, targetUserId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  const newStatus = body?.status;
+  const ALLOWED = ['approved', 'suspended', 'pending'];
+  if (!ALLOWED.includes(newStatus)) {
+    return jsonResponse(
+      { error: 'invalid_status', message: `status는 ${ALLOWED.join('/')} 중 하나여야 합니다` },
+      400,
+      cors
+    );
+  }
+
+  // 대상 사용자 존재 확인
+  let target;
+  try {
+    target = await env.DB.prepare('SELECT id, email, status FROM users WHERE id = ?').bind(targetUserId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+  if (!target) {
+    return jsonResponse({ error: 'user_not_found', message: '대상 사용자를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  // 본인 계정 강등 방지: 관리자가 자기 자신을 정지/대기로 내리는 것 차단 (lockout 방지)
+  if (target.id === authResult.user.id && newStatus !== 'approved') {
+    return jsonResponse(
+      { error: 'cannot_demote_self', message: '본인 계정의 상태는 변경할 수 없습니다' },
+      400,
+      cors
+    );
+  }
+
+  // approved로 처음 승인 시 approved_at 기록 (이미 값 있으면 유지)
+  const nowIso = new Date().toISOString();
+  try {
+    if (newStatus === 'approved') {
+      await env.DB.prepare(
+        "UPDATE users SET status = 'approved', approved_at = COALESCE(approved_at, ?) WHERE id = ?"
+      ).bind(nowIso, targetUserId).run();
+    } else {
+      await env.DB.prepare('UPDATE users SET status = ? WHERE id = ?').bind(newStatus, targetUserId).run();
+    }
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ id: targetUserId, status: newStatus }, 200, cors);
+}
 
 // --- JWT 유틸리티 (HS256, crypto.subtle 직접 구현) ---
 
