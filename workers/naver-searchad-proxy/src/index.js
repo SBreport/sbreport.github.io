@@ -96,6 +96,11 @@ export default {
     if (reviewsMatch && request.method === 'GET') {
       return handleGetReviews(request, env, corsHeaders, reviewsMatch[1]);
     }
+    // POST /api/places/:id/collect — 증분 수집 수동 트리거 (측정용)
+    const collectMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/collect$/);
+    if (collectMatch && request.method === 'POST') {
+      return handleCollectPlace(request, env, corsHeaders, collectMatch[1]);
+    }
 
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
@@ -1230,6 +1235,388 @@ async function handleGetReviews(request, env, corsHeaders, placeRowId) {
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
+}
+
+// ─── 플레이스 리뷰 증분 수집 ────────────────────────────────────────────────────
+
+// 네이버 getVisitorReviews GraphQL 쿼리 (backfill.mjs GQL_QUERY 그대로 복사)
+const PLACE_GQL_QUERY =
+  'query getVisitorReviews($input: VisitorReviewsInput) {\n' +
+  '  visitorReviews(input: $input) {\n' +
+  '    items {\n' +
+  '      id\n' +
+  '      cursor\n' +
+  '      reviewId\n' +
+  '      rating\n' +
+  '      author {\n' +
+  '        id\n' +
+  '        nickname\n' +
+  '        from\n' +
+  '        imageUrl\n' +
+  '        objectId\n' +
+  '        url\n' +
+  '        __typename\n' +
+  '      }\n' +
+  '      body\n' +
+  '      thumbnail\n' +
+  '      media {\n' +
+  '        type\n' +
+  '        thumbnail\n' +
+  '        videoId\n' +
+  '        videoUrl\n' +
+  '        __typename\n' +
+  '      }\n' +
+  '      tags\n' +
+  '      status\n' +
+  '      visitCount\n' +
+  '      viewCount\n' +
+  '      visited\n' +
+  '      created\n' +
+  '      reply {\n' +
+  '        body\n' +
+  '        editedBy\n' +
+  '        created\n' +
+  '        date\n' +
+  '        replyTitle\n' +
+  '        status\n' +
+  '        __typename\n' +
+  '      }\n' +
+  '      originType\n' +
+  '      language\n' +
+  '      businessName\n' +
+  '      votedKeywords {\n' +
+  '        code\n' +
+  '        name\n' +
+  '        __typename\n' +
+  '      }\n' +
+  '      nickname\n' +
+  '      __typename\n' +
+  '    }\n' +
+  '    total\n' +
+  '    __typename\n' +
+  '  }\n' +
+  '}';
+
+const NAVER_GRAPHQL_URL = 'https://pcmap-api.place.naver.com/graphql';
+
+// fetchNaverSearchPc 의 UA를 재사용 (데스크톱 크롬)
+const PLACE_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+/**
+ * x-wtm-graphql 헤더 값 생성.
+ * Worker 환경에는 Buffer 없으므로 btoa 사용.
+ * JSON 내부에 비ASCII 문자 없어 btoa 안전.
+ * @param {string} placeId
+ * @param {string} businessType
+ * @returns {string}
+ */
+function makeWtmGraphql(placeId, businessType) {
+  return btoa(JSON.stringify({ arg: placeId, type: businessType, source: 'place' })).replace(/=+$/, '');
+}
+
+/**
+ * 네이버 getVisitorReviews GraphQL 한 페이지 호출.
+ * 실패 시 1회 짧은 백오프 재시도 후 에러를 throw.
+ * @param {string} placeId
+ * @param {string} businessType
+ * @param {string|null} after  커서 (첫 요청은 null)
+ * @param {object} env
+ * @returns {Promise<{total: number, items: any[]}>}
+ */
+async function fetchNaverReviewPage(placeId, businessType, after, env) {
+  const wtmHeader = makeWtmGraphql(placeId, businessType);
+
+  const headers = {
+    'content-type': 'application/json',
+    'accept': '*/*',
+    'accept-language': 'ko',
+    'Referer': `https://pcmap.place.naver.com/${businessType}/${placeId}/review/visitor`,
+    'Origin': 'https://pcmap.place.naver.com',
+    'User-Agent': PLACE_USER_AGENT,
+    'x-wtm-graphql': wtmHeader,
+  };
+
+  // NCAPTCHA_TOKEN 환경변수 있으면 추가 (없으면 생략 — 1차 측정은 토큰 없이)
+  if (env.NCAPTCHA_TOKEN) {
+    headers['x-wtm-ncaptcha-token'] = env.NCAPTCHA_TOKEN;
+  }
+
+  const body = JSON.stringify([
+    {
+      operationName: 'getVisitorReviews',
+      variables: {
+        input: {
+          businessId: placeId,
+          businessType: businessType,
+          item: '0',
+          // 커서 기반 페이지네이션: after 있으면 포함, 첫 요청은 미포함
+          ...(after ? { after } : {}),
+          size: 10,
+          isPhotoUsed: false,
+          includeContent: true,
+          getUserStats: false,
+          includeReceiptPhotos: false,
+          getReactions: false,
+          getTrailer: false,
+        },
+      },
+      query: PLACE_GQL_QUERY,
+    },
+  ]);
+
+  // 호출 헬퍼: 1회 재시도 포함
+  const doFetch = async () => {
+    const res = await fetch(NAVER_GRAPHQL_URL, { method: 'POST', headers, body });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const json = await res.json();
+    if (!Array.isArray(json) || json[0]?.errors) {
+      const errMsg = json[0]?.errors?.[0]?.message ?? 'unknown';
+      throw new Error(`GraphQL 오류: ${errMsg}`);
+    }
+    const visitorReviews = json[0]?.data?.visitorReviews;
+    if (!visitorReviews) {
+      throw new Error('visitorReviews 필드 없음');
+    }
+    return visitorReviews; // { total, items[] }
+  };
+
+  try {
+    return await doFetch();
+  } catch (firstErr) {
+    // 1회 재시도: 500ms 대기 후 재시도
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      return await doFetch();
+    } catch (retryErr) {
+      throw new Error(`네이버 호출 실패: ${retryErr.message}`);
+    }
+  }
+}
+
+/**
+ * 리뷰 아이템 → DB INSERT 형식으로 매핑.
+ * backfill.mjs mapItem 과 동일 필드.
+ */
+function mapReviewItem(item) {
+  return {
+    naver_review_id: String(item.id),
+    author_nick: item.author?.nickname ?? item.nickname ?? null,
+    body: item.body ?? null,
+    has_photo: Array.isArray(item.media) && item.media.length > 0 ? 1 : 0,
+    owner_reply: item.reply?.body ?? null,
+    visited_at: item.visited ?? null,
+    review_created_at: item.created ?? null,
+  };
+}
+
+/**
+ * 플레이스 리뷰 증분 수집 핵심 함수.
+ * Cron 재사용을 위해 핸들러에서 분리.
+ *
+ * @param {object} env         Worker env
+ * @param {object} placeRow    { id, place_id, business_type, name } — DB 조회 row
+ * @param {object} opts        { maxPages? } (기본 3)
+ * @returns {Promise<{place_id, total_server, inserted, skipped, pages_fetched, blocked, error?}>}
+ */
+async function collectPlaceReviews(env, placeRow, opts = {}) {
+  const maxPages = opts.maxPages ?? 3;
+  const placeRowId = placeRow.id;
+  const placeId = placeRow.place_id;
+  // business_type 없으면 'place'로 폴백
+  const businessType = placeRow.business_type || 'place';
+
+  let totalServer = null;   // 서버 기준 총 리뷰 수 (첫 응답에서 확정)
+  let placeName = null;     // 첫 item.businessName (업체명 갱신용)
+  let after = null;         // 커서: 직전 페이지 마지막 item.cursor
+  let inserted = 0;         // 누적 삽입 성공 수
+  let skipped = 0;          // 누적 중복 스킵 수
+  let pagesFetched = 0;     // 실제 수집한 페이지 수
+  let blocked = false;
+  let errorMsg = null;
+  const now = new Date().toISOString();
+
+  for (let page = 1; page <= maxPages; page++) {
+    // 페이지 간 딜레이 (첫 페이지 제외, Worker wall-clock 고려해 800ms)
+    if (page > 1) {
+      await new Promise((r) => setTimeout(r, 800));
+    }
+
+    // 네이버 호출
+    let visitorReviews;
+    try {
+      visitorReviews = await fetchNaverReviewPage(placeId, businessType, after, env);
+    } catch (err) {
+      blocked = true;
+      errorMsg = err.message;
+      console.error(`[collectPlaceReviews] place_id=${placeId} page=${page} 실패: ${err.message}`);
+      break;
+    }
+
+    pagesFetched++;
+    const { total, items } = visitorReviews;
+
+    // 첫 페이지에서 total·업체명 확정
+    if (page === 1) {
+      totalServer = total;
+    }
+
+    // items가 비어 있으면 종료
+    if (!items || items.length === 0) {
+      break;
+    }
+
+    // 업체명 첫 발견 시 저장
+    for (const item of items) {
+      if (!placeName && item.businessName) {
+        placeName = item.businessName;
+        break;
+      }
+    }
+
+    // 이번 페이지 items → 매핑 후 INSERT OR IGNORE batch
+    const mapped = items.map(mapReviewItem);
+    const stmts = mapped.map((r) =>
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO place_reviews
+           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        crypto.randomUUID(),
+        placeRowId,
+        r.naver_review_id ?? null,
+        r.author_nick ?? null,
+        r.body ?? null,
+        r.has_photo ? 1 : 0,
+        r.owner_reply ?? null,
+        r.visited_at ?? null,
+        r.review_created_at ?? null,
+        now
+      )
+    );
+
+    let batchResults;
+    try {
+      batchResults = await env.DB.batch(stmts);
+    } catch (err) {
+      // DB batch 실패 — 이번 페이지 건너뜀, 에러 기록 후 중단
+      blocked = true;
+      errorMsg = `DB batch 오류: ${err.message}`;
+      console.error(`[collectPlaceReviews] DB batch 실패: ${err.message}`);
+      break;
+    }
+
+    // 이번 페이지 삽입/스킵 집계
+    const pageInserted = batchResults.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
+    const pageSkipped = mapped.length - pageInserted;
+    inserted += pageInserted;
+    skipped += pageSkipped;
+
+    // 다음 커서 갱신 (이번 페이지 마지막 item.cursor)
+    after = items[items.length - 1]?.cursor ?? null;
+
+    // 조기 종료: 2페이지 이상이고 이번 페이지가 전부 중복 → "이미 가진 영역" 도달로 판단
+    if (page >= 2 && pageInserted === 0) {
+      console.log(`[collectPlaceReviews] place_id=${placeId} page=${page} 전부 중복 → 증분 조기 종료`);
+      break;
+    }
+
+    // 조기 종료: 커서 없으면 다음 페이지 불가
+    if (!after) {
+      break;
+    }
+
+    // 조기 종료: total 도달
+    if (totalServer !== null && inserted + skipped >= totalServer) {
+      break;
+    }
+  }
+
+  // review_places UPDATE: last_collected_at, total_reviews, name 갱신
+  try {
+    await env.DB.prepare(
+      `UPDATE review_places
+       SET last_collected_at = ?,
+           total_reviews     = COALESCE(?, total_reviews),
+           name              = COALESCE(?, name)
+       WHERE id = ?`
+    ).bind(now, totalServer, placeName, placeRowId).run();
+  } catch (err) {
+    console.error(`[collectPlaceReviews] review_places UPDATE 실패: ${err.message}`);
+  }
+
+  const result = {
+    place_id: placeId,
+    total_server: totalServer,
+    inserted,
+    skipped,
+    pages_fetched: pagesFetched,
+    blocked,
+  };
+  if (errorMsg) {
+    result.error = errorMsg;
+  }
+  return result;
+}
+
+/**
+ * POST /api/places/:id/collect
+ * 플레이스 리뷰 증분 수집 수동 트리거 (데이터센터 IP에서 네이버 호출 가능 여부 측정용).
+ * body(선택): { maxPages } (1~10, 기본 3)
+ */
+async function handleCollectPlace(request, env, corsHeaders, placeRowId) {
+  // 로컬 호출(Origin 없음)도 허용. 보안 게이트는 JWT.
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인 (handleGetReviews 와 동일 패턴)
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, place_id, business_type, name, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  // body(선택): maxPages 파싱 (1~10 clamp, 기본 3)
+  let maxPages = 3;
+  try {
+    const body = await request.json().catch(() => ({}));
+    if (body.maxPages !== undefined) {
+      const parsed = Number(body.maxPages);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        maxPages = Math.min(Math.max(Math.floor(parsed), 1), 10);
+      }
+    }
+  } catch {
+    // body 파싱 실패 시 기본값 유지
+  }
+
+  // 증분 수집 실행
+  let result;
+  try {
+    result = await collectPlaceReviews(env, placeRow, { maxPages });
+  } catch (err) {
+    return jsonResponse({ error: 'collect_failed', message: err.message }, 500, cors);
+  }
+
+  // 차단 여부와 무관하게 200 반환 (측정 데이터로 활용)
+  return jsonResponse(result, 200, cors);
 }
 
 // TODO: 관리자 엔드포인트 (다음 단계)
