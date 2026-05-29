@@ -13,6 +13,7 @@ interface Place {
   name: string | null
   total_reviews: number | null
   last_collected_at: string | null
+  backfill_done: number | null
   created_at: string
 }
 
@@ -30,7 +31,7 @@ interface Review {
 
 interface CollectionEvent {
   id: string
-  source: 'cron' | 'manual'
+  source: 'cron' | 'manual' | 'backfill'
   inserted: number
   skipped: number
   pages_fetched: number
@@ -38,6 +39,17 @@ interface CollectionEvent {
   blocked: number
   error: string | null
   collected_at: string
+}
+
+interface BackfillChunkResult {
+  done: boolean
+  inserted: number
+  skipped: number
+  pages_fetched: number
+  blocked: boolean
+  error?: string
+  total_server: number | null
+  stored_count: number
 }
 
 type LoadStatus = 'idle' | 'loading' | 'done' | 'error'
@@ -80,6 +92,15 @@ const collectionsError = ref<string | null>(null)
 // 지금 수집
 const collectLoading = ref(false)
 const collectToast = ref<{ type: 'success' | 'warn' | 'error'; message: string } | null>(null)
+
+// 전체 수집 (백필)
+const backfillRunning = ref(false)
+const backfillStopped = ref(false)
+const backfillStoredCount = ref<number | null>(null)
+const backfillTotalServer = ref<number | null>(null)
+const backfillInsertedTotal = ref(0)
+const backfillStatus = ref<'idle' | 'running' | 'done' | 'blocked' | 'error'>('idle')
+const backfillMessage = ref<string | null>(null)
 
 // ─── 신규 리뷰 계산 (최근 수집 회차) ─────────────────────────────────────────
 
@@ -289,11 +310,121 @@ async function collectNow() {
 }
 
 function selectPlace(place: Place) {
+  // 이전 플레이스 전환 시 백필 루프 정지 (메모리 누수·유령 호출 방지)
+  backfillStopped.value = true
+  backfillRunning.value = false
+  backfillStatus.value = 'idle'
+  backfillMessage.value = null
+  backfillStoredCount.value = null
+  backfillTotalServer.value = null
+  backfillInsertedTotal.value = 0
+
   selectedPlace.value = place
   currentPage.value = 1
   collectToast.value = null
   fetchReviews(place.id)
   fetchCollections(place.id)
+}
+
+function stopBackfill() {
+  backfillStopped.value = true
+  backfillMessage.value = '다음 청크 전송 중단 — 현재 진행 커서는 저장되어 있습니다'
+}
+
+async function backfillAll() {
+  if (!selectedPlace.value || backfillRunning.value) return
+
+  // 이미 완료된 경우 재시작 허용 (이어하기)
+  backfillRunning.value = true
+  backfillStopped.value = false
+  backfillStatus.value = 'running'
+  backfillMessage.value = null
+  backfillInsertedTotal.value = 0
+  backfillStoredCount.value = null
+  backfillTotalServer.value = null
+
+  const placeId = selectedPlace.value.id
+  let consecutiveErrors = 0
+
+  while (true) {
+    // 정지 요청 확인
+    if (backfillStopped.value) {
+      backfillRunning.value = false
+      backfillStatus.value = 'idle'
+      if (!backfillMessage.value) {
+        backfillMessage.value = '수집이 중단되었습니다. 다시 시작하면 이어서 진행됩니다.'
+      }
+      break
+    }
+
+    // 선택 플레이스가 바뀐 경우 중단
+    if (selectedPlace.value?.id !== placeId) {
+      backfillRunning.value = false
+      break
+    }
+
+    let result: BackfillChunkResult
+    try {
+      const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/backfill`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ maxPages: 5 }),
+      })
+      if (!res.ok) {
+        let msg = `수집 오류 (${res.status})`
+        try {
+          const body = await res.json() as { message?: string }
+          if (body.message) msg = body.message
+        } catch { /* ignore */ }
+        throw new Error(msg)
+      }
+      result = await res.json() as BackfillChunkResult
+      consecutiveErrors = 0
+    } catch (e: unknown) {
+      consecutiveErrors++
+      if (consecutiveErrors >= 3) {
+        backfillRunning.value = false
+        backfillStatus.value = 'error'
+        backfillMessage.value = `네트워크 오류 3회 연속 — 수집 중단: ${e instanceof Error ? e.message : '알 수 없는 오류'}`
+        break
+      }
+      // 재시도 전 1초 대기
+      await new Promise((r) => setTimeout(r, 1000))
+      continue
+    }
+
+    // 누적 통계 갱신
+    backfillInsertedTotal.value += result.inserted
+    if (result.stored_count != null) backfillStoredCount.value = result.stored_count
+    if (result.total_server != null) backfillTotalServer.value = result.total_server
+
+    // 차단 감지
+    if (result.blocked) {
+      backfillRunning.value = false
+      backfillStatus.value = 'blocked'
+      backfillMessage.value = result.error
+        ? `차단/오류 감지: ${result.error} — 커서가 저장되어 있으니 잠시 후 "전체 수집"을 다시 누르면 이어서 진행됩니다.`
+        : '차단 감지 — 잠시 후 "전체 수집"을 다시 누르면 이어서 진행됩니다.'
+      // 이력·리뷰표 갱신
+      await Promise.all([fetchCollections(placeId), fetchReviews(placeId)])
+      fetchPlaces()
+      break
+    }
+
+    // 완료
+    if (result.done) {
+      backfillRunning.value = false
+      backfillStatus.value = 'done'
+      backfillMessage.value = null
+      // 이력·리뷰표·목록 새로고침
+      await Promise.all([fetchCollections(placeId), fetchReviews(placeId)])
+      fetchPlaces()
+      break
+    }
+
+    // 청크 간 텀 (1초) — 과도 호출 방지
+    await new Promise((r) => setTimeout(r, 1000))
+  }
 }
 
 async function retryReviews() {
@@ -345,10 +476,15 @@ function exportCsv() {
   URL.revokeObjectURL(url)
 }
 
-// ─── 초기 로드 ────────────────────────────────────────────────────────────────
+// ─── 초기 로드 / 정리 ────────────────────────────────────────────────────────
 
 onMounted(() => {
   fetchPlaces()
+})
+
+// 페이지 이탈 시 백필 루프 정지 (메모리 누수·유령 호출 방지)
+onUnmounted(() => {
+  backfillStopped.value = true
 })
 </script>
 
@@ -477,8 +613,43 @@ onMounted(() => {
                 variant="soft"
                 icon="i-heroicons-arrow-down-circle"
                 :loading="collectLoading"
+                :disabled="backfillRunning"
                 @click="collectNow"
               />
+              <!-- 전체 수집(백필) 버튼 -->
+              <template v-if="selectedPlace">
+                <!-- 완료 상태 -->
+                <UButton
+                  v-if="backfillStatus === 'done'"
+                  label="전체 수집 완료"
+                  size="xs"
+                  color="neutral"
+                  variant="outline"
+                  icon="i-heroicons-check-circle"
+                  disabled
+                />
+                <!-- 수집 중: 멈춤 버튼 -->
+                <UButton
+                  v-else-if="backfillRunning"
+                  label="수집 중... (멈춤)"
+                  size="xs"
+                  color="warning"
+                  variant="soft"
+                  icon="i-heroicons-pause-circle"
+                  @click="stopBackfill"
+                />
+                <!-- 기본 / 이어하기 버튼 -->
+                <UButton
+                  v-else
+                  :label="backfillStatus === 'idle' ? '전체 수집' : '이어서 수집'"
+                  size="xs"
+                  color="neutral"
+                  variant="outline"
+                  icon="i-heroicons-archive-box-arrow-down"
+                  :disabled="collectLoading"
+                  @click="backfillAll"
+                />
+              </template>
               <UButton
                 v-if="reviewsStatus === 'done' && reviews.length > 0"
                 label="CSV"
@@ -502,6 +673,58 @@ onMounted(() => {
             }"
           >
             {{ collectToast.message }}
+          </div>
+
+          <!-- 백필 진행 상태 바 -->
+          <div
+            v-if="selectedPlace && backfillStatus !== 'idle'"
+            class="shrink-0 px-3 py-1.5 border-b text-xs flex items-center gap-3"
+            :class="{
+              'bg-blue-50 text-blue-700 border-blue-100': backfillStatus === 'running',
+              'bg-green-50 text-green-700 border-green-100': backfillStatus === 'done',
+              'bg-amber-50 text-amber-700 border-amber-100': backfillStatus === 'blocked',
+              'bg-red-50 text-red-700 border-red-100': backfillStatus === 'error',
+            }"
+          >
+            <!-- 수집 중: 스피너 + 진행률 -->
+            <template v-if="backfillStatus === 'running'">
+              <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 shrink-0 animate-spin" />
+              <span class="font-medium">전체 수집 중</span>
+              <template v-if="backfillStoredCount !== null">
+                <span class="tabular-nums">
+                  보유 {{ backfillStoredCount.toLocaleString('ko-KR') }}
+                  <template v-if="backfillTotalServer">&nbsp;/&nbsp;총 {{ backfillTotalServer.toLocaleString('ko-KR') }}건
+                    <span class="text-blue-500">({{ Math.min(100, Math.round(backfillStoredCount / backfillTotalServer * 100)) }}%)</span>
+                  </template>
+                </span>
+                <!-- 진행바 -->
+                <div
+                  v-if="backfillTotalServer"
+                  class="flex-1 min-w-0 h-1.5 rounded-full bg-blue-100 overflow-hidden"
+                >
+                  <div
+                    class="h-full rounded-full bg-blue-400 transition-all duration-300"
+                    :style="{ width: Math.min(100, Math.round(backfillStoredCount / backfillTotalServer * 100)) + '%' }"
+                  />
+                </div>
+              </template>
+              <template v-else>
+                <span class="tabular-nums">신규 {{ backfillInsertedTotal.toLocaleString('ko-KR') }}건 수집 중...</span>
+              </template>
+            </template>
+            <!-- 완료 -->
+            <template v-else-if="backfillStatus === 'done'">
+              <UIcon name="i-heroicons-check-circle" class="w-3.5 h-3.5 shrink-0" />
+              <span class="font-medium">전체 수집 완료</span>
+              <span v-if="backfillStoredCount !== null" class="tabular-nums">
+                보유 {{ backfillStoredCount.toLocaleString('ko-KR') }}건
+              </span>
+            </template>
+            <!-- 차단 / 에러 / 정지 -->
+            <template v-else>
+              <UIcon name="i-heroicons-exclamation-triangle" class="w-3.5 h-3.5 shrink-0" />
+              <span>{{ backfillMessage }}</span>
+            </template>
           </div>
 
           <!-- Idle (플레이스 미선택) -->
@@ -672,9 +895,11 @@ onMounted(() => {
                       class="inline-block px-1.5 py-0.5 rounded text-xs font-medium"
                       :class="ev.source === 'cron'
                         ? 'bg-gray-100 text-gray-600'
-                        : 'bg-blue-50 text-blue-600'"
+                        : ev.source === 'backfill'
+                          ? 'bg-violet-50 text-violet-700'
+                          : 'bg-blue-50 text-blue-600'"
                     >
-                      {{ ev.source === 'cron' ? '자동' : '수동' }}
+                      {{ ev.source === 'cron' ? '자동' : ev.source === 'backfill' ? '백필' : '수동' }}
                     </span>
                   </td>
                   <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">

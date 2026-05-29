@@ -102,6 +102,11 @@ export default {
     if (collectMatch && request.method === 'POST') {
       return handleCollectPlace(request, env, corsHeaders, collectMatch[1]);
     }
+    // POST /api/places/:id/backfill — 과거 리뷰 전체 백필 (청크 단위, 커서 저장)
+    const backfillMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/backfill$/);
+    if (backfillMatch && request.method === 'POST') {
+      return handleBackfillPlace(request, env, corsHeaders, backfillMatch[1]);
+    }
     // GET /api/places/:id/collections — 수집 이력 조회
     const collectionsMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/collections$/);
     if (collectionsMatch && request.method === 'GET') {
@@ -1760,6 +1765,255 @@ async function collectPlaceReviews(env, placeRow, opts = {}) {
   }
 
   return result;
+}
+
+/**
+ * 플레이스 리뷰 백필 청크 함수.
+ * 증분(collectPlaceReviews)과 달리 중복을 만나도 끝까지 진행하며 커서를 DB에 저장.
+ * 한 호출 = 한 청크(여러 페이지). 프론트가 done=true 될 때까지 반복 호출.
+ *
+ * @param {object} env        Worker env
+ * @param {object} placeRow   { id, place_id, business_type, name, backfill_cursor }
+ * @param {object} opts       { maxPages? } (기본 5, 1~10 clamp)
+ * @returns {Promise<{done, inserted, skipped, pages_fetched, blocked, error?, total_server, stored_count}>}
+ */
+async function backfillPlaceChunk(env, placeRow, opts = {}) {
+  const maxPages = Math.min(Math.max(Math.floor(opts.maxPages ?? 5), 1), 10);
+  const placeRowId = placeRow.id;
+  const placeId = placeRow.place_id;
+  const businessType = placeRow.business_type || 'place';
+
+  // 시작 커서: 이전 청크에서 저장된 커서(없으면 null=처음부터)
+  let after = placeRow.backfill_cursor ?? null;
+  let totalServer = null;
+  let firstBusinessName = null;
+  let inserted = 0;
+  let skipped = 0;
+  let pagesFetched = 0;
+  let blocked = false;
+  let errorMsg = null;
+  let done = false;
+  const now = new Date().toISOString();
+
+  for (let page = 1; page <= maxPages; page++) {
+    // 페이지 간 딜레이 (첫 페이지 제외)
+    if (page > 1) {
+      await new Promise((r) => setTimeout(r, 800));
+    }
+
+    // 네이버 호출
+    let visitorReviews;
+    try {
+      visitorReviews = await fetchNaverReviewPage(placeId, businessType, after, env);
+    } catch (err) {
+      blocked = true;
+      errorMsg = err.message;
+      // 커서는 마지막 성공 지점 유지 (after 갱신 안 함)
+      break;
+    }
+
+    pagesFetched++;
+    const { total, items } = visitorReviews;
+
+    if (page === 1) {
+      totalServer = total;
+    }
+
+    // 업체명 첫 발견 시 저장
+    if (!firstBusinessName && items) {
+      for (const item of items) {
+        if (item.businessName) {
+          firstBusinessName = item.businessName;
+          break;
+        }
+      }
+    }
+
+    // items가 비었으면 백필 완료
+    if (!items || items.length === 0) {
+      done = true;
+      break;
+    }
+
+    // INSERT OR IGNORE batch (collectPlaceReviews와 동일 패턴)
+    const mapped = items.map(mapReviewItem);
+    const stmts = mapped.map((r) =>
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO place_reviews
+           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        crypto.randomUUID(),
+        placeRowId,
+        r.naver_review_id ?? null,
+        r.author_nick ?? null,
+        r.body ?? null,
+        r.has_photo ? 1 : 0,
+        r.owner_reply ?? null,
+        r.visited_at ?? null,
+        r.review_created_at ?? null,
+        now
+      )
+    );
+
+    try {
+      const batchResults = await env.DB.batch(stmts);
+      const pageInserted = batchResults.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
+      const pageSkipped = mapped.length - pageInserted;
+      inserted += pageInserted;
+      skipped += pageSkipped;
+    } catch (err) {
+      blocked = true;
+      errorMsg = `DB batch 오류: ${err.message}`;
+      break;
+    }
+
+    // 다음 커서 갱신 (이번 페이지 마지막 item.cursor)
+    const nextCursor = items[items.length - 1]?.cursor ?? null;
+
+    // 백필은 skipped여도 계속 진행(중복 무시, 끝까지).
+    // 단 다음 커서가 없으면 완료.
+    if (!nextCursor) {
+      done = true;
+      after = null;
+      break;
+    }
+
+    after = nextCursor;
+
+    // total 도달 확인
+    if (totalServer !== null && inserted + skipped >= totalServer) {
+      done = true;
+      after = null;
+      break;
+    }
+  }
+
+  // review_places UPDATE: backfill 상태 + total_reviews + name 갱신
+  try {
+    await env.DB.prepare(
+      `UPDATE review_places
+       SET backfill_cursor     = ?,
+           backfill_done       = ?,
+           backfill_updated_at = ?,
+           total_reviews       = COALESCE(?, total_reviews),
+           name                = COALESCE(?, name)
+       WHERE id = ?`
+    ).bind(
+      done ? null : after,
+      done ? 1 : 0,
+      now,
+      totalServer,
+      firstBusinessName,
+      placeRowId
+    ).run();
+  } catch (err) {
+    console.error(`[backfillPlaceChunk] review_places UPDATE 실패: ${err.message}`);
+  }
+
+  // 수집 이벤트 기록 (source='backfill')
+  try {
+    await env.DB.prepare(
+      `INSERT INTO place_collection_events
+         (id, place_row_id, source, inserted, skipped, pages_fetched, total_server, blocked, error, collected_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      crypto.randomUUID(),
+      placeRowId,
+      'backfill',
+      inserted,
+      skipped,
+      pagesFetched,
+      totalServer,
+      blocked ? 1 : 0,
+      errorMsg ?? null,
+      now
+    ).run();
+  } catch (err) {
+    console.error(`[backfillPlaceChunk] 이벤트 INSERT 실패: ${err.message}`);
+  }
+
+  // 보유수 계산
+  let storedCount = 0;
+  try {
+    const countRow = await env.DB.prepare(
+      'SELECT COUNT(*) AS c FROM place_reviews WHERE place_row_id = ?'
+    ).bind(placeRowId).first();
+    storedCount = countRow?.c ?? 0;
+  } catch (err) {
+    console.error(`[backfillPlaceChunk] COUNT 실패: ${err.message}`);
+  }
+
+  const result = {
+    done,
+    inserted,
+    skipped,
+    pages_fetched: pagesFetched,
+    blocked,
+    total_server: totalServer,
+    stored_count: storedCount,
+  };
+  if (errorMsg) {
+    result.error = errorMsg;
+  }
+  return result;
+}
+
+/**
+ * POST /api/places/:id/backfill
+ * 과거 리뷰 전체 수집 — 청크 단위 백필 트리거.
+ * 프론트가 done=true 될 때까지 반복 호출하는 방식.
+ * body(선택): { maxPages } (1~10 clamp, 기본 5)
+ */
+async function handleBackfillPlace(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인 + backfill 관련 컬럼 포함
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, place_id, business_type, name, user_id, backfill_cursor, backfill_done FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  // body(선택): maxPages 파싱 (1~10 clamp, 기본 5)
+  let maxPages = 5;
+  try {
+    const body = await request.json().catch(() => ({}));
+    if (body.maxPages !== undefined) {
+      const parsed = Number(body.maxPages);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        maxPages = Math.min(Math.max(Math.floor(parsed), 1), 10);
+      }
+    }
+  } catch {
+    // body 파싱 실패 시 기본값 유지
+  }
+
+  // 백필 청크 실행
+  let result;
+  try {
+    result = await backfillPlaceChunk(env, placeRow, { maxPages });
+  } catch (err) {
+    return jsonResponse({ error: 'backfill_failed', message: err.message }, 500, cors);
+  }
+
+  // 차단 여부와 무관하게 200 반환 (프론트가 blocked·error 보고 판단)
+  return jsonResponse(result, 200, cors);
 }
 
 /**
