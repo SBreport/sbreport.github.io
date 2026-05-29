@@ -114,6 +114,10 @@ export default {
 
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runDailyReviewCollection(env));
+  },
 };
 
 // --- CORS ---
@@ -1477,6 +1481,109 @@ function mapReviewItem(item) {
  * 플레이스 리뷰 증분 수집 핵심 함수.
  * Cron 재사용을 위해 핸들러에서 분리.
  *
+// ─── Cron: 플레이스 리뷰 일일 자동 수집 ────────────────────────────────────
+
+/** 1회 Cron 실행 시 처리할 최대 플레이스 수 */
+const CRON_MAX_PLACES = 50;
+
+/**
+ * 모든 review_places를 last_collected_at 오래된 순(NULL 먼저)으로 최대 CRON_MAX_PLACES개 순회하며
+ * 증분 수집 + 스냅샷 적재. scheduled 핸들러에서 ctx.waitUntil()로 호출.
+ */
+async function runDailyReviewCollection(env) {
+  let places;
+  try {
+    const result = await env.DB.prepare(
+      `SELECT id, place_id, business_type, name
+         FROM review_places
+        ORDER BY (last_collected_at IS NULL) DESC, last_collected_at ASC
+        LIMIT ?`
+    ).bind(CRON_MAX_PLACES).all();
+    places = result.results ?? [];
+  } catch (err) {
+    console.error('[CRON] review_places 조회 실패:', err.message);
+    return;
+  }
+
+  console.log(`[CRON] 시작 ${places.length}개`);
+
+  let consecutiveBlocked = 0;
+  let totalInserted = 0;
+  let totalSkipped = 0;
+
+  for (let i = 0; i < places.length; i++) {
+    const place = places[i];
+
+    // 플레이스 간 딜레이 2000ms (첫 건 제외)
+    if (i > 0) {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    let result;
+    try {
+      result = await collectPlaceReviews(env, place, { maxPages: 3 });
+    } catch (err) {
+      // collectPlaceReviews는 throw 안 하지만 혹시 모를 예외 대비
+      console.error(`[CRON] place_id=${place.place_id} 예외:`, err.message);
+      consecutiveBlocked++;
+      if (consecutiveBlocked >= 2) {
+        console.warn('[CRON] 연속 차단 감지 → 중단');
+        break;
+      }
+      continue;
+    }
+
+    console.log(
+      `[CRON] place_id=${result.place_id} inserted=${result.inserted} skipped=${result.skipped} blocked=${result.blocked}`
+    );
+
+    totalInserted += result.inserted;
+    totalSkipped += result.skipped;
+
+    // 연속 차단 카운터 관리
+    if (result.blocked) {
+      consecutiveBlocked++;
+      if (consecutiveBlocked >= 2) {
+        console.warn('[CRON] 연속 차단 감지 → 중단');
+        break;
+      }
+    } else {
+      consecutiveBlocked = 0;
+    }
+
+    // 스냅샷 적재: total_server가 null이면 스킵 (차단·오류로 유효값 없음)
+    if (result.total_server == null) {
+      continue;
+    }
+
+    try {
+      const countRow = await env.DB.prepare(
+        'SELECT COUNT(*) AS c FROM place_reviews WHERE place_row_id = ?'
+      ).bind(place.id).first();
+      const storedCount = countRow?.c ?? 0;
+
+      await env.DB.prepare(
+        `INSERT INTO place_review_snapshots (id, place_row_id, total_reviews, stored_count, captured_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(
+        crypto.randomUUID(),
+        place.id,
+        result.total_server,
+        storedCount,
+        new Date().toISOString()
+      ).run();
+    } catch (err) {
+      console.error(`[CRON] 스냅샷 적재 실패 place_id=${place.place_id}:`, err.message);
+      // 스냅샷 실패는 치명적이지 않으므로 계속 진행
+    }
+  }
+
+  console.log(`[CRON] 완료 총 inserted=${totalInserted} skipped=${totalSkipped}`);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
  * @param {object} env         Worker env
  * @param {object} placeRow    { id, place_id, business_type, name } — DB 조회 row
  * @param {object} opts        { maxPages? } (기본 3)
