@@ -17,12 +17,13 @@ const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 // data-block-id 값 → { type, label } 매핑
 const BLOCK_ID_MAP = [
   { pattern: /^review\/.*blog/i,            type: 'blog',          label: '블로그' },
-  // review/ugc.* — blog 외 UGC 단일 의도 추천 (블로그 매칭 안 되는 추천형 섹션)
-  { pattern: /^review\/.*ugc/i,             type: 'related',       label: '추천' },
+  // review/ugc.* — 블로그/카페 등 UGC 인기글 묶음. 네이버 화면 라벨은 업종별 동적
+  // ("패션·미용 인기글", "맛집 인기글" 등) → 우리는 업종 무관 일반명 '인기글'로 표기.
+  { pattern: /^review\/.*ugc/i,             type: 'popular',       label: '인기글' },
   { pattern: /^ai-briefing\//i,             type: 'ai_briefing',   label: 'AI 브리핑' },
   { pattern: /^image\//i,                   type: 'image',         label: '이미지' },
   { pattern: /^kin\//i,                     type: 'kin',           label: '지식인' },
-  { pattern: /^web\//i,                     type: 'web',           label: '웹사이트' },
+  { pattern: /^web\//i,                     type: 'web',           label: '관련사이트' },
   { pattern: /^news\//i,                    type: 'news',          label: '뉴스' },
   { pattern: /^video\//i,                   type: 'video',         label: '동영상' },
   { pattern: /^clip\//i,                    type: 'clip',          label: '클립' },
@@ -281,7 +282,7 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
   const normalizedKeyword = rawKeyword.trim().replace(/\s+/g, '');
 
   // 캐시 확인 (24h TTL)
-  const cacheUrl = `https://cache.internal/v7/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
+  const cacheUrl = `https://cache.internal/v8/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
   const cache = caches.default;
 
   const cached = await cache.match(cacheUrl);
@@ -427,50 +428,56 @@ async function fetchNaverSearchPc(keyword) {
 }
 
 function parseNaverSections(html, device = 'mobile') {
-  const sections = [];
-  const seen = new Set(); // 중복 type 방지 (같은 구좌가 여러 번 등장 시 첫 번째 순서 유지)
-  let order = 1;
+  // 모든 구좌를 HTML 내 등장 위치(byte offset)로 모은 뒤 한 번에 정렬한다.
+  // (과거 버그: 파워링크→block-id→플레이스를 단계별로 push해서, data-block-id가 없는
+  //  플레이스(place-app-root)가 실제 위치와 무관하게 항상 맨 끝으로 밀렸다.
+  //  실제 SERP에선 플레이스가 상단(파워링크 다음)에 오는 경우가 많아 순서가 어긋났음.)
+  const candidates = []; // { offset, type, label, count }
+  const seen = new Set(); // 중복 type 방지 (같은 구좌가 여러 번 등장 시 첫 위치만)
 
-  // 1) 파워링크 광고 — 영역 컨테이너(id=power_link_body)가 있으면, 그 안의 개별 광고 카드 수를 카운트
-  //    모바일은 카드마다 data-sv-log="pwl" 마커, PC는 lst js-hover-item 카드(마커가 다름).
+  // 1) 파워링크 광고 — 컨테이너(id=power_link_body)의 위치 + 광고 카드 수.
+  //    모바일은 카드마다 data-sv-log="pwl", PC는 lst js-hover-item (마커가 다름).
   //    주의: 첫 fetch 시점 노출 광고만 잡히므로 PC/모바일 광고 수는 다를 수 있다.
-  if (html.includes('id="power_link_body"') || html.includes('power_link')) {
+  const powerlinkOffset = html.indexOf('id="power_link_body"');
+  if (powerlinkOffset !== -1 || html.includes('power_link')) {
     const adCardCount = device === 'pc'
       ? countPcPowerlinkCards(html)
       : countOccurrences(html, 'data-sv-log="pwl"');
     if (adCardCount > 0) {
-      sections.push({ order: order++, type: 'powerlink', label: '파워링크', count: adCardCount });
+      // power_link_body가 없고 'power_link'만 있으면 0 위치로(최상단 취급)
+      candidates.push({ offset: powerlinkOffset === -1 ? 0 : powerlinkOffset, type: 'powerlink', label: '파워링크', count: adCardCount });
       seen.add('powerlink');
     }
   }
 
-  // 2) data-block-id 등장 순서대로 수집
+  // 2) data-block-id 구좌 — 첫 등장 위치 기준
   const blockIdRegex = /data-block-id="([^"]+)"/g;
   let match;
-
   while ((match = blockIdRegex.exec(html)) !== null) {
     const blockId = match[1];
     const mapped = resolveBlockId(blockId);
     const type = mapped.type;
 
-    if (seen.has(type)) continue; // 이미 처리한 구좌는 스킵 (첫 등장 순서 보존)
+    if (seen.has(type)) continue; // 이미 처리한 구좌는 스킵 (첫 위치 보존)
     seen.add(type);
 
-    // 해당 구좌 카운트: data-block-id="<blockId>" 등장 횟수
     const count = countOccurrences(html, `data-block-id="${blockId}"`);
-    sections.push({ order: order++, type, label: mapped.label, count });
+    candidates.push({ offset: match.index, type, label: mapped.label, count });
   }
 
-  // 3) place-app-root (플레이스) — data-block-id에 잡히지 않는 경우 보완
+  // 3) place-app-root (플레이스) — data-block-id에 안 잡히므로 별도 수집(첫 등장 위치)
   if (!seen.has('place')) {
-    const placeCount = countOccurrences(html, 'place-app-root');
-    if (placeCount > 0) {
-      sections.push({ order: order++, type: 'place', label: '플레이스', count: placeCount });
+    const placeOffset = html.indexOf('place-app-root');
+    if (placeOffset !== -1) {
+      const placeCount = countOccurrences(html, 'place-app-root');
+      candidates.push({ offset: placeOffset, type: 'place', label: '플레이스', count: placeCount });
       seen.add('place');
     }
   }
 
-  return sections;
+  // 4) 등장 위치 순으로 정렬 후 order 부여
+  candidates.sort((a, b) => a.offset - b.offset);
+  return candidates.map((c, i) => ({ order: i + 1, type: c.type, label: c.label, count: c.count }));
 }
 
 function resolveBlockId(blockId) {
