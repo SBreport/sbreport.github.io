@@ -149,6 +149,9 @@ const completedPlaceIds = ref<Set<number>>(new Set())
 const csvLoading = ref(false)
 const csvProgress = ref<{ current: number; total: number } | null>(null)
 
+// 수집 이력 패널 토글
+const showHistory = ref(false)
+
 // 삭제
 const deleteConfirmOpen = ref(false)
 const deleteLoading = ref(false)
@@ -364,8 +367,13 @@ function selectPlace(place: Place) {
   selectedPlace.value = place
   currentPage.value = 1
   collectToast.value = null
+  showHistory.value = false
   fetchReviews(place.id)
   fetchCollections(place.id)
+}
+
+function toggleHistory() {
+  showHistory.value = !showHistory.value
 }
 
 function stopBackfill() {
@@ -960,7 +968,7 @@ onUnmounted(() => {
                 리뷰 {{ place.total_reviews != null ? place.total_reviews.toLocaleString('ko-KR') : '—' }}
               </span>
               <span class="text-xs text-gray-300">·</span>
-              <span class="text-xs text-gray-400">{{ formatDate(place.last_collected_at) }}</span>
+              <span class="text-xs text-gray-400">갱신: {{ place.last_collected_at ? formatDate(place.last_collected_at) : '전' }}</span>
             </div>
           </li>
         </ul>
@@ -973,75 +981,108 @@ onUnmounted(() => {
         <div class="flex-[3] min-h-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden">
 
           <!-- 헤더 -->
-          <div class="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
-            <span class="text-xs font-medium text-gray-600">
-              <template v-if="selectedPlace">
-                {{ placeName(selectedPlace) }}
-                <span v-if="reviewsStatus === 'done'" class="font-normal text-gray-400 ml-1">
-                  총 {{ selectedPlace.total_reviews != null ? selectedPlace.total_reviews.toLocaleString('ko-KR') : '—' }}건 중 {{ reviewsTotal.toLocaleString('ko-KR') }}건 보유
-                </span>
-              </template>
-              <template v-else>리뷰</template>
-            </span>
-            <div class="flex items-center gap-2">
-              <!-- 지금 수집 버튼 -->
-              <UButton
-                v-if="selectedPlace"
-                label="지금 수집"
-                size="xs"
-                color="primary"
-                variant="soft"
-                icon="i-heroicons-arrow-down-circle"
-                :loading="collectLoading"
-                :disabled="backfillRunning"
-                @click="collectNow"
-              />
-              <!-- 전체 수집(백필) 버튼 -->
-              <template v-if="selectedPlace">
-                <!-- 완료 상태 -->
+          <div class="shrink-0 flex flex-col border-b border-gray-200 bg-gray-50">
+            <!-- 헤더 행 1: 이름 + 버튼들 -->
+            <div class="flex items-center justify-between px-3 py-2">
+              <span class="text-xs font-medium text-gray-600">
+                <template v-if="selectedPlace">
+                  {{ placeName(selectedPlace) }}
+                  <span v-if="reviewsStatus === 'done'" class="font-normal text-gray-400 ml-1">
+                    총 {{ selectedPlace.total_reviews != null ? selectedPlace.total_reviews.toLocaleString('ko-KR') : '—' }}건 중 {{ reviewsTotal.toLocaleString('ko-KR') }}건 보유
+                  </span>
+                </template>
+                <template v-else>리뷰</template>
+              </span>
+              <div class="flex items-center gap-2">
+                <!-- 지금 수집 버튼 -->
                 <UButton
-                  v-if="backfillStatus === 'done'"
-                  label="전체 수집 완료"
+                  v-if="selectedPlace"
+                  label="지금 수집"
                   size="xs"
-                  color="neutral"
-                  variant="outline"
-                  icon="i-heroicons-check-circle"
-                  disabled
-                />
-                <!-- 수집 중: 멈춤 버튼 -->
-                <UButton
-                  v-else-if="backfillRunning"
-                  label="수집 중... (멈춤)"
-                  size="xs"
-                  color="warning"
+                  color="primary"
                   variant="soft"
-                  icon="i-heroicons-pause-circle"
-                  @click="stopBackfill"
+                  icon="i-heroicons-arrow-down-circle"
+                  :loading="collectLoading"
+                  :disabled="backfillRunning"
+                  @click="collectNow"
                 />
-                <!-- 기본 / 이어하기 버튼 -->
+                <!-- 전체 수집(백필) 버튼 -->
+                <template v-if="selectedPlace">
+                  <!-- 완료 상태 -->
+                  <UButton
+                    v-if="backfillStatus === 'done'"
+                    label="전체 수집 완료"
+                    size="xs"
+                    color="neutral"
+                    variant="outline"
+                    icon="i-heroicons-check-circle"
+                    disabled
+                  />
+                  <!-- 수집 중: 멈춤 버튼 -->
+                  <UButton
+                    v-else-if="backfillRunning"
+                    label="수집 중... (멈춤)"
+                    size="xs"
+                    color="warning"
+                    variant="soft"
+                    icon="i-heroicons-pause-circle"
+                    @click="stopBackfill"
+                  />
+                  <!-- 기본 / 이어하기 버튼 -->
+                  <UButton
+                    v-else
+                    :label="backfillStatus === 'idle' ? '전체 수집' : '이어서 수집'"
+                    size="xs"
+                    color="neutral"
+                    variant="outline"
+                    icon="i-heroicons-archive-box-arrow-down"
+                    :disabled="collectLoading"
+                    @click="backfillAll"
+                  />
+                </template>
+                <!-- CSV 다운로드 버튼 -->
                 <UButton
-                  v-else
-                  :label="backfillStatus === 'idle' ? '전체 수집' : '이어서 수집'"
+                  v-if="reviewsStatus === 'done' && reviewsTotal > 0"
+                  :label="csvLoading ? (csvProgress ? `${csvProgress.current}/${csvProgress.total}` : '받는 중...') : 'CSV'"
                   size="xs"
                   color="neutral"
                   variant="outline"
-                  icon="i-heroicons-archive-box-arrow-down"
-                  :disabled="collectLoading"
-                  @click="backfillAll"
+                  icon="i-heroicons-arrow-down-tray"
+                  :loading="csvLoading"
+                  :disabled="csvLoading"
+                  @click="exportCsv"
                 />
-              </template>
-              <!-- CSV 다운로드 버튼 -->
-              <UButton
-                v-if="reviewsStatus === 'done' && reviewsTotal > 0"
-                :label="csvLoading ? (csvProgress ? `${csvProgress.current}/${csvProgress.total}` : '받는 중...') : 'CSV'"
-                size="xs"
-                color="neutral"
-                variant="outline"
-                icon="i-heroicons-arrow-down-tray"
-                :loading="csvLoading"
-                :disabled="csvLoading"
-                @click="exportCsv"
-              />
+              </div>
+            </div>
+
+            <!-- 헤더 행 2: 마지막 갱신 요약 + 수집이력 토글 + 자동 갱신 안내 -->
+            <div class="flex items-center justify-between px-3 pb-1.5 gap-3">
+              <!-- 마지막 갱신 요약 + 수집이력 토글 -->
+              <div class="flex items-center gap-1.5 min-w-0">
+                <template v-if="selectedPlace">
+                  <span class="text-xs text-gray-400">
+                    갱신:
+                    <span class="tabular-nums">{{ selectedPlace.last_collected_at ? formatDateTime(selectedPlace.last_collected_at) : '갱신 전' }}</span>
+                  </span>
+                  <span class="text-gray-300 text-xs">·</span>
+                  <!-- TODO: 지점별 자동갱신 on/off (다음 단계) -->
+                  <button
+                    class="text-xs text-primary-600 hover:text-primary-800 transition-colors flex items-center gap-0.5 whitespace-nowrap"
+                    @click="toggleHistory"
+                  >
+                    수집 이력
+                    <UIcon
+                      :name="showHistory ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-right'"
+                      class="w-3 h-3"
+                    />
+                  </button>
+                </template>
+              </div>
+              <!-- 자동 갱신 안내 -->
+              <div class="flex items-center gap-1 shrink-0 text-gray-400">
+                <UIcon name="i-heroicons-information-circle" class="w-3.5 h-3.5 shrink-0" />
+                <span class="text-xs">매일 새벽 3시(KST) 등록된 플레이스의 새 리뷰가 자동 수집됩니다.</span>
+              </div>
             </div>
           </div>
 
@@ -1216,42 +1257,53 @@ onUnmounted(() => {
           </template>
         </div>
 
-        <!-- 우측 하단: 수집 이력 패널 (flex-[1], flex 분배) -->
+        <!-- 우측 하단: 수집 이력 패널 (토글, 최대 1/3 높이) -->
         <div
-          v-if="selectedPlace"
-          class="flex-[1] min-h-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden"
+          v-if="selectedPlace && showHistory"
+          class="shrink-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden"
+          style="max-height: 34%"
         >
           <!-- 헤더 -->
-          <div class="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
+          <div class="shrink-0 flex items-center justify-between px-3 py-1.5 border-b border-gray-200 bg-gray-50">
             <span class="text-xs font-medium text-gray-600">수집 이력</span>
-            <UButton
-              icon="i-heroicons-arrow-path"
-              size="xs"
-              color="neutral"
-              variant="ghost"
-              :loading="collectionsStatus === 'loading'"
-              aria-label="이력 새로고침"
-              @click="selectedPlace && fetchCollections(selectedPlace.id)"
-            />
+            <div class="flex items-center gap-1">
+              <UButton
+                icon="i-heroicons-arrow-path"
+                size="xs"
+                color="neutral"
+                variant="ghost"
+                :loading="collectionsStatus === 'loading'"
+                aria-label="이력 새로고침"
+                @click="selectedPlace && fetchCollections(selectedPlace.id)"
+              />
+              <UButton
+                icon="i-heroicons-chevron-down"
+                size="xs"
+                color="neutral"
+                variant="ghost"
+                aria-label="이력 접기"
+                @click="showHistory = false"
+              />
+            </div>
           </div>
 
           <!-- Loading -->
-          <div v-if="collectionsStatus === 'loading'" class="flex-1 flex items-center justify-center py-4">
+          <div v-if="collectionsStatus === 'loading'" class="flex items-center justify-center py-4">
             <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 text-gray-400 animate-spin" />
           </div>
 
           <!-- Error -->
-          <div v-else-if="collectionsStatus === 'error'" class="flex-1 flex items-center justify-center py-4">
+          <div v-else-if="collectionsStatus === 'error'" class="flex items-center justify-center py-4">
             <p class="text-xs text-red-500">{{ collectionsError }}</p>
           </div>
 
           <!-- Empty -->
-          <div v-else-if="collectionsStatus === 'done' && collectionEvents.length === 0" class="flex-1 flex items-center justify-center py-4">
+          <div v-else-if="collectionsStatus === 'done' && collectionEvents.length === 0" class="flex items-center justify-center py-4">
             <p class="text-xs text-gray-400">아직 수집 이력이 없습니다</p>
           </div>
 
           <!-- Success: 이력 표 -->
-          <div v-else class="flex-1 min-h-0 overflow-y-auto">
+          <div v-else class="overflow-y-auto">
             <table class="w-full text-xs border-collapse">
               <thead class="sticky top-0 z-10 bg-gray-50">
                 <tr>
