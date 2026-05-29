@@ -49,6 +49,16 @@ const inputText = ref('')
 const rows = ref<Row[]>([])
 const isAnalyzing = ref(false)
 
+type ViewMode = 'mobile' | 'pc' | 'both'
+
+const VIEW_MODE_OPTIONS: { value: ViewMode; label: string }[] = [
+  { value: 'mobile', label: '모바일' },
+  { value: 'pc', label: 'PC' },
+  { value: 'both', label: '둘 다' },
+]
+
+const viewMode = ref<ViewMode>('mobile')
+
 type SortKey = 'keyword' | 'source' | 'total' | 'competition'
 type SortDir = 'asc' | 'desc'
 
@@ -63,6 +73,10 @@ function handleSort(key: SortKey) {
     sortDir.value = 'desc'
   }
 }
+
+watch(viewMode, (val) => {
+  if (typeof window !== 'undefined') localStorage.setItem('sb_serp_view', val)
+})
 
 const optAutocomplete = ref(false)
 const optRelated = ref(false)
@@ -410,9 +424,63 @@ const sortedRows = computed(() => {
   return arr
 })
 
+// ─── 구좌 병합 헬퍼 (상세 패널 비교 표용) ────────────────────────────────────
+
+interface MergedSection {
+  type: string
+  label: string
+  mobileOrder: number | null
+  pcOrder: number | null
+  mobileCount: number | null | undefined
+  pcCount: number | null | undefined
+}
+
+function mergeSections(mobileSections: Section[], pcSections: Section[]): MergedSection[] {
+  const map = new Map<string, MergedSection>()
+
+  for (const s of mobileSections) {
+    map.set(s.type, {
+      type: s.type,
+      label: s.label,
+      mobileOrder: s.order,
+      pcOrder: null,
+      mobileCount: s.count,
+      pcCount: undefined,
+    })
+  }
+  for (const s of pcSections) {
+    const existing = map.get(s.type)
+    if (existing) {
+      existing.pcOrder = s.order
+      existing.pcCount = s.count
+    } else {
+      map.set(s.type, {
+        type: s.type,
+        label: s.label,
+        mobileOrder: null,
+        pcOrder: s.order,
+        mobileCount: undefined,
+        pcCount: s.count,
+      })
+    }
+  }
+
+  return [...map.values()].sort((a, b) => {
+    const ao = a.mobileOrder ?? (a.pcOrder != null ? a.pcOrder + 1000 : 9999)
+    const bo = b.mobileOrder ?? (b.pcOrder != null ? b.pcOrder + 1000 : 9999)
+    return ao - bo
+  })
+}
+
 // ─── URL ?q= 자동 실행 ────────────────────────────────────────────────────────
 
 onMounted(async () => {
+  // viewMode 복원
+  const saved = localStorage.getItem('sb_serp_view') as ViewMode | null
+  if (saved && (saved === 'mobile' || saved === 'pc' || saved === 'both')) {
+    viewMode.value = saved
+  }
+
   const q = useRoute().query.q
   if (typeof q === 'string' && q.trim()) {
     inputText.value = q.trim()
@@ -483,6 +551,20 @@ onMounted(async () => {
         <div class="shrink-0 flex items-center justify-between mb-2">
           <p class="text-xs text-gray-500">{{ rows.length }}개 키워드 분석</p>
           <div class="flex items-center gap-2">
+            <!-- 표시 모드 토글 -->
+            <div class="inline-flex items-center rounded border border-gray-200 overflow-hidden text-xs">
+              <button
+                v-for="opt in VIEW_MODE_OPTIONS"
+                :key="opt.value"
+                class="px-2 py-1 leading-none transition-colors"
+                :class="viewMode === opt.value
+                  ? 'bg-gray-800 text-white font-medium'
+                  : 'bg-white text-gray-500 hover:bg-gray-50'"
+                @click="viewMode = opt.value"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
             <UButton
               v-if="hasDoneRows"
               label="CSV 내보내기"
@@ -611,9 +693,39 @@ onMounted(async () => {
                   <!-- 완료 -->
                   <template v-else-if="row.status === 'done' && row.result">
                     <div class="flex flex-col gap-1.5 py-0.5">
-                      <!-- 모바일 -->
-                      <div class="flex items-start gap-1.5">
-                        <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400">모바일</span>
+                      <!-- both: 모바일 + PC 두 줄 -->
+                      <template v-if="viewMode === 'both'">
+                        <div class="flex items-start gap-1.5">
+                          <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400">모바일</span>
+                          <div v-if="row.result.sections.length === 0" class="text-xs text-gray-400">구좌 정보 없음</div>
+                          <div v-else class="flex flex-wrap gap-1">
+                            <span
+                              v-for="section in [...row.result.sections].sort((a, b) => a.order - b.order)"
+                              :key="'m' + section.order"
+                              class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
+                              :class="sectionColorClass(section.type)"
+                            >
+                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
+                            </span>
+                          </div>
+                        </div>
+                        <div class="flex items-start gap-1.5">
+                          <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400">PC</span>
+                          <div v-if="!(row.result.pc_sections && row.result.pc_sections.length)" class="text-xs text-gray-400">구좌 정보 없음</div>
+                          <div v-else class="flex flex-wrap gap-1">
+                            <span
+                              v-for="section in [...row.result.pc_sections].sort((a, b) => a.order - b.order)"
+                              :key="'pc' + section.order"
+                              class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
+                              :class="sectionColorClass(section.type)"
+                            >
+                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
+                            </span>
+                          </div>
+                        </div>
+                      </template>
+                      <!-- mobile 단독 -->
+                      <template v-else-if="viewMode === 'mobile'">
                         <div v-if="row.result.sections.length === 0" class="text-xs text-gray-400">구좌 정보 없음</div>
                         <div v-else class="flex flex-wrap gap-1">
                           <span
@@ -625,10 +737,9 @@ onMounted(async () => {
                             {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
                           </span>
                         </div>
-                      </div>
-                      <!-- PC -->
-                      <div class="flex items-start gap-1.5">
-                        <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400">PC</span>
+                      </template>
+                      <!-- pc 단독 -->
+                      <template v-else>
                         <div v-if="!(row.result.pc_sections && row.result.pc_sections.length)" class="text-xs text-gray-400">구좌 정보 없음</div>
                         <div v-else class="flex flex-wrap gap-1">
                           <span
@@ -640,7 +751,7 @@ onMounted(async () => {
                             {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
                           </span>
                         </div>
-                      </div>
+                      </template>
                     </div>
                   </template>
                 </td>
@@ -728,11 +839,60 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- 구좌 구성: 모바일 + PC -->
-          <div class="flex flex-col gap-4">
-            <!-- 모바일 -->
-            <div>
-              <p class="text-xs text-gray-400 mb-2 font-medium">구좌 구성 <span class="text-gray-300">· 모바일 SERP 순서</span></p>
+          <!-- 구좌 구성 -->
+          <div>
+            <p class="text-xs text-gray-400 mb-2 font-medium">구좌 구성</p>
+
+            <!-- both: 2열 비교 표 -->
+            <template v-if="viewMode === 'both'">
+              <div
+                v-if="!selectedRow.result.sections.length && !(selectedRow.result.pc_sections && selectedRow.result.pc_sections.length)"
+                class="text-sm text-gray-400"
+              >
+                구좌 정보 없음
+              </div>
+              <table v-else class="w-full text-xs border-collapse">
+                <thead>
+                  <tr class="border-b border-gray-200">
+                    <th class="py-1 pr-2 text-left text-gray-500 font-medium w-28">구좌</th>
+                    <th class="py-1 px-2 text-center text-gray-500 font-medium w-16">모바일</th>
+                    <th class="py-1 pl-2 text-center text-gray-500 font-medium w-16">PC</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in mergeSections(
+                      selectedRow.result.sections,
+                      selectedRow.result.pc_sections ?? []
+                    )"
+                    :key="row.type"
+                    class="border-b border-gray-100 last:border-0"
+                  >
+                    <td class="py-1 pr-2 align-middle">
+                      <span
+                        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium leading-none"
+                        :class="sectionColorClass(row.type)"
+                      >{{ row.label }}</span>
+                    </td>
+                    <td class="py-1 px-2 text-center align-middle tabular-nums text-gray-700">
+                      <template v-if="row.mobileOrder != null">
+                        {{ circledNumber(row.mobileOrder) }}<template v-if="row.mobileCount != null"> {{ row.mobileCount }}</template>
+                      </template>
+                      <template v-else><span class="text-gray-300">-</span></template>
+                    </td>
+                    <td class="py-1 pl-2 text-center align-middle tabular-nums text-gray-700">
+                      <template v-if="row.pcOrder != null">
+                        {{ circledNumber(row.pcOrder) }}<template v-if="row.pcCount != null"> {{ row.pcCount }}</template>
+                      </template>
+                      <template v-else><span class="text-gray-300">-</span></template>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </template>
+
+            <!-- mobile 단독 세로 목록 -->
+            <template v-else-if="viewMode === 'mobile'">
               <div
                 v-if="selectedRow.result.sections.length === 0"
                 class="text-sm text-gray-400"
@@ -756,10 +916,10 @@ onMounted(async () => {
                   </span>
                 </div>
               </div>
-            </div>
-            <!-- PC -->
-            <div>
-              <p class="text-xs text-gray-400 mb-2 font-medium">구좌 구성 <span class="text-gray-300">· PC SERP 순서</span></p>
+            </template>
+
+            <!-- pc 단독 세로 목록 -->
+            <template v-else>
               <div
                 v-if="!(selectedRow.result.pc_sections && selectedRow.result.pc_sections.length)"
                 class="text-sm text-gray-400"
@@ -783,7 +943,7 @@ onMounted(async () => {
                   </span>
                 </div>
               </div>
-            </div>
+            </template>
           </div>
 
           <!-- 연관 검색어 -->
