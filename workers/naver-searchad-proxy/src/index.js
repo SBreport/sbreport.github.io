@@ -1918,12 +1918,14 @@ async function backfillPlaceChunk(env, placeRow, opts = {}) {
        SET backfill_cursor     = ?,
            backfill_done       = ?,
            backfill_updated_at = ?,
+           last_collected_at   = ?,
            total_reviews       = COALESCE(?, total_reviews),
            name                = COALESCE(?, name)
        WHERE id = ?`
     ).bind(
       done ? null : after,
       done ? 1 : 0,
+      now,
       now,
       totalServer,
       firstBusinessName,
