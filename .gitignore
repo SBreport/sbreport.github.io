@@ -14,3 +14,7 @@ _세션/
 # 확장 패키징 산출물 (ZIP은 git 포함 금지 — 외부 호스팅 사용)
 *.zip
 *.crx
+
+# 조사·디버그용 임시 SERP 덤프 (OneDrive가 되살려도 git 제외)
+pc_serp_*.html
+Program.lnk
