@@ -26,11 +26,13 @@ const BLOCK_ID_MAP = [
   { pattern: /^news\//i,                    type: 'news',          label: '뉴스' },
   { pattern: /^video\//i,                   type: 'video',         label: '동영상' },
   { pattern: /^clip\//i,                    type: 'clip',          label: '클립' },
+  { pattern: /^shortents\//i,               type: 'shortents',     label: '숏텐츠' },
   { pattern: /^qra\//i,                     type: 'qra',           label: '함께 많이 찾는' },
   { pattern: /^ugc\/.*influencer/i,         type: 'influencer',    label: '인플루언서' },
   { pattern: /^ugc\/.*powercontents/i,      type: 'powercontents', label: '파워컨텐츠' },
   // 구체 패턴(influencer/powercontents)이 먼저 매칭되도록 위에. default는 일반 UGC 통합.
   { pattern: /^ugc\/.*popular_article/i,    type: 'popular_article', label: '인기글' },
+  { pattern: /^ugc\/.*snippet/i,            type: 'ugc_snippet',   label: '스마트블록' },
   { pattern: /^ugc\/.*default/i,            type: 'ugc',           label: '스마트블록' },
 ];
 
@@ -250,7 +252,7 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
   const normalizedKeyword = rawKeyword.trim().replace(/\s+/g, '');
 
   // 캐시 확인 (24h TTL)
-  const cacheUrl = `https://cache.internal/v6/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
+  const cacheUrl = `https://cache.internal/v7/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
   const cache = caches.default;
 
   const cached = await cache.match(cacheUrl);
@@ -269,10 +271,11 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
     return jsonResponse({ ...cachedBody, history_id }, 200, corsHeaders, { 'X-Cache': 'HIT' });
   }
 
-  // 검색광고 API + m.search.naver.com 병렬 호출
-  const [adResult, searchResult] = await Promise.allSettled([
+  // 검색광고 API + m.search(모바일) + search(PC) 병렬 호출
+  const [adResult, mobileResult, pcResult] = await Promise.allSettled([
     fetchKeywordVolume([normalizedKeyword], env),
     fetchNaverSearch(rawKeyword.trim()),
+    fetchNaverSearchPc(rawKeyword.trim()),
   ]);
 
   // 검색광고 API 실패 → 502
@@ -296,20 +299,20 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
 
   // m.search 실패 → 구좌 빈 배열로 grace degrade
   let sections = [];
+  let pcSections = [];
   let relatedKeywords = [];
 
-  if (searchResult.status === 'fulfilled') {
-    sections = searchResult.value.sections;
-    // 연관 검색어: adNormalized에서 입력 키워드 외의 항목들 (네이버 API가 연관 키워드를 함께 반환)
-    relatedKeywords = adNormalized
-      .filter((k) => k.keyword !== normalizedKeyword)
-      .map((k) => ({ keyword: k.keyword, total: k.total }));
-  } else {
-    // m.search fetch 실패: 연관 검색어도 없음, sections 빈 배열
-    relatedKeywords = adNormalized
-      .filter((k) => k.keyword !== normalizedKeyword)
-      .map((k) => ({ keyword: k.keyword, total: k.total }));
+  if (mobileResult.status === 'fulfilled') {
+    sections = mobileResult.value.sections;
   }
+  if (pcResult.status === 'fulfilled') {
+    pcSections = pcResult.value.sections;
+  }
+
+  // 연관 검색어: adNormalized에서 입력 키워드 외의 항목들
+  relatedKeywords = adNormalized
+    .filter((k) => k.keyword !== normalizedKeyword)
+    .map((k) => ({ keyword: k.keyword, total: k.total }));
 
   const payload = {
     keyword: rawKeyword.trim(),
@@ -319,6 +322,7 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
     competition: mapCompetition(adKeyword.competition),
     related_keywords: relatedKeywords,
     sections,
+    pc_sections: pcSections,
     fetched_at: new Date().toISOString(),
   };
 
@@ -370,16 +374,41 @@ async function fetchNaverSearch(keyword) {
   return { sections };
 }
 
-function parseNaverSections(html) {
+async function fetchNaverSearchPc(keyword) {
+  const encodedKeyword = encodeURIComponent(keyword);
+  const url = `https://search.naver.com/search.naver?query=${encodedKeyword}`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    },
+  });
+
+  if (!res.ok) {
+    throw new UpstreamError(res.status, `search(pc) fetch failed: ${res.status}`);
+  }
+
+  const html = await res.text();
+  const sections = parseNaverSections(html, 'pc');
+  return { sections };
+}
+
+function parseNaverSections(html, device = 'mobile') {
   const sections = [];
   const seen = new Set(); // 중복 type 방지 (같은 구좌가 여러 번 등장 시 첫 번째 순서 유지)
   let order = 1;
 
   // 1) 파워링크 광고 — 영역 컨테이너(id=power_link_body)가 있으면, 그 안의 개별 광고 카드 수를 카운트
-  //    카드 마커 `data-sv-log="pwl"`은 광고 카드 각각에 1번씩 부여됨 (모바일 SERP 기준).
-  //    주의: 모바일 SERP는 첫 fetch 시점에 광고 일부만 노출 → PC SERP와 광고 수가 다를 수 있다.
+  //    모바일은 카드마다 data-sv-log="pwl" 마커, PC는 lst js-hover-item 카드(마커가 다름).
+  //    주의: 첫 fetch 시점 노출 광고만 잡히므로 PC/모바일 광고 수는 다를 수 있다.
   if (html.includes('id="power_link_body"') || html.includes('power_link')) {
-    const adCardCount = countOccurrences(html, 'data-sv-log="pwl"');
+    const adCardCount = device === 'pc'
+      ? countPcPowerlinkCards(html)
+      : countOccurrences(html, 'data-sv-log="pwl"');
     if (adCardCount > 0) {
       sections.push({ order: order++, type: 'powerlink', label: '파워링크', count: adCardCount });
       seen.add('powerlink');
@@ -434,6 +463,16 @@ function countOccurrences(str, sub) {
     pos += sub.length;
   }
   return count;
+}
+
+// PC SERP 파워링크 카드 수: power_link_body 컨테이너부터 첫 구좌(data-block-id) 전까지 구간에서
+// 광고 카드(li.lst.js-hover-item) 등장 횟수를 센다. PC는 모바일의 data-sv-log="pwl" 마커가 없다.
+function countPcPowerlinkCards(html) {
+  const start = html.indexOf('id="power_link_body"');
+  if (start === -1) return 0;
+  const blockIdPos = html.indexOf('data-block-id=', start);
+  const end = blockIdPos === -1 ? html.length : blockIdPos;
+  return countOccurrences(html.slice(start, end), 'lst js-hover-item');
 }
 
 // --- 경쟁도 한국어 변환 ---

@@ -26,6 +26,7 @@ interface SearchResult {
   competition: string | null
   related_keywords: RelatedKeyword[]
   sections: Section[]
+  pc_sections?: Section[]
 }
 
 type RowStatus = 'pending' | 'loading' | 'done' | 'error'
@@ -128,6 +129,8 @@ function sectionColorClass(type: string): string {
     ai_briefing:   'bg-indigo-100 text-indigo-700',
     popular_article: 'bg-yellow-100 text-yellow-700',
     ugc:           'bg-lime-100 text-lime-700',
+    ugc_snippet:   'bg-lime-100 text-lime-700',
+    shortents:     'bg-rose-100 text-rose-700',
     news:          'bg-gray-100 text-gray-600',
     web:           'bg-gray-100 text-gray-600',
     qra:           'bg-cyan-100 text-cyan-700',
@@ -307,7 +310,8 @@ function exportCsv() {
     '모바일검색량',
     '합계',
     '경쟁도',
-    '구좌구성',
+    '구좌구성(모바일)',
+    '구좌구성(PC)',
     '파워링크수',
     '플레이스수',
     '블로그수',
@@ -330,6 +334,12 @@ function exportCsv() {
       .map(s => `${circledNumber(s.order)}${s.label}${s.count != null ? s.count : ''}`)
       .join(' ')
 
+    const pcSectionText = (r.pc_sections ?? [])
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .map(s => `${circledNumber(s.order)}${s.label}${s.count != null ? s.count : ''}`)
+      .join(' ')
+
     const countOf = (type: string) => {
       const s = r.sections.find(sec => sec.type === type)
       return s?.count ?? 0
@@ -342,6 +352,7 @@ function exportCsv() {
       escape(r.total ?? ((r.pc_volume ?? 0) + (r.mobile_volume ?? 0))),
       escape(competitionLabel(r.competition)),
       escape(sectionText),
+      escape(pcSectionText),
       escape(countOf('powerlink')),
       escape(countOf('place')),
       escape(countOf('blog')),
@@ -599,18 +610,37 @@ onMounted(async () => {
                   </template>
                   <!-- 완료 -->
                   <template v-else-if="row.status === 'done' && row.result">
-                    <div v-if="row.result.sections.length === 0" class="text-xs text-gray-400 py-0.5">
-                      구좌 정보 없음
-                    </div>
-                    <div v-else class="flex flex-wrap gap-1 py-0.5">
-                      <span
-                        v-for="section in [...row.result.sections].sort((a, b) => a.order - b.order)"
-                        :key="section.order"
-                        class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
-                        :class="sectionColorClass(section.type)"
-                      >
-                        {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
-                      </span>
+                    <div class="flex flex-col gap-1.5 py-0.5">
+                      <!-- 모바일 -->
+                      <div class="flex items-start gap-1.5">
+                        <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400">모바일</span>
+                        <div v-if="row.result.sections.length === 0" class="text-xs text-gray-400">구좌 정보 없음</div>
+                        <div v-else class="flex flex-wrap gap-1">
+                          <span
+                            v-for="section in [...row.result.sections].sort((a, b) => a.order - b.order)"
+                            :key="'m' + section.order"
+                            class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
+                            :class="sectionColorClass(section.type)"
+                          >
+                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
+                          </span>
+                        </div>
+                      </div>
+                      <!-- PC -->
+                      <div class="flex items-start gap-1.5">
+                        <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400">PC</span>
+                        <div v-if="!(row.result.pc_sections && row.result.pc_sections.length)" class="text-xs text-gray-400">구좌 정보 없음</div>
+                        <div v-else class="flex flex-wrap gap-1">
+                          <span
+                            v-for="section in [...row.result.pc_sections].sort((a, b) => a.order - b.order)"
+                            :key="'pc' + section.order"
+                            class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
+                            :class="sectionColorClass(section.type)"
+                          >
+                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </template>
                 </td>
@@ -698,30 +728,60 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- 구좌 구성 세로 펼침 -->
-          <div>
-            <p class="text-xs text-gray-400 mb-2 font-medium">구좌 구성 <span class="text-gray-300">· 모바일 SERP 순서</span></p>
-            <div
-              v-if="selectedRow.result.sections.length === 0"
-              class="text-sm text-gray-400"
-            >
-              구좌 정보 없음
-            </div>
-            <div v-else class="flex flex-col gap-2">
+          <!-- 구좌 구성: 모바일 + PC -->
+          <div class="flex flex-col gap-4">
+            <!-- 모바일 -->
+            <div>
+              <p class="text-xs text-gray-400 mb-2 font-medium">구좌 구성 <span class="text-gray-300">· 모바일 SERP 순서</span></p>
               <div
-                v-for="section in [...selectedRow.result.sections].sort((a, b) => a.order - b.order)"
-                :key="section.order"
-                class="flex items-center gap-2"
+                v-if="selectedRow.result.sections.length === 0"
+                class="text-sm text-gray-400"
               >
-                <span
-                  class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-medium leading-none shrink-0"
-                  :class="sectionColorClass(section.type)"
+                구좌 정보 없음
+              </div>
+              <div v-else class="flex flex-col gap-2">
+                <div
+                  v-for="section in [...selectedRow.result.sections].sort((a, b) => a.order - b.order)"
+                  :key="'m' + section.order"
+                  class="flex items-center gap-2"
                 >
-                  {{ circledNumber(section.order) }} {{ section.label }}
-                </span>
-                <span v-if="section.count != null" class="text-xs text-gray-500 tabular-nums">
-                  {{ section.count }}개
-                </span>
+                  <span
+                    class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-medium leading-none shrink-0"
+                    :class="sectionColorClass(section.type)"
+                  >
+                    {{ circledNumber(section.order) }} {{ section.label }}
+                  </span>
+                  <span v-if="section.count != null" class="text-xs text-gray-500 tabular-nums">
+                    {{ section.count }}개
+                  </span>
+                </div>
+              </div>
+            </div>
+            <!-- PC -->
+            <div>
+              <p class="text-xs text-gray-400 mb-2 font-medium">구좌 구성 <span class="text-gray-300">· PC SERP 순서</span></p>
+              <div
+                v-if="!(selectedRow.result.pc_sections && selectedRow.result.pc_sections.length)"
+                class="text-sm text-gray-400"
+              >
+                구좌 정보 없음
+              </div>
+              <div v-else class="flex flex-col gap-2">
+                <div
+                  v-for="section in [...selectedRow.result.pc_sections].sort((a, b) => a.order - b.order)"
+                  :key="'pc' + section.order"
+                  class="flex items-center gap-2"
+                >
+                  <span
+                    class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-medium leading-none shrink-0"
+                    :class="sectionColorClass(section.type)"
+                  >
+                    {{ circledNumber(section.order) }} {{ section.label }}
+                  </span>
+                  <span v-if="section.count != null" class="text-xs text-gray-500 tabular-nums">
+                    {{ section.count }}개
+                  </span>
+                </div>
               </div>
             </div>
           </div>
