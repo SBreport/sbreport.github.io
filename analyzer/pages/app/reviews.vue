@@ -145,9 +145,13 @@ const multiBackfillStatus = ref<'idle' | 'running' | 'done' | 'blocked' | 'error
 const multiBackfillMessage = ref<string | null>(null)
 const completedPlaceIds = ref<Set<number>>(new Set())
 
-// CSV 다운로드
+// CSV 다운로드 (단일)
 const csvLoading = ref(false)
 const csvProgress = ref<{ current: number; total: number } | null>(null)
+
+// CSV 다운로드 (다중)
+const multiCsvLoading = ref(false)
+const multiCsvProgress = ref<{ placeIndex: number; placeTotal: number; rowCount: number } | null>(null)
 
 // 수집 이력 패널 토글
 const showHistory = ref(false)
@@ -576,73 +580,83 @@ watch(currentPage, () => {
 
 // ─── CSV 전체 다운로드 ────────────────────────────────────────────────────────
 
+// 공용 헬퍼: 특정 placeId의 리뷰 전체를 순차 페이지 순회로 수집
+async function fetchAllReviews(placeId: number): Promise<Review[]> {
+  const FETCH_LIMIT = 200
+  const firstRes = await fetch(
+    `${WORKER_BASE}/api/places/${placeId}/reviews?limit=${FETCH_LIMIT}&offset=0`,
+    { headers: authHeaders() },
+  )
+  if (!firstRes.ok) throw new Error(`리뷰 fetch 실패 (${firstRes.status})`)
+  const firstData = await firstRes.json() as { reviews: Review[]; total: number }
+
+  const total = firstData.total
+  const result: Review[] = [...firstData.reviews]
+
+  if (result.length === 0 || result.length >= total) return result
+
+  const maxPages = Math.ceil(total / FETCH_LIMIT) + 5  // 안전 가드
+  let fetchOffset = result.length
+  let pageCount = 1
+
+  while (true) {
+    if (pageCount >= maxPages) break
+    if (result.length >= total) break
+
+    const params = new URLSearchParams({
+      limit: String(FETCH_LIMIT),
+      offset: String(fetchOffset),
+    })
+    const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/reviews?${params}`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) throw new Error(`리뷰 fetch 실패 (${res.status})`)
+    const data = await res.json() as { reviews: Review[]; total: number }
+    const batch = data.reviews
+
+    if (batch.length === 0) break
+
+    result.push(...batch)
+    fetchOffset += batch.length
+    pageCount++
+
+    if (batch.length < FETCH_LIMIT) break
+  }
+
+  return result
+}
+
+// CSV 이스케이프 헬퍼
+function csvEscape(v: string | number | null | undefined): string {
+  const s = String(v ?? '')
+  return s.includes(',') || s.includes('"') || s.includes('\n')
+    ? `"${s.replace(/"/g, '""')}"`
+    : s
+}
+
 async function exportCsv() {
   if (!selectedPlace.value || csvLoading.value) return
   if (reviewsTotal.value === 0) return
 
-  const placeId = selectedPlace.value.id
-  const total = reviewsTotal.value
-  const FETCH_LIMIT = 200
-  const maxPages = Math.ceil(total / FETCH_LIMIT) + 5  // 안전 가드
-
   csvLoading.value = true
-  csvProgress.value = { current: 0, total }
-
-  const allReviews: Review[] = []
+  csvProgress.value = { current: 0, total: reviewsTotal.value }
 
   try {
-    let fetchOffset = 0
-    let pageCount = 0
-
-    while (true) {
-      if (pageCount >= maxPages) break  // 무한루프 방지
-
-      const params = new URLSearchParams({
-        limit: String(FETCH_LIMIT),
-        offset: String(fetchOffset),
-      })
-      const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/reviews?${params}`, {
-        headers: authHeaders(),
-      })
-      if (!res.ok) {
-        throw new Error(`리뷰 fetch 실패 (${res.status})`)
-      }
-      const data = await res.json() as { reviews: Review[]; total: number }
-      const batch = data.reviews
-
-      if (batch.length === 0) break  // 더 없음
-
-      allReviews.push(...batch)
-      csvProgress.value = { current: allReviews.length, total }
-
-      fetchOffset += batch.length
-      pageCount++
-
-      if (batch.length < FETCH_LIMIT) break  // 마지막 페이지
-      if (allReviews.length >= total) break   // total 도달
-    }
+    const allReviews = await fetchAllReviews(selectedPlace.value.id)
+    csvProgress.value = { current: allReviews.length, total: reviewsTotal.value }
 
     if (allReviews.length === 0) return
 
-    // CSV 생성
     const headers = ['작성일', '작성자', '본문', '방문일', '답글여부', '사진여부']
-
-    const escape = (v: string | number | null | undefined): string => {
-      const s = String(v ?? '')
-      return s.includes(',') || s.includes('"') || s.includes('\n')
-        ? `"${s.replace(/"/g, '""')}"`
-        : s
-    }
-
     const csvLines = [headers.join(',')]
     for (const r of allReviews) {
       csvLines.push([
-        escape(formatDate(r.review_created_at)),
-        escape(r.author_nick),
-        escape(r.body),
-        escape(formatDate(r.visited_at)),
-        escape(r.owner_reply ? '있음' : '없음'),
-        escape(r.has_photo === 1 ? '○' : ''),
+        csvEscape(formatDate(r.review_created_at)),
+        csvEscape(r.author_nick),
+        csvEscape(r.body),
+        csvEscape(formatDate(r.visited_at)),
+        csvEscape(r.owner_reply ? '있음' : '없음'),
+        csvEscape(r.has_photo === 1 ? '○' : ''),
       ].join(','))
     }
 
@@ -663,6 +677,85 @@ async function exportCsv() {
   } finally {
     csvLoading.value = false
     csvProgress.value = null
+  }
+}
+
+// 다중 지점 선택 CSV 다운로드
+async function exportMultiCsv() {
+  if (checkedPlaces.value.length === 0 || multiCsvLoading.value) return
+  if (multiBackfillRunning.value) return
+
+  const targets = [...checkedPlaces.value]
+  multiCsvLoading.value = true
+  multiCsvProgress.value = { placeIndex: 0, placeTotal: targets.length, rowCount: 0 }
+
+  const allRows: string[] = []
+  const failedPlaces: string[] = []
+
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      const place = targets[i]
+      multiCsvProgress.value = { placeIndex: i + 1, placeTotal: targets.length, rowCount: allRows.length }
+
+      let placeReviews: Review[]
+      try {
+        placeReviews = await fetchAllReviews(place.id)
+      } catch (e: unknown) {
+        console.warn(`[exportMultiCsv] ${placeName(place)} fetch 실패:`, e)
+        failedPlaces.push(placeName(place))
+        continue
+      }
+
+      for (const r of placeReviews) {
+        allRows.push([
+          csvEscape(placeName(place)),
+          csvEscape(formatDate(r.review_created_at)),
+          csvEscape(r.author_nick),
+          csvEscape(r.body),
+          csvEscape(formatDate(r.visited_at)),
+          csvEscape(r.owner_reply ? '있음' : '없음'),
+          csvEscape(r.has_photo === 1 ? '○' : ''),
+        ].join(','))
+      }
+    }
+
+    if (allRows.length === 0) {
+      if (failedPlaces.length > 0) {
+        collectToast.value = { type: 'error', message: `모든 지점 fetch 실패: ${failedPlaces[0]}` }
+      }
+      return
+    }
+
+    const headers = ['지점명', '작성일', '작성자', '본문', '방문일', '답글여부', '사진여부']
+    const csvLines = [headers.join(','), ...allRows]
+
+    const bom = '﻿'
+    const blob = new Blob([bom + csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const dateStr = new Date().toISOString().slice(0, 10)
+    const n = targets.length
+    a.download = n === 1
+      ? `reviews_${placeName(targets[0]).replace(/[^a-zA-Z0-9가-힣_-]/g, '_')}_${dateStr}.csv`
+      : `reviews_${n}개지점_${dateStr}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+
+    if (failedPlaces.length > 0) {
+      collectToast.value = {
+        type: 'warn',
+        message: `CSV 저장됨 (${allRows.length}건). 일부 실패: ${failedPlaces.join(', ')}`,
+      }
+    }
+  } catch (e: unknown) {
+    collectToast.value = {
+      type: 'error',
+      message: `다중 CSV 다운로드 실패: ${e instanceof Error ? e.message : '알 수 없는 오류'}`,
+    }
+  } finally {
+    multiCsvLoading.value = false
+    multiCsvProgress.value = null
   }
 }
 
@@ -895,6 +988,19 @@ onUnmounted(() => {
             icon="i-heroicons-pause-circle"
             class="w-full"
             @click="stopMultiBackfill"
+          />
+          <UButton
+            :label="multiCsvLoading
+              ? (multiCsvProgress ? `받는 중... (지점 ${multiCsvProgress.placeIndex}/${multiCsvProgress.placeTotal})` : '받는 중...')
+              : `선택 지점 CSV (${checkedPlaces.length})`"
+            size="xs"
+            color="neutral"
+            variant="outline"
+            icon="i-heroicons-arrow-down-tray"
+            class="w-full"
+            :disabled="multiCsvLoading || multiBackfillRunning"
+            :loading="multiCsvLoading"
+            @click="exportMultiCsv"
           />
           <UButton
             :label="`선택 삭제 (${checkedPlaces.length})`"
