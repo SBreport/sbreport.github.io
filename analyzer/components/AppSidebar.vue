@@ -20,6 +20,11 @@ const menuItems = [
     to: '/app/tracking',
     icon: 'i-heroicons-chart-bar',
   },
+  {
+    label: '플레이스 리뷰 수집',
+    to: '/app/reviews',
+    icon: 'i-heroicons-chat-bubble-left-right',
+  },
 ] as const
 
 // 구분선 이후 메뉴
