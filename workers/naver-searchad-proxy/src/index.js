@@ -82,6 +82,21 @@ export default {
       return handleApiExpand(request, env, ctx, corsHeaders);
     }
 
+    // --- 플레이스 리뷰 수집 Phase 1 라우팅 ---
+    if (url.pathname === '/api/places' && request.method === 'POST') {
+      return handleCreatePlace(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/places' && request.method === 'GET') {
+      return handleListPlaces(request, env, corsHeaders);
+    }
+    const reviewsMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/reviews$/);
+    if (reviewsMatch && request.method === 'POST') {
+      return handlePostReviews(request, env, corsHeaders, reviewsMatch[1]);
+    }
+    if (reviewsMatch && request.method === 'GET') {
+      return handleGetReviews(request, env, corsHeaders, reviewsMatch[1]);
+    }
+
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
 };
@@ -919,6 +934,301 @@ async function insertSearchHistory(env, { id, user_id, keyword, pc_volume, mobil
     ).bind(id, user_id, keyword, pc_volume ?? null, mobile_volume ?? null, competition ?? null, sections_json, new Date().toISOString()).run();
   } catch (err) {
     console.error('search_history INSERT failed:', err.message);
+  }
+}
+
+// --- 플레이스 URL에서 placeId/businessType 추출 유틸 ---
+
+/**
+ * 네이버 플레이스 URL에서 placeId와 businessType을 추출한다.
+ * naver.me 단축 URL 해석은 Phase 1 범위 밖 — 호출자가 풀 URL을 제공한다는 전제.
+ * @param {string} rawUrl
+ * @returns {{ placeId: string, businessType: string|null } | null}
+ */
+function extractPlaceInfo(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const u = rawUrl.trim();
+
+  // 패턴 1: map.naver.com/p/entry/place/{id}
+  let m = u.match(/\/entry\/place\/(\d+)/);
+  if (m) return { placeId: m[1], businessType: 'place' };
+
+  // 패턴 2: place.naver.com / pcmap.place.naver.com / m.place.naver.com 의 /{업종}/{id}
+  m = u.match(/(?:place\.naver\.com|pcmap\.place\.naver\.com|m\.place\.naver\.com)\/([a-z]+)\/(\d+)/i);
+  if (m) return { placeId: m[2], businessType: m[1].toLowerCase() };
+
+  // 패턴 3: 일반 /{세그먼트}/{5자리 이상 숫자}
+  m = u.match(/\/([a-z]+)\/(\d{5,})/i);
+  if (m) return { placeId: m[2], businessType: m[1].toLowerCase() };
+
+  // 패턴 4 (폴백): URL에서 6자리 이상 순수 숫자
+  m = u.match(/(\d{6,})/);
+  if (m) return { placeId: m[1], businessType: null };
+
+  return null;
+}
+
+// --- 플레이스 리뷰 수집 Phase 1 핸들러 ---
+
+/**
+ * POST /api/places — 플레이스 등록 (UPSERT)
+ * body: { url } 또는 { place_id, business_type, name }
+ */
+async function handleCreatePlace(request, env, corsHeaders) {
+  // 로컬 백필 스크립트(서버-서버, Origin 없음)가 호출할 수 있으므로 corsHeaders가 null이어도 진행.
+  // 보안 게이트는 JWT(requireApprovedUser).
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  let placeId, businessType;
+
+  if (body.url) {
+    // URL로부터 placeId·businessType 추출
+    const info = extractPlaceInfo(body.url);
+    if (!info) {
+      return jsonResponse(
+        { error: 'invalid_url', message: '플레이스 URL에서 placeId를 추출할 수 없습니다' },
+        400,
+        cors
+      );
+    }
+    placeId = info.placeId;
+    businessType = info.businessType;
+  } else if (body.place_id) {
+    // place_id 직접 전달
+    placeId = body.place_id;
+    businessType = body.business_type ?? null;
+  } else {
+    return jsonResponse(
+      { error: 'missing_param', message: 'url 또는 place_id 중 하나가 필요합니다' },
+      400,
+      cors
+    );
+  }
+
+  const name = body.name ?? null;
+  const placeUrl = body.url ?? null;
+  const now = new Date().toISOString();
+  const newId = crypto.randomUUID();
+
+  try {
+    // UPSERT: (user_id, place_id) 충돌 시 기존 row 유지하며 새 값으로 갱신(COALESCE)
+    await env.DB.prepare(
+      `INSERT INTO review_places (id, user_id, place_id, business_type, place_url, name, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, place_id) DO UPDATE SET
+         business_type = COALESCE(excluded.business_type, business_type),
+         place_url     = COALESCE(excluded.place_url, place_url),
+         name          = COALESCE(excluded.name, name)`
+    ).bind(newId, authResult.user.id, placeId, businessType, placeUrl, name, now).run();
+
+    // 삽입/갱신된 row 조회
+    const row = await env.DB.prepare(
+      `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at
+       FROM review_places
+       WHERE user_id = ? AND place_id = ?`
+    ).bind(authResult.user.id, placeId).first();
+
+    return jsonResponse({ place: row }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+/**
+ * GET /api/places — 등록된 플레이스 목록 조회
+ */
+async function handleListPlaces(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at
+       FROM review_places
+       WHERE user_id = ?
+       ORDER BY created_at DESC`
+    ).bind(authResult.user.id).all();
+
+    return jsonResponse({ places: results ?? [] }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+/**
+ * POST /api/places/:id/reviews — 리뷰 배치 적재 (로컬 백필 스크립트가 호출)
+ * body: { reviews: [...], total_reviews?, name? }
+ */
+async function handlePostReviews(request, env, corsHeaders, placeRowId) {
+  // 로컬 백필 스크립트(Origin 없음)가 호출하므로 corsHeaders null이어도 진행.
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  const reviews = body.reviews;
+  if (!Array.isArray(reviews) || reviews.length === 0) {
+    return jsonResponse({ error: 'invalid_reviews', message: 'reviews는 비어 있지 않은 배열이어야 합니다' }, 400, cors);
+  }
+
+  const now = new Date().toISOString();
+
+  // 각 리뷰를 INSERT OR IGNORE 문으로 준비 (중복 키: place_row_id + naver_review_id)
+  const stmts = reviews.map((r) => {
+    return env.DB.prepare(
+      `INSERT OR IGNORE INTO place_reviews
+         (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      crypto.randomUUID(),
+      placeRowId,
+      r.naver_review_id ?? null,
+      r.author_nick ?? null,
+      r.body ?? null,
+      r.has_photo ? 1 : 0,        // truthy → 1, falsy → 0
+      r.owner_reply ?? null,
+      r.visited_at ?? null,
+      r.review_created_at ?? null,
+      now
+    );
+  });
+
+  let batchResults;
+  try {
+    batchResults = await env.DB.batch(stmts);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  // 삽입 성공 건수: meta.changes === 1이면 실제 삽입, 0이면 중복으로 무시됨
+  const inserted = batchResults.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
+  const skipped = reviews.length - inserted;
+
+  // review_places 갱신: last_collected_at=now, total_reviews/name은 COALESCE로 새 값 우선
+  const newTotalReviews = body.total_reviews ?? null;
+  const newName = body.name ?? null;
+  try {
+    await env.DB.prepare(
+      `UPDATE review_places
+       SET last_collected_at = ?,
+           total_reviews     = COALESCE(?, total_reviews),
+           name              = COALESCE(?, name)
+       WHERE id = ?`
+    ).bind(now, newTotalReviews, newName, placeRowId).run();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ inserted, skipped }, 200, cors);
+}
+
+/**
+ * GET /api/places/:id/reviews — 리뷰 목록 열람 (페이지네이션)
+ */
+async function handleGetReviews(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  // 쿼리 파라미터: limit (기본 50, 최대 200), offset (기본 0)
+  const reqUrl = new URL(request.url);
+  const rawLimit = reqUrl.searchParams.get('limit');
+  const rawOffset = reqUrl.searchParams.get('offset');
+
+  let limit = 50;
+  if (rawLimit !== null) {
+    const parsed = parseInt(rawLimit, 10);
+    limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 200) : 50;
+  }
+
+  let offset = 0;
+  if (rawOffset !== null) {
+    const parsed = parseInt(rawOffset, 10);
+    offset = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  try {
+    // 전체 건수 조회
+    const countRow = await env.DB.prepare(
+      'SELECT COUNT(*) AS c FROM place_reviews WHERE place_row_id = ?'
+    ).bind(placeRowId).first();
+
+    const total = countRow?.c ?? 0;
+
+    // 리뷰 목록 조회 (최신 리뷰 순)
+    const { results } = await env.DB.prepare(
+      `SELECT id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at
+       FROM place_reviews
+       WHERE place_row_id = ?
+       ORDER BY review_created_at DESC
+       LIMIT ? OFFSET ?`
+    ).bind(placeRowId, limit, offset).all();
+
+    return jsonResponse({ reviews: results ?? [], total }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 }
 
