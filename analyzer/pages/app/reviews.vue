@@ -81,6 +81,27 @@ const collectionsError = ref<string | null>(null)
 const collectLoading = ref(false)
 const collectToast = ref<{ type: 'success' | 'warn' | 'error'; message: string } | null>(null)
 
+// ─── 신규 리뷰 계산 (최근 수집 회차) ─────────────────────────────────────────
+
+const maxCollectedAt = computed<string | null>(() => {
+  if (reviews.value.length <= 1) return null
+  let max = ''
+  for (const r of reviews.value) {
+    if (r.collected_at > max) max = r.collected_at
+  }
+  return max || null
+})
+
+function isNewReview(review: Review): boolean {
+  return maxCollectedAt.value !== null && review.collected_at === maxCollectedAt.value
+}
+
+// 네이버 플레이스 리뷰 URL 조립
+function naverReviewUrl(place: Place): string {
+  const type = place.business_type || 'place'
+  return `https://pcmap.place.naver.com/${type}/${place.place_id}/review/visitor`
+}
+
 // ─── 헬퍼 ────────────────────────────────────────────────────────────────────
 
 function authHeaders(): Record<string, string> {
@@ -405,7 +426,19 @@ onMounted(() => {
               : 'hover:bg-gray-50 text-gray-700'"
             @click="selectPlace(place)"
           >
-            <p class="text-sm font-medium leading-snug truncate">{{ placeName(place) }}</p>
+            <div class="flex items-center gap-1 min-w-0">
+              <p class="text-sm font-medium leading-snug truncate flex-1 min-w-0">{{ placeName(place) }}</p>
+              <a
+                :href="naverReviewUrl(place)"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="shrink-0 text-gray-400 hover:text-primary-600 transition-colors"
+                title="네이버 플레이스 리뷰 보기"
+                @click.stop
+              >
+                <UIcon name="i-heroicons-arrow-top-right-on-square" class="w-3.5 h-3.5" />
+              </a>
+            </div>
             <div class="flex items-center gap-2 mt-0.5">
               <span class="text-xs text-gray-400 tabular-nums">
                 리뷰 {{ place.total_reviews != null ? place.total_reviews.toLocaleString('ko-KR') : '—' }}
@@ -429,7 +462,7 @@ onMounted(() => {
               <template v-if="selectedPlace">
                 {{ placeName(selectedPlace) }}
                 <span v-if="reviewsStatus === 'done'" class="font-normal text-gray-400 ml-1">
-                  총 {{ reviewsTotal.toLocaleString('ko-KR') }}건
+                  총 {{ selectedPlace.total_reviews != null ? selectedPlace.total_reviews.toLocaleString('ko-KR') : '—' }}건 중 {{ reviewsTotal.toLocaleString('ko-KR') }}건 보유
                 </span>
               </template>
               <template v-else>리뷰</template>
@@ -518,7 +551,14 @@ onMounted(() => {
                     </td>
                     <!-- 작성자 -->
                     <td class="px-3 py-2 align-top whitespace-nowrap text-xs text-gray-700 max-w-[6rem] truncate">
-                      {{ review.author_nick || '—' }}
+                      <span class="flex items-center gap-1 min-w-0">
+                        <span
+                          v-if="isNewReview(review)"
+                          class="inline-block shrink-0 w-2 h-2 rounded-full bg-green-500"
+                          title="최근 수집 회차 신규"
+                        />
+                        <span class="truncate">{{ review.author_nick || '—' }}</span>
+                      </span>
                     </td>
                     <!-- 본문 -->
                     <td class="px-3 py-2 align-top text-xs text-gray-800 leading-relaxed">
