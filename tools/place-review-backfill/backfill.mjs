@@ -111,7 +111,9 @@ function extractPlaceInfo(u) {
 }
 
 // ─── 네이버 GraphQL 호출 (지수 백오프 재시도) ────────────────────────────────
-async function fetchNaverReviews(placeId, businessType, page, pageSize, retryCount = 0) {
+// 페이지네이션은 커서 기반: after = 직전 페이지 마지막 item의 cursor 값.
+// 첫 요청은 after=null(미포함). (page 필드는 서버가 무시함 — 실측 확인)
+async function fetchNaverReviews(placeId, businessType, after, pageSize, retryCount = 0) {
   const MAX_RETRY = 4;
   const BACKOFF_BASE_MS = 2000;
 
@@ -143,7 +145,8 @@ async function fetchNaverReviews(placeId, businessType, page, pageSize, retryCou
           businessId: placeId,
           businessType: businessType,
           item: '0',
-          page: page,
+          // 커서 기반: after 있으면 그 다음부터. 첫 요청은 after 미포함.
+          ...(after ? { after } : {}),
           size: pageSize,
           isPhotoUsed: false,
           includeContent: true,
@@ -168,7 +171,7 @@ async function fetchNaverReviews(placeId, businessType, page, pageSize, retryCou
     const wait = BACKOFF_BASE_MS * 2 ** retryCount;
     console.log(`  [재시도 ${retryCount + 1}/${MAX_RETRY}] 네트워크 오류 → ${wait}ms 대기 후 재시도`);
     await sleep(wait);
-    return fetchNaverReviews(placeId, businessType, page, pageSize, retryCount + 1);
+    return fetchNaverReviews(placeId, businessType, after, pageSize, retryCount + 1);
   }
 
   // HTTP 비정상 응답 → 차단 가능성
@@ -181,7 +184,7 @@ async function fetchNaverReviews(placeId, businessType, page, pageSize, retryCou
       `  [재시도 ${retryCount + 1}/${MAX_RETRY}] HTTP ${res.status} → ${wait}ms 대기 후 재시도`
     );
     await sleep(wait);
-    return fetchNaverReviews(placeId, businessType, page, pageSize, retryCount + 1);
+    return fetchNaverReviews(placeId, businessType, after, pageSize, retryCount + 1);
   }
 
   let json;
@@ -192,7 +195,7 @@ async function fetchNaverReviews(placeId, businessType, page, pageSize, retryCou
     const wait = BACKOFF_BASE_MS * 2 ** retryCount;
     console.log(`  [재시도 ${retryCount + 1}/${MAX_RETRY}] JSON 파싱 실패 → ${wait}ms 후 재시도`);
     await sleep(wait);
-    return fetchNaverReviews(placeId, businessType, page, pageSize, retryCount + 1);
+    return fetchNaverReviews(placeId, businessType, after, pageSize, retryCount + 1);
   }
 
   // GraphQL errors 필드 → 차단/오류
@@ -206,7 +209,7 @@ async function fetchNaverReviews(placeId, businessType, page, pageSize, retryCou
       `  [재시도 ${retryCount + 1}/${MAX_RETRY}] GraphQL 오류 "${errMsg}" → ${wait}ms 후 재시도`
     );
     await sleep(wait);
-    return fetchNaverReviews(placeId, businessType, page, pageSize, retryCount + 1);
+    return fetchNaverReviews(placeId, businessType, after, pageSize, retryCount + 1);
   }
 
   const visitorReviews = json[0]?.data?.visitorReviews;
@@ -219,7 +222,7 @@ async function fetchNaverReviews(placeId, businessType, page, pageSize, retryCou
       `  [재시도 ${retryCount + 1}/${MAX_RETRY}] visitorReviews 없음 → ${wait}ms 후 재시도`
     );
     await sleep(wait);
-    return fetchNaverReviews(placeId, businessType, page, pageSize, retryCount + 1);
+    return fetchNaverReviews(placeId, businessType, after, pageSize, retryCount + 1);
   }
 
   return visitorReviews; // { total, items[] }
@@ -342,10 +345,11 @@ async function main() {
   }
 
   // ── 루프 상태 초기화 ──
-  let page = startPage;
-  let totalReviews = null;   // 첫 응답에서 확정
-  let placeName = null;      // 첫 item.businessName
-  let buffer = [];           // 누적 버퍼
+  let page = startPage;       // 페이지 카운터(로깅·MAX_PAGES·안전상한용)
+  let cursor = null;          // 커서 기반 페이지네이션: 직전 페이지 마지막 item.cursor → 다음 요청 after
+  let totalReviews = null;    // 첫 응답에서 확정
+  let placeName = null;       // 첫 item.businessName
+  let buffer = [];            // 누적 버퍼
   let totalInserted = 0;
   let totalSkipped = 0;
   let totalCollected = 0;
@@ -363,7 +367,7 @@ async function main() {
 
     let visitorReviews;
     try {
-      visitorReviews = await fetchNaverReviews(placeId, businessType, page, pageSize);
+      visitorReviews = await fetchNaverReviews(placeId, businessType, cursor, pageSize);
     } catch (err) {
       console.error(`[차단/오류] page=${page}: ${err.message}`);
       blocked = true;
@@ -404,6 +408,9 @@ async function main() {
     totalCollected += items.length;
     console.log(`  → ${items.length}건 수집 (누적 ${totalCollected}건)`);
 
+    // 다음 페이지 커서 갱신 (이번 페이지 마지막 item.cursor)
+    cursor = items[items.length - 1]?.cursor ?? null;
+
     // 배치 flush
     if (buffer.length >= batchSize) {
       const chunk = buffer.splice(0, batchSize);
@@ -433,6 +440,11 @@ async function main() {
     }
     if (page - startPage + 1 >= maxPages) {
       console.log(`[종료] MAX_PAGES 도달 (${maxPages}페이지)`);
+      break;
+    }
+    // 커서가 없으면 다음 페이지를 가리킬 수 없음 → 무한 루프 방지 위해 종료
+    if (!cursor) {
+      console.log(`[종료] 다음 커서 없음 (page=${page}, 누적 ${totalCollected}건)`);
       break;
     }
 
