@@ -1106,10 +1106,23 @@ async function handleCreatePlace(request, env, corsHeaders) {
     );
   }
 
-  const name = body.name ?? null;
+  let name = body.name ?? null;
   const placeUrl = body.url ?? null;
   const now = new Date().toISOString();
   const newId = crypto.randomUUID();
+
+  // 이름이 안 들어왔으면 네이버 첫 페이지에서 업체명(businessName) 1회 확보 시도.
+  // (등록 직후 화면에 placeId 대신 실제 지점명이 보이게 함. 실패해도 등록은 계속 진행 — name=null)
+  if (!name) {
+    try {
+      const vr = await fetchNaverReviewPage(placeId, businessType || 'place', null, env);
+      const bn = vr?.items?.find((it) => it.businessName)?.businessName ?? null;
+      if (bn) name = bn;
+    } catch (e) {
+      // 네이버 호출 실패 시 이름 없이 등록 (수집 시 채워짐)
+      console.log(`[CREATE_PLACE] businessName 확보 실패 place_id=${placeId}: ${e.message}`);
+    }
+  }
 
   try {
     // UPSERT: (user_id, place_id) 충돌 시 기존 row 유지하며 새 값으로 갱신(COALESCE)
