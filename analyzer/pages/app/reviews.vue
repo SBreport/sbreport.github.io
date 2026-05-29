@@ -27,6 +27,7 @@ interface Review {
   visited_at: string | null
   review_created_at: string | null
   collected_at: string
+  first_source: 'cron' | 'manual' | 'backfill' | null
 }
 
 interface CollectionEvent {
@@ -148,19 +149,10 @@ const completedPlaceIds = ref<Set<number>>(new Set())
 const csvLoading = ref(false)
 const csvProgress = ref<{ current: number; total: number } | null>(null)
 
-// ─── 신규 리뷰 계산 (최근 수집 회차) ─────────────────────────────────────────
-
-const maxCollectedAt = computed<string | null>(() => {
-  if (reviews.value.length <= 1) return null
-  let max = ''
-  for (const r of reviews.value) {
-    if (r.collected_at > max) max = r.collected_at
-  }
-  return max || null
-})
+// ─── 신규 리뷰 판별 (cron 자동 수집으로 처음 적재된 리뷰만 신규로 표시) ─────
 
 function isNewReview(review: Review): boolean {
-  return maxCollectedAt.value !== null && review.collected_at === maxCollectedAt.value
+  return review.first_source === 'cron'
 }
 
 // 네이버 플레이스 리뷰 URL 조립
@@ -1046,12 +1038,12 @@ onUnmounted(() => {
             <div class="flex-1 min-h-0 overflow-auto">
               <table class="w-full text-sm border-collapse">
                 <thead class="sticky top-0 z-10 bg-gray-50">
-                  <tr class="h-10">
-                    <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-24">작성일</th>
-                    <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-24">작성자</th>
+                  <tr class="h-8">
+                    <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-20">작성일</th>
+                    <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">작성자</th>
                     <th class="px-3 text-left font-medium text-gray-600 text-xs border-b border-gray-200">본문</th>
-                    <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-16">답글</th>
-                    <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-12">사진</th>
+                    <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-14">답글</th>
+                    <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-10">사진</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1061,30 +1053,30 @@ onUnmounted(() => {
                     class="border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors"
                   >
                     <!-- 작성일 -->
-                    <td class="px-3 py-2 align-top whitespace-nowrap text-xs text-gray-500">
+                    <td class="px-3 py-1.5 whitespace-nowrap text-xs text-gray-500 tabular-nums">
                       {{ formatDate(review.review_created_at) }}
                     </td>
                     <!-- 작성자 -->
-                    <td class="px-3 py-2 align-top whitespace-nowrap text-xs text-gray-700 max-w-[6rem] truncate">
+                    <td class="px-3 py-1.5 text-xs text-gray-700 w-28 max-w-[7rem]">
                       <span class="flex items-center gap-1 min-w-0">
                         <span
                           v-if="isNewReview(review)"
                           class="inline-block shrink-0 w-2 h-2 rounded-full bg-green-500"
-                          title="최근 수집 회차 신규"
+                          title="자동 수집으로 새로 포착된 리뷰"
                         />
-                        <span class="truncate">{{ review.author_nick || '—' }}</span>
+                        <span class="truncate" :title="review.author_nick || ''">{{ review.author_nick || '—' }}</span>
                       </span>
                     </td>
-                    <!-- 본문 -->
-                    <td class="px-3 py-2 align-top text-xs text-gray-800 leading-relaxed">
-                      {{ review.body || '—' }}
+                    <!-- 본문: 한 줄 말줄임, hover title로 전체 확인 -->
+                    <td class="px-3 py-1.5 text-xs text-gray-800 max-w-0">
+                      <span class="block truncate" :title="review.body || ''">{{ review.body || '—' }}</span>
                     </td>
                     <!-- 답글여부 -->
-                    <td class="px-3 py-2 align-top text-center text-xs text-gray-500 whitespace-nowrap">
+                    <td class="px-3 py-1.5 text-center text-xs text-gray-500 whitespace-nowrap">
                       {{ review.owner_reply ? '있음' : '' }}
                     </td>
                     <!-- 사진여부 -->
-                    <td class="px-3 py-2 align-top text-center text-sm text-gray-500 whitespace-nowrap">
+                    <td class="px-3 py-1.5 text-center text-xs text-gray-500 whitespace-nowrap">
                       {{ review.has_photo === 1 ? '○' : '' }}
                     </td>
                   </tr>

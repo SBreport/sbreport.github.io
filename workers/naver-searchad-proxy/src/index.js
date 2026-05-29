@@ -1202,8 +1202,8 @@ async function handlePostReviews(request, env, corsHeaders, placeRowId) {
   const stmts = reviews.map((r) => {
     return env.DB.prepare(
       `INSERT OR IGNORE INTO place_reviews
-         (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at, first_source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       crypto.randomUUID(),
       placeRowId,
@@ -1214,7 +1214,8 @@ async function handlePostReviews(request, env, corsHeaders, placeRowId) {
       r.owner_reply ?? null,
       r.visited_at ?? null,
       r.review_created_at ?? null,
-      now
+      now,
+      'manual'
     );
   });
 
@@ -1302,7 +1303,7 @@ async function handleGetReviews(request, env, corsHeaders, placeRowId) {
 
     // 리뷰 목록 조회 (최신 리뷰 순)
     const { results } = await env.DB.prepare(
-      `SELECT id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at
+      `SELECT id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at, first_source
        FROM place_reviews
        WHERE place_row_id = ?
        ORDER BY review_created_at DESC
@@ -1664,8 +1665,8 @@ async function collectPlaceReviews(env, placeRow, opts = {}) {
     const stmts = mapped.map((r) =>
       env.DB.prepare(
         `INSERT OR IGNORE INTO place_reviews
-           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at, first_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         crypto.randomUUID(),
         placeRowId,
@@ -1676,7 +1677,8 @@ async function collectPlaceReviews(env, placeRow, opts = {}) {
         r.owner_reply ?? null,
         r.visited_at ?? null,
         r.review_created_at ?? null,
-        now
+        now,
+        source
       )
     );
 
@@ -1840,8 +1842,8 @@ async function backfillPlaceChunk(env, placeRow, opts = {}) {
     const stmts = mapped.map((r) =>
       env.DB.prepare(
         `INSERT OR IGNORE INTO place_reviews
-           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at, first_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         crypto.randomUUID(),
         placeRowId,
@@ -1852,7 +1854,8 @@ async function backfillPlaceChunk(env, placeRow, opts = {}) {
         r.owner_reply ?? null,
         r.visited_at ?? null,
         r.review_created_at ?? null,
-        now
+        now,
+        'backfill'
       )
     );
 
