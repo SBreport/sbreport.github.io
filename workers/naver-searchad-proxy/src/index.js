@@ -111,6 +111,10 @@ export default {
     if (adminStatusMatch && request.method === 'POST') {
       return handleAdminSetStatus(request, env, corsHeaders, adminStatusMatch[1]);
     }
+    const adminMemoMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/memo$/);
+    if (adminMemoMatch && request.method === 'POST') {
+      return handleAdminSetMemo(request, env, corsHeaders, adminMemoMatch[1]);
+    }
 
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
@@ -1810,7 +1814,7 @@ async function handleAdminListUsers(request, env, corsHeaders) {
 
   try {
     const { results } = await env.DB.prepare(
-      `SELECT id, email, name, picture, status, plan, created_at, last_login_at, approved_at
+      `SELECT id, email, name, picture, status, plan, created_at, last_login_at, approved_at, admin_memo
        FROM users ORDER BY created_at DESC`
     ).all();
 
@@ -1889,6 +1893,52 @@ async function handleAdminSetStatus(request, env, corsHeaders, targetUserId) {
   }
 
   return jsonResponse({ id: targetUserId, status: newStatus }, 200, cors);
+}
+
+// POST /api/admin/users/:id/memo — 관리자 메모 저장
+// body: { memo: string }  빈 문자열=삭제, 최대 1000자(초과 시 잘라 저장)
+async function handleAdminSetMemo(request, env, corsHeaders, targetUserId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  const rawMemo = body?.memo;
+  if (typeof rawMemo !== 'string') {
+    return jsonResponse({ error: 'invalid_memo', message: 'memo는 string이어야 합니다' }, 400, cors);
+  }
+
+  // 대상 사용자 존재 확인
+  let target;
+  try {
+    target = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetUserId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+  if (!target) {
+    return jsonResponse({ error: 'user_not_found', message: '대상 사용자를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  // 빈 문자열은 null로 저장(삭제), 1000자 초과 시 잘라 저장
+  const trimmed = rawMemo.trim();
+  const memoValue = trimmed === '' ? null : trimmed.slice(0, 1000);
+
+  try {
+    await env.DB.prepare('UPDATE users SET admin_memo = ? WHERE id = ?').bind(memoValue, targetUserId).run();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ id: targetUserId, admin_memo: memoValue }, 200, cors);
 }
 
 // --- JWT 유틸리티 (HS256, crypto.subtle 직접 구현) ---

@@ -17,6 +17,7 @@ interface AdminUser {
   last_login_at: string | null
   approved_at: string | null
   role: 'user' | 'admin'
+  admin_memo: string | null
 }
 
 type LoadStatus = 'idle' | 'loading' | 'done' | 'error'
@@ -35,6 +36,9 @@ const loadError = ref<string | null>(null)
 // 행별 처리 중 상태 (userId → loading)
 const actionLoading = ref<Record<string, boolean>>({})
 
+// 메모 편집 상태 (userId → { editing: boolean, draft: string, saving: boolean })
+const memoState = ref<Record<string, { editing: boolean; draft: string; saving: boolean }>>({})
+
 // ─── 헬퍼 ────────────────────────────────────────────────────────────────────
 
 function authHeaders(): Record<string, string> {
@@ -48,6 +52,32 @@ function formatDate(s: string | null | undefined): string {
   const d = new Date(s)
   if (isNaN(d.getTime())) return s
   return d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' })
+}
+
+function getMemo(userId: string) {
+  return memoState.value[userId] ?? { editing: false, draft: '', saving: false }
+}
+
+function startEditMemo(user: AdminUser) {
+  memoState.value = {
+    ...memoState.value,
+    [user.id]: { editing: true, draft: user.admin_memo ?? '', saving: false },
+  }
+}
+
+function cancelEditMemo(userId: string) {
+  const next = { ...memoState.value }
+  delete next[userId]
+  memoState.value = next
+}
+
+function onMemoKeydown(e: KeyboardEvent, user: AdminUser) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    saveMemo(user)
+  } else if (e.key === 'Escape') {
+    cancelEditMemo(user.id)
+  }
 }
 
 // ─── 요약 수치 ───────────────────────────────────────────────────────────────
@@ -140,6 +170,59 @@ async function changeStatus(user: AdminUser, newStatus: 'approved' | 'suspended'
   }
 }
 
+async function saveMemo(user: AdminUser) {
+  const state = getMemo(user.id)
+  if (state.saving) return
+
+  memoState.value = {
+    ...memoState.value,
+    [user.id]: { ...state, saving: true },
+  }
+
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/admin/users/${user.id}/memo`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ memo: state.draft }),
+    })
+
+    if (!res.ok) {
+      let msg = `메모 저장 실패 (${res.status})`
+      try {
+        const body = await res.json() as { error?: string }
+        if (body.error === 'forbidden') msg = '관리자 권한이 필요합니다'
+        else if (body.error === 'user_not_found') msg = '사용자를 찾을 수 없습니다'
+      } catch { /* ignore */ }
+      toast.add({ title: '오류', description: msg, color: 'error' })
+      memoState.value = {
+        ...memoState.value,
+        [user.id]: { ...state, saving: false },
+      }
+      return
+    }
+
+    const updated = await res.json() as { id: string; admin_memo: string | null }
+    // 로컬 업데이트
+    users.value = users.value.map(u =>
+      u.id === updated.id ? { ...u, admin_memo: updated.admin_memo } : u
+    )
+
+    // 편집 상태 해제
+    const next = { ...memoState.value }
+    delete next[user.id]
+    memoState.value = next
+
+    toast.add({ title: '메모 저장', description: updated.admin_memo ? '메모가 저장되었습니다' : '메모가 삭제되었습니다', color: 'success' })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '알 수 없는 오류'
+    toast.add({ title: '오류', description: msg, color: 'error' })
+    memoState.value = {
+      ...memoState.value,
+      [user.id]: { ...state, saving: false },
+    }
+  }
+}
+
 // ─── 초기 로드 ────────────────────────────────────────────────────────────────
 
 onMounted(() => {
@@ -205,6 +288,7 @@ onMounted(() => {
                 <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-24">상태</th>
                 <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">가입일</th>
                 <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">마지막 로그인</th>
+                <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200">메모</th>
                 <th class="px-3 text-right font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">작업</th>
               </tr>
             </thead>
@@ -266,6 +350,54 @@ onMounted(() => {
                 <!-- 마지막 로그인 -->
                 <td class="px-3 py-2.5 align-middle text-xs text-gray-500 whitespace-nowrap">
                   {{ formatDate(user.last_login_at) }}
+                </td>
+
+                <!-- 메모 셀 -->
+                <td class="px-3 py-2 align-middle min-w-48 max-w-xs">
+                  <!-- 편집 모드 -->
+                  <div v-if="getMemo(user.id).editing" class="flex items-center gap-1.5">
+                    <UInput
+                      :model-value="getMemo(user.id).draft"
+                      size="xs"
+                      placeholder="메모 입력..."
+                      class="flex-1 min-w-0"
+                      :disabled="getMemo(user.id).saving"
+                      @update:model-value="val => memoState[user.id] = { ...getMemo(user.id), draft: String(val) }"
+                      @keydown="onMemoKeydown($event, user)"
+                    />
+                    <UButton
+                      size="xs"
+                      color="neutral"
+                      variant="solid"
+                      label="저장"
+                      :loading="getMemo(user.id).saving"
+                      :disabled="getMemo(user.id).saving"
+                      @click="saveMemo(user)"
+                    />
+                    <UButton
+                      size="xs"
+                      color="neutral"
+                      variant="ghost"
+                      icon="i-heroicons-x-mark"
+                      :disabled="getMemo(user.id).saving"
+                      @click="cancelEditMemo(user.id)"
+                    />
+                  </div>
+                  <!-- 표시 모드 -->
+                  <button
+                    v-else
+                    class="w-full text-left group"
+                    @click="startEditMemo(user)"
+                  >
+                    <span
+                      v-if="user.admin_memo"
+                      class="text-xs text-gray-700 group-hover:text-gray-900 line-clamp-2"
+                    >{{ user.admin_memo }}</span>
+                    <span
+                      v-else
+                      class="text-xs text-gray-300 group-hover:text-gray-400"
+                    >메모 추가</span>
+                  </button>
                 </td>
 
                 <!-- 작업 버튼 -->
