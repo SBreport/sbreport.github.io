@@ -102,6 +102,11 @@ export default {
     if (collectMatch && request.method === 'POST') {
       return handleCollectPlace(request, env, corsHeaders, collectMatch[1]);
     }
+    // GET /api/places/:id/collections — 수집 이력 조회
+    const collectionsMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/collections$/);
+    if (collectionsMatch && request.method === 'GET') {
+      return handleGetCollections(request, env, corsHeaders, collectionsMatch[1]);
+    }
 
     // --- 관리자 (role='admin' 전용) ---
     if (url.pathname === '/api/admin/users' && request.method === 'GET') {
@@ -1525,7 +1530,7 @@ async function runDailyReviewCollection(env) {
 
     let result;
     try {
-      result = await collectPlaceReviews(env, place, { maxPages: 3 });
+      result = await collectPlaceReviews(env, place, { maxPages: 3, source: 'cron' });
     } catch (err) {
       // collectPlaceReviews는 throw 안 하지만 혹시 모를 예외 대비
       console.error(`[CRON] place_id=${place.place_id} 예외:`, err.message);
@@ -1590,11 +1595,12 @@ async function runDailyReviewCollection(env) {
 /**
  * @param {object} env         Worker env
  * @param {object} placeRow    { id, place_id, business_type, name } — DB 조회 row
- * @param {object} opts        { maxPages? } (기본 3)
+ * @param {object} opts        { maxPages?, source? } (기본 maxPages 3, source 'manual')
  * @returns {Promise<{place_id, total_server, inserted, skipped, pages_fetched, blocked, error?}>}
  */
 async function collectPlaceReviews(env, placeRow, opts = {}) {
   const maxPages = opts.maxPages ?? 3;
+  const source = opts.source ?? 'manual';
   const placeRowId = placeRow.id;
   const placeId = placeRow.place_id;
   // business_type 없으면 'place'로 폴백
@@ -1730,6 +1736,29 @@ async function collectPlaceReviews(env, placeRow, opts = {}) {
   if (errorMsg) {
     result.error = errorMsg;
   }
+
+  // 수집 이벤트 기록 (실패해도 결과에 영향 없음)
+  try {
+    await env.DB.prepare(
+      `INSERT INTO place_collection_events
+         (id, place_row_id, source, inserted, skipped, pages_fetched, total_server, blocked, error, collected_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      crypto.randomUUID(),
+      placeRowId,
+      source,
+      inserted,
+      skipped,
+      pagesFetched,
+      totalServer,
+      blocked ? 1 : 0,
+      errorMsg ?? null,
+      now
+    ).run();
+  } catch (err) {
+    console.error(`[collectPlaceReviews] 이벤트 INSERT 실패: ${err.message}`);
+  }
+
   return result;
 }
 
@@ -1781,13 +1810,68 @@ async function handleCollectPlace(request, env, corsHeaders, placeRowId) {
   // 증분 수집 실행
   let result;
   try {
-    result = await collectPlaceReviews(env, placeRow, { maxPages });
+    result = await collectPlaceReviews(env, placeRow, { maxPages, source: 'manual' });
   } catch (err) {
     return jsonResponse({ error: 'collect_failed', message: err.message }, 500, cors);
   }
 
   // 차단 여부와 무관하게 200 반환 (측정 데이터로 활용)
   return jsonResponse(result, 200, cors);
+}
+
+/**
+ * GET /api/places/:id/collections?limit=
+ * 수집 이력(place_collection_events) 조회
+ */
+async function handleGetCollections(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인 (handleGetReviews 와 동일 패턴)
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  // limit 파라미터 파싱 (기본 30, 최대 100)
+  const url = new URL(request.url);
+  let limit = 30;
+  const limitParam = url.searchParams.get('limit');
+  if (limitParam !== null) {
+    const parsed = Number(limitParam);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      limit = Math.min(Math.max(Math.floor(parsed), 1), 100);
+    }
+  }
+
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, source, inserted, skipped, pages_fetched, total_server, blocked, error, collected_at
+         FROM place_collection_events
+        WHERE place_row_id = ?
+        ORDER BY collected_at DESC
+        LIMIT ?`
+    ).bind(placeRowId, limit).all();
+
+    return jsonResponse({ events: results ?? [] }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
 }
 
 // --- 관리자 엔드포인트 (role='admin' 전용) ---
