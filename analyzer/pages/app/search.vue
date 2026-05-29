@@ -354,9 +354,10 @@ function exportCsv() {
       .map(s => `${circledNumber(s.order)}${s.label}${s.count != null ? s.count : ''}`)
       .join(' ')
 
+    // count null(정적 불가 구좌)은 빈칸으로 내보냄 — 0과 구분
     const countOf = (type: string) => {
       const s = r.sections.find(sec => sec.type === type)
-      return s?.count ?? 0
+      return s != null ? (s.count ?? '') : ''
     }
 
     csvLines.push([

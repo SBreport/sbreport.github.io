@@ -282,7 +282,7 @@ async function handleApiSearch(request, env, ctx, corsHeaders) {
   const normalizedKeyword = rawKeyword.trim().replace(/\s+/g, '');
 
   // 캐시 확인 (24h TTL)
-  const cacheUrl = `https://cache.internal/v8/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
+  const cacheUrl = `https://cache.internal/v9/api-search?keyword=${encodeURIComponent(normalizedKeyword)}`;
   const cache = caches.default;
 
   const cached = await cache.match(cacheUrl);
@@ -450,10 +450,19 @@ function parseNaverSections(html, device = 'mobile') {
     }
   }
 
-  // 2) data-block-id 구좌 — 첫 등장 위치 기준
-  const blockIdRegex = /data-block-id="([^"]+)"/g;
-  let match;
-  while ((match = blockIdRegex.exec(html)) !== null) {
+  // 2) data-block-id 구좌 — 각 블록의 region(현재 block-id ~ 다음 block-id) 안에서만 카운트
+  //    빈 블록(any-tpl === 0)은 candidates에서 제외.
+  //    카운트 우선순위: ugcItem > any-tpl(폴백).
+  //    단, layout/sdsHorzDivider/header/footer 같은 구조 마커만 있는 구좌는 count 산출 불가 → null.
+  //    (실측: PC/모바일 HTML에 data-template-id="root"가 없으므로 root 마커 전략 폐기.
+  //     ugcItem이 실제 UGC 카드 1개당 1개씩 정확히 매핑됨 — 브라우저 실측 일치 확인.)
+  const STRUCTURAL_TPLS = new Set(['layout', 'sdsHorzDivider', 'header', 'footer']);
+  // 구좌별 실제 콘텐츠 카드 마커 (우선순위 순)
+  const CONTENT_MARKERS = ['ugcItem', 'articleSource'];
+
+  const blockMatches = [...html.matchAll(/data-block-id="([^"]+)"/g)];
+  for (let i = 0; i < blockMatches.length; i++) {
+    const match = blockMatches[i];
     const blockId = match[1];
     const mapped = resolveBlockId(blockId);
     const type = mapped.type;
@@ -461,16 +470,51 @@ function parseNaverSections(html, device = 'mobile') {
     if (seen.has(type)) continue; // 이미 처리한 구좌는 스킵 (첫 위치 보존)
     seen.add(type);
 
-    const count = countOccurrences(html, `data-block-id="${blockId}"`);
-    candidates.push({ offset: match.index, type, label: mapped.label, count });
+    // region 슬라이스: 현재 block-id 위치 ~ 다음 block-id 위치 (없으면 EOF)
+    const regionStart = match.index;
+    const regionEnd = i + 1 < blockMatches.length ? blockMatches[i + 1].index : html.length;
+    const region = html.slice(regionStart, regionEnd);
+
+    // 모든 data-template-id 카운트
+    const anyTplCount = countOccurrences(region, 'data-template-id="');
+
+    // 빈 블록 제외 (placeholder만 있어 화면 미노출)
+    if (anyTplCount === 0) {
+      console.log('[EMPTY_BLOCK_SKIPPED] ' + blockId);
+      continue;
+    }
+
+    // 콘텐츠 마커 우선 탐색
+    let count = null; // null = 정적 HTML로 산출 불가
+    for (const marker of CONTENT_MARKERS) {
+      const c = countOccurrences(region, `data-template-id="${marker}"`);
+      if (c > 0) {
+        count = c;
+        break;
+      }
+    }
+
+    // 콘텐츠 마커 없고 구조 마커뿐이면 count null (정적 산출 불가)
+    if (count === null) {
+      const allTplMatches = [...region.matchAll(/data-template-id="([^"]+)"/g)];
+      const hasNonStructural = allTplMatches.some(m => !STRUCTURAL_TPLS.has(m[1]));
+      if (hasNonStructural) {
+        // 미분류 마커 — 폴백으로 any-tpl 사용
+        count = anyTplCount;
+        console.log('[BLOCK_CONTENT_FALLBACK] ' + blockId + ' anyTpl=' + anyTplCount);
+      }
+      // 구조 마커만 있으면 count = null 유지 (정적 불가)
+    }
+
+    candidates.push({ offset: regionStart, type, label: mapped.label, count });
   }
 
-  // 3) place-app-root (플레이스) — data-block-id에 안 잡히므로 별도 수집(첫 등장 위치)
+  // 3) place-app-root (플레이스) — data-block-id에 안 잡히므로 별도 수집(첫 등장 위치).
+  //    정적 HTML에 카드 데이터 없음(JS가 API로 렌더) → count: null (정적 산출 불가).
   if (!seen.has('place')) {
     const placeOffset = html.indexOf('place-app-root');
     if (placeOffset !== -1) {
-      const placeCount = countOccurrences(html, 'place-app-root');
-      candidates.push({ offset: placeOffset, type: 'place', label: '플레이스', count: placeCount });
+      candidates.push({ offset: placeOffset, type: 'place', label: '플레이스', count: null });
       seen.add('place');
     }
   }
