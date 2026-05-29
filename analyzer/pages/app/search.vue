@@ -345,19 +345,19 @@ function exportCsv() {
     const r = row.result!
     const sectionText = r.sections
       .sort((a, b) => a.order - b.order)
-      .map(s => `${circledNumber(s.order)}${s.label}${s.count != null ? s.count : ''}`)
+      .map(s => `${circledNumber(s.order)}${s.label}${s.count != null ? s.count : '?'}`)
       .join(' ')
 
     const pcSectionText = (r.pc_sections ?? [])
       .slice()
       .sort((a, b) => a.order - b.order)
-      .map(s => `${circledNumber(s.order)}${s.label}${s.count != null ? s.count : ''}`)
+      .map(s => `${circledNumber(s.order)}${s.label}${s.count != null ? s.count : '?'}`)
       .join(' ')
 
-    // count null(정적 불가 구좌)은 빈칸으로 내보냄 — 0과 구분
+    // count null(정적 불가 구좌)은 '?'로 내보냄 — 0·빈칸과 구분
     const countOf = (type: string) => {
       const s = r.sections.find(sec => sec.type === type)
-      return s != null ? (s.count ?? '') : ''
+      return s != null ? (s.count != null ? s.count : '?') : ''
     }
 
     csvLines.push([
@@ -706,7 +706,7 @@ onMounted(async () => {
                               class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
                               :class="sectionColorClass(section.type)"
                             >
-                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
+                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                             </span>
                           </div>
                         </div>
@@ -720,7 +720,7 @@ onMounted(async () => {
                               class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
                               :class="sectionColorClass(section.type)"
                             >
-                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
+                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                             </span>
                           </div>
                         </div>
@@ -735,7 +735,7 @@ onMounted(async () => {
                             class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
                             :class="sectionColorClass(section.type)"
                           >
-                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
+                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                           </span>
                         </div>
                       </template>
@@ -749,7 +749,7 @@ onMounted(async () => {
                             class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
                             :class="sectionColorClass(section.type)"
                           >
-                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template>
+                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                           </span>
                         </div>
                       </template>
@@ -877,13 +877,13 @@ onMounted(async () => {
                     </td>
                     <td class="py-1 px-2 text-center align-middle tabular-nums text-gray-700">
                       <template v-if="row.mobileOrder != null">
-                        {{ circledNumber(row.mobileOrder) }}<template v-if="row.mobileCount != null"> {{ row.mobileCount }}</template>
+                        {{ circledNumber(row.mobileOrder) }}<template v-if="row.mobileCount != null"> {{ row.mobileCount }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                       </template>
                       <template v-else><span class="text-gray-300">-</span></template>
                     </td>
                     <td class="py-1 pl-2 text-center align-middle tabular-nums text-gray-700">
                       <template v-if="row.pcOrder != null">
-                        {{ circledNumber(row.pcOrder) }}<template v-if="row.pcCount != null"> {{ row.pcCount }}</template>
+                        {{ circledNumber(row.pcOrder) }}<template v-if="row.pcCount != null"> {{ row.pcCount }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                       </template>
                       <template v-else><span class="text-gray-300">-</span></template>
                     </td>
@@ -915,6 +915,7 @@ onMounted(async () => {
                   <span v-if="section.count != null" class="text-xs text-gray-500 tabular-nums">
                     {{ section.count }}개
                   </span>
+                  <span v-else class="text-xs text-gray-400" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">확인 필요</span>
                 </div>
               </div>
             </template>
@@ -942,6 +943,7 @@ onMounted(async () => {
                   <span v-if="section.count != null" class="text-xs text-gray-500 tabular-nums">
                     {{ section.count }}개
                   </span>
+                  <span v-else class="text-xs text-gray-400" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">확인 필요</span>
                 </div>
               </div>
             </template>
