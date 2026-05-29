@@ -73,6 +73,36 @@ const placesError = ref<string | null>(null)
 // 선택 플레이스
 const selectedPlace = ref<Place | null>(null)
 
+// 다중 선택 (체크박스)
+const checkedPlaceIds = ref<Set<number>>(new Set())
+
+const checkedPlaces = computed(() =>
+  places.value.filter(p => checkedPlaceIds.value.has(p.id))
+)
+
+const allChecked = computed(() =>
+  places.value.length > 0 && places.value.every(p => checkedPlaceIds.value.has(p.id))
+)
+
+const someChecked = computed(() =>
+  places.value.some(p => checkedPlaceIds.value.has(p.id)) && !allChecked.value
+)
+
+function toggleCheck(place: Place) {
+  const next = new Set(checkedPlaceIds.value)
+  if (next.has(place.id)) next.delete(place.id)
+  else next.add(place.id)
+  checkedPlaceIds.value = next
+}
+
+function toggleAllCheck() {
+  if (allChecked.value) {
+    checkedPlaceIds.value = new Set()
+  } else {
+    checkedPlaceIds.value = new Set(places.value.map(p => p.id))
+  }
+}
+
 // 리뷰 목록
 const reviews = ref<Review[]>([])
 const reviewsStatus = ref<LoadStatus>('idle')
@@ -93,7 +123,7 @@ const collectionsError = ref<string | null>(null)
 const collectLoading = ref(false)
 const collectToast = ref<{ type: 'success' | 'warn' | 'error'; message: string } | null>(null)
 
-// 전체 수집 (백필)
+// 전체 수집 (단일 백필)
 const backfillRunning = ref(false)
 const backfillStopped = ref(false)
 const backfillStoredCount = ref<number | null>(null)
@@ -101,6 +131,22 @@ const backfillTotalServer = ref<number | null>(null)
 const backfillInsertedTotal = ref(0)
 const backfillStatus = ref<'idle' | 'running' | 'done' | 'blocked' | 'error'>('idle')
 const backfillMessage = ref<string | null>(null)
+
+// 다중 지점 순차 백필
+const multiBackfillRunning = ref(false)
+const multiBackfillStopped = ref(false)
+const multiBackfillCurrentIndex = ref(0)  // 0-based
+const multiBackfillTotal = ref(0)
+const multiBackfillCurrentPlaceName = ref('')
+const multiBackfillCurrentStored = ref<number | null>(null)
+const multiBackfillCurrentTotal = ref<number | null>(null)
+const multiBackfillStatus = ref<'idle' | 'running' | 'done' | 'blocked' | 'error'>('idle')
+const multiBackfillMessage = ref<string | null>(null)
+const completedPlaceIds = ref<Set<number>>(new Set())
+
+// CSV 다운로드
+const csvLoading = ref(false)
+const csvProgress = ref<{ current: number; total: number } | null>(null)
 
 // ─── 신규 리뷰 계산 (최근 수집 회차) ─────────────────────────────────────────
 
@@ -331,37 +377,18 @@ function stopBackfill() {
   backfillMessage.value = '다음 청크 전송 중단 — 현재 진행 커서는 저장되어 있습니다'
 }
 
-async function backfillAll() {
-  if (!selectedPlace.value || backfillRunning.value) return
+// ─── 공용 백필 루프 (단일 지점) ──────────────────────────────────────────────
+// stoppedRef: 외부에서 정지 신호를 주는 ref.  returns 'done' | 'blocked' | 'stopped' | 'error'
 
-  // 이미 완료된 경우 재시작 허용 (이어하기)
-  backfillRunning.value = true
-  backfillStopped.value = false
-  backfillStatus.value = 'running'
-  backfillMessage.value = null
-  backfillInsertedTotal.value = 0
-  backfillStoredCount.value = null
-  backfillTotalServer.value = null
-
-  const placeId = selectedPlace.value.id
+async function runBackfillLoop(
+  placeId: number,
+  stoppedRef: Ref<boolean>,
+  onProgress: (result: BackfillChunkResult) => void,
+): Promise<'done' | 'blocked' | 'stopped' | 'error'> {
   let consecutiveErrors = 0
 
   while (true) {
-    // 정지 요청 확인
-    if (backfillStopped.value) {
-      backfillRunning.value = false
-      backfillStatus.value = 'idle'
-      if (!backfillMessage.value) {
-        backfillMessage.value = '수집이 중단되었습니다. 다시 시작하면 이어서 진행됩니다.'
-      }
-      break
-    }
-
-    // 선택 플레이스가 바뀐 경우 중단
-    if (selectedPlace.value?.id !== placeId) {
-      backfillRunning.value = false
-      break
-    }
+    if (stoppedRef.value) return 'stopped'
 
     let result: BackfillChunkResult
     try {
@@ -383,47 +410,151 @@ async function backfillAll() {
     } catch (e: unknown) {
       consecutiveErrors++
       if (consecutiveErrors >= 3) {
-        backfillRunning.value = false
-        backfillStatus.value = 'error'
-        backfillMessage.value = `네트워크 오류 3회 연속 — 수집 중단: ${e instanceof Error ? e.message : '알 수 없는 오류'}`
-        break
+        return 'error'
       }
-      // 재시도 전 1초 대기
       await new Promise((r) => setTimeout(r, 1000))
       continue
     }
 
-    // 누적 통계 갱신
-    backfillInsertedTotal.value += result.inserted
-    if (result.stored_count != null) backfillStoredCount.value = result.stored_count
-    if (result.total_server != null) backfillTotalServer.value = result.total_server
+    onProgress(result)
 
-    // 차단 감지
-    if (result.blocked) {
-      backfillRunning.value = false
-      backfillStatus.value = 'blocked'
-      backfillMessage.value = result.error
-        ? `차단/오류 감지: ${result.error} — 커서가 저장되어 있으니 잠시 후 "전체 수집"을 다시 누르면 이어서 진행됩니다.`
-        : '차단 감지 — 잠시 후 "전체 수집"을 다시 누르면 이어서 진행됩니다.'
-      // 이력·리뷰표 갱신
-      await Promise.all([fetchCollections(placeId), fetchReviews(placeId)])
-      fetchPlaces()
-      break
-    }
+    if (result.blocked) return 'blocked'
+    if (result.done) return 'done'
 
-    // 완료
-    if (result.done) {
-      backfillRunning.value = false
-      backfillStatus.value = 'done'
-      backfillMessage.value = null
-      // 이력·리뷰표·목록 새로고침
-      await Promise.all([fetchCollections(placeId), fetchReviews(placeId)])
-      fetchPlaces()
-      break
-    }
-
-    // 청크 간 텀 (1초) — 과도 호출 방지
+    // 청크 간 텀 (1초)
     await new Promise((r) => setTimeout(r, 1000))
+  }
+}
+
+async function backfillAll() {
+  if (!selectedPlace.value || backfillRunning.value) return
+
+  backfillRunning.value = true
+  backfillStopped.value = false
+  backfillStatus.value = 'running'
+  backfillMessage.value = null
+  backfillInsertedTotal.value = 0
+  backfillStoredCount.value = null
+  backfillTotalServer.value = null
+
+  const placeId = selectedPlace.value.id
+
+  const outcome = await runBackfillLoop(
+    placeId,
+    backfillStopped,
+    (result) => {
+      backfillInsertedTotal.value += result.inserted
+      if (result.stored_count != null) backfillStoredCount.value = result.stored_count
+      if (result.total_server != null) backfillTotalServer.value = result.total_server
+    },
+  )
+
+  backfillRunning.value = false
+
+  if (outcome === 'done') {
+    backfillStatus.value = 'done'
+    backfillMessage.value = null
+    await Promise.all([fetchCollections(placeId), fetchReviews(placeId)])
+    fetchPlaces()
+  } else if (outcome === 'blocked') {
+    backfillStatus.value = 'blocked'
+    backfillMessage.value = '차단 감지 — 잠시 후 "전체 수집"을 다시 누르면 이어서 진행됩니다.'
+    await Promise.all([fetchCollections(placeId), fetchReviews(placeId)])
+    fetchPlaces()
+  } else if (outcome === 'stopped') {
+    backfillStatus.value = 'idle'
+    if (!backfillMessage.value) {
+      backfillMessage.value = '수집이 중단되었습니다. 다시 시작하면 이어서 진행됩니다.'
+    }
+  } else {
+    backfillStatus.value = 'error'
+    backfillMessage.value = '네트워크 오류 3회 연속 — 수집 중단. 다시 시작하면 이어서 진행됩니다.'
+  }
+}
+
+// ─── 다중 지점 순차 백필 ──────────────────────────────────────────────────────
+
+function stopMultiBackfill() {
+  multiBackfillStopped.value = true
+  multiBackfillMessage.value = '다음 청크 전송 중단 — 각 지점의 커서는 저장되어 있습니다'
+}
+
+async function startMultiBackfill() {
+  if (multiBackfillRunning.value || checkedPlaces.value.length === 0) return
+
+  const targets = [...checkedPlaces.value]
+
+  multiBackfillRunning.value = true
+  multiBackfillStopped.value = false
+  multiBackfillStatus.value = 'running'
+  multiBackfillMessage.value = null
+  multiBackfillTotal.value = targets.length
+  multiBackfillCurrentIndex.value = 0
+  completedPlaceIds.value = new Set()
+
+  for (let i = 0; i < targets.length; i++) {
+    if (multiBackfillStopped.value) break
+
+    const place = targets[i]
+    multiBackfillCurrentIndex.value = i
+    multiBackfillCurrentPlaceName.value = placeName(place)
+    multiBackfillCurrentStored.value = null
+    multiBackfillCurrentTotal.value = null
+
+    const outcome = await runBackfillLoop(
+      place.id,
+      multiBackfillStopped,
+      (result) => {
+        if (result.stored_count != null) multiBackfillCurrentStored.value = result.stored_count
+        if (result.total_server != null) multiBackfillCurrentTotal.value = result.total_server
+      },
+    )
+
+    // 이 지점 결과 처리
+    if (outcome === 'done') {
+      const done = new Set(completedPlaceIds.value)
+      done.add(place.id)
+      completedPlaceIds.value = done
+      // 현재 선택된 지점이면 리뷰·이력 갱신
+      if (selectedPlace.value?.id === place.id) {
+        await Promise.all([fetchCollections(place.id), fetchReviews(place.id)])
+      }
+      fetchPlaces()
+    } else if (outcome === 'blocked') {
+      multiBackfillRunning.value = false
+      multiBackfillStatus.value = 'blocked'
+      multiBackfillMessage.value = `차단 감지 (${placeName(place)}) — 커서가 저장되어 있습니다. 잠시 후 다시 시도하세요.`
+      if (selectedPlace.value?.id === place.id) {
+        await Promise.all([fetchCollections(place.id), fetchReviews(place.id)])
+      }
+      fetchPlaces()
+      return
+    } else if (outcome === 'error') {
+      multiBackfillRunning.value = false
+      multiBackfillStatus.value = 'error'
+      multiBackfillMessage.value = `네트워크 오류 (${placeName(place)}) — 수집 중단.`
+      return
+    } else if (outcome === 'stopped') {
+      break
+    }
+
+    // 지점 간 텀 (2초)
+    if (i < targets.length - 1 && !multiBackfillStopped.value) {
+      await new Promise((r) => setTimeout(r, 2000))
+    }
+  }
+
+  multiBackfillRunning.value = false
+
+  if (multiBackfillStopped.value) {
+    multiBackfillStatus.value = 'idle'
+    if (!multiBackfillMessage.value) {
+      multiBackfillMessage.value = '수집이 중단되었습니다. 각 지점의 커서가 저장되어 있습니다.'
+    }
+  } else {
+    multiBackfillStatus.value = 'done'
+    multiBackfillMessage.value = null
+    fetchPlaces()
   }
 }
 
@@ -439,41 +570,96 @@ watch(currentPage, () => {
   }
 })
 
-// ─── CSV 내보내기 ─────────────────────────────────────────────────────────────
+// ─── CSV 전체 다운로드 ────────────────────────────────────────────────────────
 
-function exportCsv() {
-  if (!selectedPlace.value || reviews.value.length === 0) return
+async function exportCsv() {
+  if (!selectedPlace.value || csvLoading.value) return
+  if (reviewsTotal.value === 0) return
 
-  const headers = ['작성일', '작성자', '본문', '방문일', '답글여부', '사진여부']
+  const placeId = selectedPlace.value.id
+  const total = reviewsTotal.value
+  const FETCH_LIMIT = 200
+  const maxPages = Math.ceil(total / FETCH_LIMIT) + 5  // 안전 가드
 
-  const escape = (v: string | number | null | undefined): string => {
-    const s = String(v ?? '')
-    return s.includes(',') || s.includes('"') || s.includes('\n')
-      ? `"${s.replace(/"/g, '""')}"`
-      : s
+  csvLoading.value = true
+  csvProgress.value = { current: 0, total }
+
+  const allReviews: Review[] = []
+
+  try {
+    let fetchOffset = 0
+    let pageCount = 0
+
+    while (true) {
+      if (pageCount >= maxPages) break  // 무한루프 방지
+
+      const params = new URLSearchParams({
+        limit: String(FETCH_LIMIT),
+        offset: String(fetchOffset),
+      })
+      const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/reviews?${params}`, {
+        headers: authHeaders(),
+      })
+      if (!res.ok) {
+        throw new Error(`리뷰 fetch 실패 (${res.status})`)
+      }
+      const data = await res.json() as { reviews: Review[]; total: number }
+      const batch = data.reviews
+
+      if (batch.length === 0) break  // 더 없음
+
+      allReviews.push(...batch)
+      csvProgress.value = { current: allReviews.length, total }
+
+      fetchOffset += batch.length
+      pageCount++
+
+      if (batch.length < FETCH_LIMIT) break  // 마지막 페이지
+      if (allReviews.length >= total) break   // total 도달
+    }
+
+    if (allReviews.length === 0) return
+
+    // CSV 생성
+    const headers = ['작성일', '작성자', '본문', '방문일', '답글여부', '사진여부']
+
+    const escape = (v: string | number | null | undefined): string => {
+      const s = String(v ?? '')
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"`
+        : s
+    }
+
+    const csvLines = [headers.join(',')]
+    for (const r of allReviews) {
+      csvLines.push([
+        escape(formatDate(r.review_created_at)),
+        escape(r.author_nick),
+        escape(r.body),
+        escape(formatDate(r.visited_at)),
+        escape(r.owner_reply ? '있음' : '없음'),
+        escape(r.has_photo === 1 ? '○' : ''),
+      ].join(','))
+    }
+
+    const bom = '﻿'
+    const blob = new Blob([bom + csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const pname = placeName(selectedPlace.value).replace(/[^a-zA-Z0-9가-힣_-]/g, '_')
+    a.download = `reviews_${pname}_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e: unknown) {
+    collectToast.value = {
+      type: 'error',
+      message: `CSV 다운로드 실패: ${e instanceof Error ? e.message : '알 수 없는 오류'}`,
+    }
+  } finally {
+    csvLoading.value = false
+    csvProgress.value = null
   }
-
-  const csvLines = [headers.join(',')]
-  for (const r of reviews.value) {
-    csvLines.push([
-      escape(formatDate(r.review_created_at)),
-      escape(r.author_nick),
-      escape(r.body),
-      escape(formatDate(r.visited_at)),
-      escape(r.owner_reply ? '있음' : '없음'),
-      escape(r.has_photo === 1 ? '○' : ''),
-    ].join(','))
-  }
-
-  const bom = '﻿'
-  const blob = new Blob([bom + csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  const pname = placeName(selectedPlace.value).replace(/[^a-zA-Z0-9가-힣_-]/g, '_')
-  a.download = `reviews_${pname}_${new Date().toISOString().slice(0, 10)}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
 }
 
 // ─── 초기 로드 / 정리 ────────────────────────────────────────────────────────
@@ -485,6 +671,7 @@ onMounted(() => {
 // 페이지 이탈 시 백필 루프 정지 (메모리 누수·유령 호출 방지)
 onUnmounted(() => {
   backfillStopped.value = true
+  multiBackfillStopped.value = true
 })
 </script>
 
@@ -516,22 +703,110 @@ onUnmounted(() => {
       <p v-if="registerError" class="text-xs text-red-500">{{ registerError }}</p>
     </div>
 
+    <!-- ── 다중 백필 진행 바 (선택 지점 있고 실행 중일 때) ─────────────── -->
+    <div
+      v-if="multiBackfillStatus !== 'idle'"
+      class="shrink-0 px-3 py-2 border rounded-lg text-xs flex items-center gap-3"
+      :class="{
+        'bg-blue-50 text-blue-700 border-blue-100': multiBackfillStatus === 'running',
+        'bg-green-50 text-green-700 border-green-100': multiBackfillStatus === 'done',
+        'bg-amber-50 text-amber-700 border-amber-100': multiBackfillStatus === 'blocked',
+        'bg-red-50 text-red-700 border-red-100': multiBackfillStatus === 'error',
+      }"
+    >
+      <template v-if="multiBackfillStatus === 'running'">
+        <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 shrink-0 animate-spin" />
+        <span class="font-medium whitespace-nowrap">지점 {{ multiBackfillCurrentIndex + 1 }}/{{ multiBackfillTotal }}</span>
+        <span class="text-blue-600 truncate">{{ multiBackfillCurrentPlaceName }}</span>
+        <template v-if="multiBackfillCurrentStored !== null">
+          <span class="tabular-nums whitespace-nowrap">
+            {{ multiBackfillCurrentStored.toLocaleString('ko-KR') }}
+            <template v-if="multiBackfillCurrentTotal">
+              / {{ multiBackfillCurrentTotal.toLocaleString('ko-KR') }}건
+            </template>
+          </span>
+          <div v-if="multiBackfillCurrentTotal" class="flex-1 min-w-0 h-1.5 rounded-full bg-blue-100 overflow-hidden">
+            <div
+              class="h-full rounded-full bg-blue-400 transition-all duration-300"
+              :style="{ width: Math.min(100, Math.round(multiBackfillCurrentStored / multiBackfillCurrentTotal * 100)) + '%' }"
+            />
+          </div>
+        </template>
+        <UButton
+          label="멈춤"
+          size="xs"
+          color="warning"
+          variant="soft"
+          class="shrink-0 ml-auto"
+          @click="stopMultiBackfill"
+        />
+      </template>
+      <template v-else-if="multiBackfillStatus === 'done'">
+        <UIcon name="i-heroicons-check-circle" class="w-3.5 h-3.5 shrink-0" />
+        <span class="font-medium">{{ multiBackfillTotal }}개 지점 전체 수집 완료</span>
+      </template>
+      <template v-else>
+        <UIcon name="i-heroicons-exclamation-triangle" class="w-3.5 h-3.5 shrink-0" />
+        <span>{{ multiBackfillMessage }}</span>
+      </template>
+    </div>
+
     <!-- ── 본문 2열: 플레이스 목록 + 우측 패널 ──────────────────────── -->
     <div class="flex-1 min-h-0 flex gap-3">
 
       <!-- 좌측: 플레이스 목록 (고정 너비) -->
-      <div class="w-56 shrink-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden">
+      <div class="w-60 shrink-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden">
         <!-- 좌측 헤더 -->
         <div class="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
-          <span class="text-xs font-medium text-gray-600">플레이스 목록</span>
+          <div class="flex items-center gap-2 min-w-0">
+            <!-- 전체선택 체크박스 -->
+            <input
+              type="checkbox"
+              class="w-3.5 h-3.5 shrink-0 cursor-pointer accent-primary-600"
+              :checked="allChecked"
+              :indeterminate="someChecked"
+              :disabled="places.length === 0"
+              @change="toggleAllCheck"
+            />
+            <span class="text-xs font-medium text-gray-600">플레이스 목록</span>
+          </div>
+          <div class="flex items-center gap-1 shrink-0">
+            <UButton
+              icon="i-heroicons-arrow-path"
+              size="xs"
+              color="neutral"
+              variant="ghost"
+              :loading="placesStatus === 'loading'"
+              aria-label="새로고침"
+              @click="fetchPlaces"
+            />
+          </div>
+        </div>
+
+        <!-- 선택 지점 전체 수집 버튼 -->
+        <div
+          v-if="checkedPlaces.length > 0"
+          class="shrink-0 px-2 py-1.5 border-b border-gray-200 bg-gray-50"
+        >
           <UButton
-            icon="i-heroicons-arrow-path"
+            v-if="!multiBackfillRunning"
+            :label="`선택 지점 전체 수집 (${checkedPlaces.length})`"
             size="xs"
-            color="neutral"
-            variant="ghost"
-            :loading="placesStatus === 'loading'"
-            aria-label="새로고침"
-            @click="fetchPlaces"
+            color="primary"
+            variant="soft"
+            icon="i-heroicons-archive-box-arrow-down"
+            class="w-full"
+            @click="startMultiBackfill"
+          />
+          <UButton
+            v-else
+            label="수집 중... (멈춤)"
+            size="xs"
+            color="warning"
+            variant="soft"
+            icon="i-heroicons-pause-circle"
+            class="w-full"
+            @click="stopMultiBackfill"
           />
         </div>
 
@@ -556,13 +831,27 @@ onUnmounted(() => {
           <li
             v-for="place in places"
             :key="place.id"
-            class="px-3 py-2.5 cursor-pointer transition-colors"
+            class="px-2 py-2.5 cursor-pointer transition-colors"
             :class="selectedPlace?.id === place.id
               ? 'bg-primary-50 text-primary-700'
               : 'hover:bg-gray-50 text-gray-700'"
             @click="selectPlace(place)"
           >
-            <div class="flex items-center gap-1 min-w-0">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <!-- 체크박스 -->
+              <input
+                type="checkbox"
+                class="w-3.5 h-3.5 shrink-0 cursor-pointer accent-primary-600"
+                :checked="checkedPlaceIds.has(place.id)"
+                @click.stop
+                @change="toggleCheck(place)"
+              />
+              <!-- 완료 뱃지 -->
+              <span
+                v-if="completedPlaceIds.has(place.id)"
+                class="shrink-0 w-2 h-2 rounded-full bg-green-500"
+                title="이번 다중 수집 완료"
+              />
               <p class="text-sm font-medium leading-snug truncate flex-1 min-w-0">{{ placeName(place) }}</p>
               <a
                 :href="naverReviewUrl(place)"
@@ -575,7 +864,7 @@ onUnmounted(() => {
                 <UIcon name="i-heroicons-arrow-top-right-on-square" class="w-3.5 h-3.5" />
               </a>
             </div>
-            <div class="flex items-center gap-2 mt-0.5">
+            <div class="flex items-center gap-2 mt-0.5 pl-5">
               <span class="text-xs text-gray-400 tabular-nums">
                 리뷰 {{ place.total_reviews != null ? place.total_reviews.toLocaleString('ko-KR') : '—' }}
               </span>
@@ -586,11 +875,11 @@ onUnmounted(() => {
         </ul>
       </div>
 
-      <!-- 우측: 리뷰 표 + 수집 이력 (상하 분할) -->
+      <!-- 우측: 리뷰 표(위) + 수집 이력(아래) — flex-col 분배 -->
       <div class="flex-1 min-h-0 flex flex-col gap-3">
 
-        <!-- 우측 상단: 리뷰 표 -->
-        <div class="flex-1 min-h-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden">
+        <!-- 우측 상단: 리뷰 표 (flex-[3]) -->
+        <div class="flex-[3] min-h-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden">
 
           <!-- 헤더 -->
           <div class="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
@@ -650,13 +939,16 @@ onUnmounted(() => {
                   @click="backfillAll"
                 />
               </template>
+              <!-- CSV 다운로드 버튼 -->
               <UButton
-                v-if="reviewsStatus === 'done' && reviews.length > 0"
-                label="CSV"
+                v-if="reviewsStatus === 'done' && reviewsTotal > 0"
+                :label="csvLoading ? (csvProgress ? `${csvProgress.current}/${csvProgress.total}` : '받는 중...') : 'CSV'"
                 size="xs"
                 color="neutral"
                 variant="outline"
                 icon="i-heroicons-arrow-down-tray"
+                :loading="csvLoading"
+                :disabled="csvLoading"
                 @click="exportCsv"
               />
             </div>
@@ -675,7 +967,7 @@ onUnmounted(() => {
             {{ collectToast.message }}
           </div>
 
-          <!-- 백필 진행 상태 바 -->
+          <!-- 백필 진행 상태 바 (단일) -->
           <div
             v-if="selectedPlace && backfillStatus !== 'idle'"
             class="shrink-0 px-3 py-1.5 border-b text-xs flex items-center gap-3"
@@ -689,9 +981,9 @@ onUnmounted(() => {
             <!-- 수집 중: 스피너 + 진행률 -->
             <template v-if="backfillStatus === 'running'">
               <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 shrink-0 animate-spin" />
-              <span class="font-medium">전체 수집 중</span>
+              <span class="font-medium whitespace-nowrap">전체 수집 중</span>
               <template v-if="backfillStoredCount !== null">
-                <span class="tabular-nums">
+                <span class="tabular-nums whitespace-nowrap">
                   보유 {{ backfillStoredCount.toLocaleString('ko-KR') }}
                   <template v-if="backfillTotalServer">&nbsp;/&nbsp;총 {{ backfillTotalServer.toLocaleString('ko-KR') }}건
                     <span class="text-blue-500">({{ Math.min(100, Math.round(backfillStoredCount / backfillTotalServer * 100)) }}%)</span>
@@ -709,14 +1001,14 @@ onUnmounted(() => {
                 </div>
               </template>
               <template v-else>
-                <span class="tabular-nums">신규 {{ backfillInsertedTotal.toLocaleString('ko-KR') }}건 수집 중...</span>
+                <span class="tabular-nums whitespace-nowrap">신규 {{ backfillInsertedTotal.toLocaleString('ko-KR') }}건 수집 중...</span>
               </template>
             </template>
             <!-- 완료 -->
             <template v-else-if="backfillStatus === 'done'">
               <UIcon name="i-heroicons-check-circle" class="w-3.5 h-3.5 shrink-0" />
               <span class="font-medium">전체 수집 완료</span>
-              <span v-if="backfillStoredCount !== null" class="tabular-nums">
+              <span v-if="backfillStoredCount !== null" class="tabular-nums whitespace-nowrap">
                 보유 {{ backfillStoredCount.toLocaleString('ko-KR') }}건
               </span>
             </template>
@@ -833,11 +1125,10 @@ onUnmounted(() => {
           </template>
         </div>
 
-        <!-- 우측 하단: 수집 이력 패널 (선택 플레이스 있을 때만) -->
+        <!-- 우측 하단: 수집 이력 패널 (flex-[1], flex 분배) -->
         <div
           v-if="selectedPlace"
-          class="shrink-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden"
-          style="max-height: 220px;"
+          class="flex-[1] min-h-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden"
         >
           <!-- 헤더 -->
           <div class="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50">
@@ -874,7 +1165,7 @@ onUnmounted(() => {
               <thead class="sticky top-0 z-10 bg-gray-50">
                 <tr>
                   <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-36">수집 시각</th>
-                  <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">구분</th>
+                  <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-16">구분</th>
                   <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">신규</th>
                   <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">스킵</th>
                   <th class="px-3 py-1.5 text-left font-medium text-gray-500 border-b border-gray-200">비고</th>
@@ -890,16 +1181,16 @@ onUnmounted(() => {
                   <td class="px-3 py-1.5 whitespace-nowrap text-gray-500 tabular-nums">
                     {{ formatDateTime(ev.collected_at) }}
                   </td>
-                  <td class="px-3 py-1.5">
+                  <td class="px-3 py-1.5 whitespace-nowrap">
                     <span
-                      class="inline-block px-1.5 py-0.5 rounded text-xs font-medium"
+                      class="inline-block px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap"
                       :class="ev.source === 'cron'
                         ? 'bg-gray-100 text-gray-600'
                         : ev.source === 'backfill'
-                          ? 'bg-violet-50 text-violet-700'
+                          ? 'bg-emerald-50 text-emerald-700'
                           : 'bg-blue-50 text-blue-600'"
                     >
-                      {{ ev.source === 'cron' ? '자동' : ev.source === 'backfill' ? '백필' : '수동' }}
+                      {{ ev.source === 'cron' ? '자동' : ev.source === 'backfill' ? '전체' : '수동' }}
                     </span>
                   </td>
                   <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">
