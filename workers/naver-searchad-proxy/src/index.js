@@ -117,6 +117,11 @@ export default {
     if (autoCollectMatch && request.method === 'POST') {
       return handleToggleAutoCollect(request, env, corsHeaders, autoCollectMatch[1]);
     }
+    // GET /api/places/:id/stats — 지점별 미니 통계 대시보드
+    const statsMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/stats$/);
+    if (statsMatch && request.method === 'GET') {
+      return handleGetPlaceStats(request, env, corsHeaders, statsMatch[1]);
+    }
     // DELETE /api/places/:id — 플레이스 + 연관 데이터 cascade 삭제
     // 주의: 정확히 /api/places/{id} 로 끝나는 것만 매칭(하위 경로 없음)
     const deletePlaceMatch = url.pathname.match(/^\/api\/places\/([^/]+)$/);
@@ -2209,6 +2214,131 @@ async function handleToggleAutoCollect(request, env, corsHeaders, placeRowId) {
   }
 
   return jsonResponse({ updated: true, place_id: placeRowId, auto_collect: autoCollect }, 200, cors);
+}
+
+/**
+ * GET /api/places/:id/stats
+ * 지점별 미니 통계 대시보드 집계.
+ * 응답: stored_count, total_server, reply_count, reply_rate, photo_count, photo_rate,
+ *       monthly([{month,count}]), top_keywords([{word,count}]), snapshots([{captured_at,total_reviews,stored_count}])
+ */
+async function handleGetPlaceStats(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인 (handleGetCollections 패턴과 동일)
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id, total_reviews FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  try {
+    // 1) 기본 카운트 집계 (stored_count, reply_count, photo_count)
+    const countRow = await env.DB.prepare(`
+      SELECT
+        COUNT(*)                                       AS stored_count,
+        SUM(CASE WHEN owner_reply IS NOT NULL THEN 1 ELSE 0 END) AS reply_count,
+        SUM(CASE WHEN has_photo = 1 THEN 1 ELSE 0 END)           AS photo_count
+      FROM place_reviews
+      WHERE place_row_id = ?
+    `).bind(placeRowId).first();
+
+    const storedCount  = countRow?.stored_count  ?? 0;
+    const replyCount   = countRow?.reply_count   ?? 0;
+    const photoCount   = countRow?.photo_count   ?? 0;
+    const replyRate    = storedCount > 0 ? replyCount / storedCount : 0;
+    const photoRate    = storedCount > 0 ? photoCount / storedCount : 0;
+
+    // 2) 월별 분포 (최근 12개월, review_created_at 기준)
+    const { results: monthlyRows } = await env.DB.prepare(`
+      SELECT substr(review_created_at, 1, 7) AS month, COUNT(*) AS count
+      FROM place_reviews
+      WHERE place_row_id = ?
+        AND review_created_at IS NOT NULL
+        AND review_created_at >= date('now', '-12 months')
+      GROUP BY month
+      ORDER BY month ASC
+    `).bind(placeRowId).all();
+
+    // 3) 리뷰 본문 수집 (최근 collected_at 기준 LIMIT 1000)
+    const { results: bodyRows } = await env.DB.prepare(`
+      SELECT body FROM place_reviews
+      WHERE place_row_id = ? AND body IS NOT NULL AND body != ''
+      ORDER BY collected_at DESC
+      LIMIT 1000
+    `).bind(placeRowId).all();
+
+    // MVP 단순 빈도 — 정밀 분석은 Phase 4 AI 예정
+    const STOPWORDS = new Set([
+      '너무','정말','진짜','그리고','하지만','에서','으로','합니다','했어요','같아요','있어요',
+      '너무너무','조금','약간','매우','아주','그냥','근데','그래서','이런','저런','여기','거기',
+      '이곳','저곳','이거','저거','이게','저게','것도','것은','것이','것을','것만','것같아요',
+      '같은','같이','처럼','부터','까지','이나','또는','그냥','뭔가','어서','이라','에도',
+      '하고','않고','않아요','없어요','없는','있는','이번','다음','가장','때문','때문에',
+      '하나','하는','하는데','해서','해요','해도','했는데','했어','이렇게','저렇게','어떻게',
+      '너무나','좀더','더욱','매번','항상','자주','가끔','이미','벌써','항상','절대','역시',
+    ]);
+
+    const wordFreq = new Map();
+    for (const row of bodyRows) {
+      if (!row.body) continue;
+      // 공백·문장부호 기준 토큰화
+      const tokens = row.body.split(/[\s.,!?;:·""''()\[\]{}<>/\\|@#$%^&*+=~`\-—–…]+/u);
+      for (const token of tokens) {
+        const word = token.trim();
+        // 2글자 이상, 숫자·한 글자 제거, 불용어 제거
+        if (word.length < 2) continue;
+        if (/^\d+$/.test(word)) continue;
+        if (STOPWORDS.has(word)) continue;
+        wordFreq.set(word, (wordFreq.get(word) ?? 0) + 1);
+      }
+    }
+
+    // 상위 15개 내림차순
+    const topKeywords = Array.from(wordFreq.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 15)
+      .map(([word, count]) => ({ word, count }));
+
+    // 4) 스냅샷 추이 (최근 60개)
+    const { results: snapshots } = await env.DB.prepare(`
+      SELECT captured_at, total_reviews, stored_count
+      FROM place_review_snapshots
+      WHERE place_row_id = ?
+      ORDER BY captured_at ASC
+      LIMIT 60
+    `).bind(placeRowId).all();
+
+    return jsonResponse({
+      stored_count:  storedCount,
+      total_server:  placeRow.total_reviews ?? null,
+      reply_count:   replyCount,
+      reply_rate:    replyRate,
+      photo_count:   photoCount,
+      photo_rate:    photoRate,
+      monthly:       monthlyRows ?? [],
+      top_keywords:  topKeywords,
+      snapshots:     snapshots ?? [],
+    }, 200, cors);
+
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
 }
 
 /**

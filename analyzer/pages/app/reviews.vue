@@ -54,6 +54,18 @@ interface BackfillChunkResult {
   stored_count: number
 }
 
+interface PlaceStats {
+  stored_count: number
+  total_server: number | null
+  reply_count: number
+  reply_rate: number
+  photo_count: number
+  photo_rate: number
+  monthly: { month: string; count: number }[]
+  top_keywords: { word: string; count: number }[]
+  snapshots: { captured_at: string; total_reviews: number; stored_count: number }[]
+}
+
 type LoadStatus = 'idle' | 'loading' | 'done' | 'error'
 
 // ─── 상태 ────────────────────────────────────────────────────────────────────
@@ -163,6 +175,11 @@ const deleteLoading = ref(false)
 
 // 자동갱신 토글
 const autoCollectTogglingIds = ref<Set<number>>(new Set())
+
+// 지점 통계 대시보드
+const placeStats = ref<PlaceStats | null>(null)
+const statsStatus = ref<LoadStatus>('idle')
+const statsError = ref<string | null>(null)
 
 // ─── 신규 리뷰 판별 (cron 자동 수집으로 처음 적재된 리뷰만 신규로 표시) ─────
 
@@ -311,6 +328,28 @@ async function fetchCollections(placeId: number) {
   }
 }
 
+async function fetchPlaceStats(placeId: number) {
+  statsStatus.value = 'loading'
+  statsError.value = null
+  placeStats.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/stats`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      statsError.value = `오류 ${res.status}`
+      statsStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as PlaceStats
+    placeStats.value = data
+    statsStatus.value = 'done'
+  } catch (e: unknown) {
+    statsError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    statsStatus.value = 'error'
+  }
+}
+
 async function collectNow() {
   if (!selectedPlace.value || collectLoading.value) return
   collectLoading.value = true
@@ -376,8 +415,12 @@ function selectPlace(place: Place) {
   currentPage.value = 1
   collectToast.value = null
   showHistory.value = false
+  placeStats.value = null
+  statsStatus.value = 'idle'
+  statsError.value = null
   fetchReviews(place.id)
   fetchCollections(place.id)
+  fetchPlaceStats(place.id)
 }
 
 function toggleHistory() {
@@ -1350,6 +1393,123 @@ onUnmounted(() => {
 
           <!-- Success: 리뷰 표 -->
           <template v-else>
+
+            <!-- ── 미니 통계 대시보드 (shrink-0, 리뷰 표 위) ───────── -->
+            <div class="shrink-0 border-b border-gray-100">
+              <!-- Loading -->
+              <div v-if="statsStatus === 'loading'" class="flex items-center gap-1.5 px-3 py-2">
+                <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />
+                <span class="text-xs text-gray-400">통계 집계 중...</span>
+              </div>
+
+              <!-- Error -->
+              <div v-else-if="statsStatus === 'error'" class="flex items-center gap-1.5 px-3 py-2">
+                <UIcon name="i-heroicons-exclamation-circle" class="w-3.5 h-3.5 text-red-400 shrink-0" />
+                <span class="text-xs text-red-400">통계 로드 실패 — {{ statsError }}</span>
+                <button
+                  class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1"
+                  @click="selectedPlace && fetchPlaceStats(selectedPlace.id)"
+                >재시도</button>
+              </div>
+
+              <!-- Success -->
+              <div v-else-if="statsStatus === 'done' && placeStats" class="flex flex-col gap-0 divide-y divide-gray-100">
+
+                <!-- KPI 카드 줄 -->
+                <div class="flex items-stretch divide-x divide-gray-100">
+                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                    <span class="text-xs text-gray-400 whitespace-nowrap">저장 리뷰</span>
+                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ placeStats.stored_count.toLocaleString('ko-KR') }}</span>
+                  </div>
+                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                    <span class="text-xs text-gray-400 whitespace-nowrap">답글률</span>
+                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ (placeStats.reply_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
+                  </div>
+                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                    <span class="text-xs text-gray-400 whitespace-nowrap">사진첨부율</span>
+                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ (placeStats.photo_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
+                  </div>
+                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                    <span class="text-xs text-gray-400 whitespace-nowrap">서버 총 리뷰</span>
+                    <span class="text-base font-semibold tabular-nums text-gray-800">
+                      {{ placeStats.total_server != null ? placeStats.total_server.toLocaleString('ko-KR') : '—' }}
+                    </span>
+                  </div>
+                </div>
+
+                <!-- 키워드 + 월별 분포 + 추이 (한 줄) -->
+                <div class="flex gap-0 divide-x divide-gray-100">
+
+                  <!-- 키워드 칩 영역 -->
+                  <div
+                    v-if="placeStats.top_keywords.length > 0"
+                    class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1.5"
+                  >
+                    <span class="text-xs text-gray-400">리뷰 본문 단순 빈도 (정밀 분석 예정)</span>
+                    <div class="flex flex-wrap gap-1">
+                      <span
+                        v-for="(kw, i) in placeStats.top_keywords"
+                        :key="kw.word"
+                        class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 whitespace-nowrap"
+                        :class="i < 3 ? 'font-medium text-xs' : 'font-normal text-xs text-gray-500'"
+                        :title="`${kw.count}회`"
+                      >{{ kw.word }}<span class="text-gray-400 text-[10px] tabular-nums">{{ kw.count }}</span></span>
+                    </div>
+                  </div>
+
+                  <!-- 월별 분포 미니 바 차트 -->
+                  <div
+                    v-if="placeStats.monthly.length > 0"
+                    class="w-52 shrink-0 px-3 py-2 flex flex-col gap-1.5"
+                  >
+                    <span class="text-xs text-gray-400">월별 리뷰 수 (최근 12개월)</span>
+                    <div class="flex items-end gap-px h-10">
+                      <template v-if="Math.max(...placeStats.monthly.map(m => m.count)) > 0">
+                        <div
+                          v-for="m in placeStats.monthly"
+                          :key="m.month"
+                          class="flex-1 min-w-0 bg-primary-400 rounded-sm transition-all"
+                          :style="{ height: Math.max(2, Math.round(m.count / Math.max(...placeStats.monthly.map(x => x.count)) * 40)) + 'px' }"
+                          :title="`${m.month}: ${m.count}건`"
+                        />
+                      </template>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-gray-400 tabular-nums">
+                      <span>{{ placeStats.monthly[0]?.month?.slice(5) }}</span>
+                      <span>{{ placeStats.monthly[placeStats.monthly.length - 1]?.month?.slice(5) }}</span>
+                    </div>
+                  </div>
+
+                  <!-- 스냅샷 추이 -->
+                  <div class="w-44 shrink-0 px-3 py-2 flex flex-col gap-1.5">
+                    <span class="text-xs text-gray-400">저장 리뷰 추이</span>
+                    <template v-if="placeStats.snapshots.length >= 2">
+                      <div class="flex items-end gap-px h-10">
+                        <template v-if="Math.max(...placeStats.snapshots.map(s => s.stored_count)) > 0">
+                          <div
+                            v-for="s in placeStats.snapshots"
+                            :key="s.captured_at"
+                            class="flex-1 min-w-0 bg-emerald-400 rounded-sm transition-all"
+                            :style="{ height: Math.max(2, Math.round(s.stored_count / Math.max(...placeStats.snapshots.map(x => x.stored_count)) * 40)) + 'px' }"
+                            :title="`${s.captured_at.slice(0,10)}: ${s.stored_count.toLocaleString('ko-KR')}건`"
+                          />
+                        </template>
+                      </div>
+                      <div class="flex justify-between text-[10px] text-gray-400 tabular-nums">
+                        <span>{{ placeStats.snapshots[0]?.captured_at?.slice(5,10) }}</span>
+                        <span>{{ placeStats.snapshots[placeStats.snapshots.length - 1]?.captured_at?.slice(5,10) }}</span>
+                      </div>
+                    </template>
+                    <div v-else class="flex-1 flex items-center">
+                      <span class="text-xs text-gray-400">데이터 누적 중 (며칠 뒤 표시)</span>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            </div>
+            <!-- ── /미니 통계 대시보드 ─────────────────────────────── -->
+
             <!-- 표 스크롤 영역 -->
             <div class="flex-1 min-h-0 overflow-auto">
               <table class="w-full text-sm border-collapse">
