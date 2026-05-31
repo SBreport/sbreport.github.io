@@ -15,6 +15,7 @@ interface Place {
   last_collected_at: string | null
   backfill_done: number | null
   created_at: string
+  auto_collect: number  // 1 = on, 0 = off
 }
 
 interface Review {
@@ -159,6 +160,9 @@ const showHistory = ref(false)
 // 삭제
 const deleteConfirmOpen = ref(false)
 const deleteLoading = ref(false)
+
+// 자동갱신 토글
+const autoCollectTogglingIds = ref<Set<number>>(new Set())
 
 // ─── 신규 리뷰 판별 (cron 자동 수집으로 처음 적재된 리뷰만 신규로 표시) ─────
 
@@ -843,6 +847,49 @@ async function confirmDelete() {
   }
 }
 
+// ─── 자동갱신 토글 ───────────────────────────────────────────────────────────
+
+async function toggleAutoCollect(place: Place) {
+  if (autoCollectTogglingIds.value.has(place.id)) return
+
+  const newValue = place.auto_collect === 1 ? 0 : 1
+
+  // 낙관적 업데이트: UI 즉시 반영
+  const toggleIds = new Set(autoCollectTogglingIds.value)
+  toggleIds.add(place.id)
+  autoCollectTogglingIds.value = toggleIds
+  place.auto_collect = newValue
+
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/${place.id}/auto-collect`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ auto_collect: newValue }),
+    })
+    if (!res.ok) {
+      // 실패 시 롤백
+      place.auto_collect = newValue === 1 ? 0 : 1
+      let msg = `자동갱신 설정 실패 (${res.status})`
+      try {
+        const body = await res.json() as { message?: string }
+        if (body.message) msg = body.message
+      } catch { /* ignore */ }
+      collectToast.value = { type: 'error', message: msg }
+    }
+  } catch (e: unknown) {
+    // 네트워크 오류 시 롤백
+    place.auto_collect = newValue === 1 ? 0 : 1
+    collectToast.value = {
+      type: 'error',
+      message: e instanceof Error ? e.message : '자동갱신 설정 중 오류 발생',
+    }
+  } finally {
+    const ids = new Set(autoCollectTogglingIds.value)
+    ids.delete(place.id)
+    autoCollectTogglingIds.value = ids
+  }
+}
+
 // ─── 초기 로드 / 정리 ────────────────────────────────────────────────────────
 
 onMounted(() => {
@@ -1075,6 +1122,30 @@ onUnmounted(() => {
               </span>
               <span class="text-xs text-gray-300">·</span>
               <span class="text-xs text-gray-400">갱신: {{ place.last_collected_at ? formatDate(place.last_collected_at) : '전' }}</span>
+              <span class="text-xs text-gray-300">·</span>
+              <!-- 자동갱신 토글 -->
+              <button
+                class="flex items-center gap-1 shrink-0"
+                :class="autoCollectTogglingIds.has(place.id) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'"
+                :title="place.auto_collect === 1 ? '자동갱신 켜짐 — 클릭해서 끄기' : '자동갱신 꺼짐 — 클릭해서 켜기'"
+                :disabled="autoCollectTogglingIds.has(place.id)"
+                @click.stop="toggleAutoCollect(place)"
+              >
+                <!-- 토글 트랙 -->
+                <span
+                  class="relative inline-flex h-3 w-5 shrink-0 rounded-full transition-colors duration-150"
+                  :class="place.auto_collect === 1 ? 'bg-primary-500' : 'bg-gray-300'"
+                >
+                  <span
+                    class="absolute top-0.5 h-2 w-2 rounded-full bg-white shadow transition-transform duration-150"
+                    :class="place.auto_collect === 1 ? 'translate-x-2.5' : 'translate-x-0.5'"
+                  />
+                </span>
+                <span
+                  class="text-xs"
+                  :class="place.auto_collect === 1 ? 'text-primary-600' : 'text-gray-400'"
+                >{{ place.auto_collect === 1 ? '자동' : '수동' }}</span>
+              </button>
             </div>
           </li>
         </ul>
@@ -1171,7 +1242,6 @@ onUnmounted(() => {
                     <span class="tabular-nums">{{ selectedPlace.last_collected_at ? formatDateTime(selectedPlace.last_collected_at) : '갱신 전' }}</span>
                   </span>
                   <span class="text-gray-300 text-xs">·</span>
-                  <!-- TODO: 지점별 자동갱신 on/off (다음 단계) -->
                   <button
                     class="text-xs text-primary-600 hover:text-primary-800 transition-colors flex items-center gap-0.5 whitespace-nowrap"
                     @click="toggleHistory"
@@ -1187,7 +1257,7 @@ onUnmounted(() => {
               <!-- 자동 갱신 안내 -->
               <div class="flex items-center gap-1 shrink-0 text-gray-400">
                 <UIcon name="i-heroicons-information-circle" class="w-3.5 h-3.5 shrink-0" />
-                <span class="text-xs">매일 새벽 3시(KST) 등록된 플레이스의 새 리뷰가 자동 수집됩니다.</span>
+                <span class="text-xs">매일 새벽 3시(KST) 자동 수집됩니다. 지점별 on/off는 좌측 목록에서 설정.</span>
               </div>
             </div>
           </div>

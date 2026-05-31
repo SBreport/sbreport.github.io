@@ -112,6 +112,11 @@ export default {
     if (collectionsMatch && request.method === 'GET') {
       return handleGetCollections(request, env, corsHeaders, collectionsMatch[1]);
     }
+    // POST /api/places/:id/auto-collect — 자동수집 on/off 토글
+    const autoCollectMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/auto-collect$/);
+    if (autoCollectMatch && request.method === 'POST') {
+      return handleToggleAutoCollect(request, env, corsHeaders, autoCollectMatch[1]);
+    }
     // DELETE /api/places/:id — 플레이스 + 연관 데이터 cascade 삭제
     // 주의: 정확히 /api/places/{id} 로 끝나는 것만 매칭(하위 경로 없음)
     const deletePlaceMatch = url.pathname.match(/^\/api\/places\/([^/]+)$/);
@@ -1161,7 +1166,7 @@ async function handleListPlaces(request, env, corsHeaders) {
 
   try {
     const { results } = await env.DB.prepare(
-      `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at
+      `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect
        FROM review_places
        WHERE user_id = ?
        ORDER BY created_at DESC`
@@ -1530,6 +1535,7 @@ async function runDailyReviewCollection(env) {
     const result = await env.DB.prepare(
       `SELECT id, place_id, business_type, name
          FROM review_places
+        WHERE auto_collect = 1
         ORDER BY (last_collected_at IS NULL) DESC, last_collected_at ASC
         LIMIT ?`
     ).bind(CRON_MAX_PLACES).all();
@@ -2150,6 +2156,59 @@ async function handleGetCollections(request, env, corsHeaders, placeRowId) {
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
+}
+
+/**
+ * POST /api/places/:id/auto-collect — 지점별 자동수집 on/off 토글.
+ * body: { "auto_collect": 0 | 1 }
+ * 소유 확인 필수 — 다른 사용자의 플레이스는 변경 불가.
+ */
+async function handleToggleAutoCollect(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  const autoCollect = body.auto_collect;
+  if (autoCollect !== 0 && autoCollect !== 1) {
+    return jsonResponse({ error: 'invalid_value', message: 'auto_collect 값은 0 또는 1이어야 합니다' }, 400, cors);
+  }
+
+  // 소유 확인 (handleDeletePlace 패턴과 동일)
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  try {
+    await env.DB.prepare(
+      'UPDATE review_places SET auto_collect = ? WHERE id = ? AND user_id = ?'
+    ).bind(autoCollect, placeRowId, authResult.user.id).run();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ updated: true, place_id: placeRowId, auto_collect: autoCollect }, 200, cors);
 }
 
 /**
