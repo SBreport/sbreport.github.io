@@ -228,8 +228,52 @@ async function fetchNaverReviews(placeId, businessType, after, pageSize, retryCo
   return visitorReviews; // { total, items[] }
 }
 
+/**
+ * 네이버 표시용 상대 날짜 문자열 → ISO YYYY-MM-DD 변환.
+ *
+ * 형식 규칙:
+ *   "5.9.토"     → 2026-05-09  (올해, M.D.요일)
+ *   "5.31.일"    → 2026-05-31  (올해, M.D.요일)
+ *   "25.9.9.화"  → 2025-09-09  (과거, YY.M.D.요일)
+ *   "18.11.1.목" → 2018-11-01  (과거, YY.M.D.요일)
+ *
+ * @param {string|null|undefined} raw      네이버 API item.created 값
+ * @param {Date}                  refDate  기준 시점 (보통 new Date())
+ * @returns {string|null}                  "YYYY-MM-DD" 또는 null
+ */
+function parseNaverReviewDate(raw, refDate) {
+  if (!raw || typeof raw !== 'string') return null;
+  // '.'으로 분리, 공백 제거, 빈 토큰 제거
+  let parts = raw.split('.').map((s) => s.trim()).filter(Boolean);
+  // 마지막 토큰이 요일(월화수목금토일 포함)이면 제거
+  if (parts.length && /[월화수목금토일]/.test(parts[parts.length - 1])) parts.pop();
+  let y, m, d;
+  if (parts.length === 2) {
+    // 올해(연도 생략): [M, D]
+    m = Number(parts[0]);
+    d = Number(parts[1]);
+    y = refDate.getFullYear();
+    // 만든 날짜가 기준일보다 미래면 작년 (예: 5월에 "12.31"을 보면 작년 12월)
+    if (new Date(y, m - 1, d) > refDate) y -= 1;
+  } else if (parts.length === 3) {
+    // [YY, M, D] → 2000 + YY
+    y = 2000 + Number(parts[0]);
+    m = Number(parts[1]);
+    d = Number(parts[2]);
+  } else {
+    return null;
+  }
+  if (
+    !Number.isInteger(m) || !Number.isInteger(d) ||
+    m < 1 || m > 12 || d < 1 || d > 31
+  ) return null;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
+
 // ─── 리뷰 아이템 → Worker POST body 형식으로 매핑 ────────────────────────────
 function mapItem(item) {
+  const raw = item.created ?? null;
   return {
     naver_review_id: String(item.id),
     author_nick: item.author?.nickname ?? item.nickname ?? null,
@@ -237,7 +281,8 @@ function mapItem(item) {
     has_photo: Array.isArray(item.media) && item.media.length > 0 ? 1 : 0,
     owner_reply: item.reply?.body ?? null,
     visited_at: item.visited ?? null,
-    review_created_at: item.created ?? null,
+    review_created_at: raw,
+    review_date: parseNaverReviewDate(raw, new Date()),
   };
 }
 

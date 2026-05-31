@@ -1229,10 +1229,11 @@ async function handlePostReviews(request, env, corsHeaders, placeRowId) {
 
   // 각 리뷰를 INSERT OR IGNORE 문으로 준비 (중복 키: place_row_id + naver_review_id)
   const stmts = reviews.map((r) => {
+    const reviewDate = r.review_date ?? parseNaverReviewDate(r.review_created_at ?? null, new Date());
     return env.DB.prepare(
       `INSERT OR IGNORE INTO place_reviews
-         (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at, first_source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, review_date, collected_at, first_source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       crypto.randomUUID(),
       placeRowId,
@@ -1243,6 +1244,7 @@ async function handlePostReviews(request, env, corsHeaders, placeRowId) {
       r.owner_reply ?? null,
       r.visited_at ?? null,
       r.review_created_at ?? null,
+      reviewDate,
       now,
       'manual'
     );
@@ -1331,11 +1333,12 @@ async function handleGetReviews(request, env, corsHeaders, placeRowId) {
     const total = countRow?.c ?? 0;
 
     // 리뷰 목록 조회 (최신 리뷰 순)
+    // review_date(ISO)로 정렬. NULL인 옛 행은 뒤로, 그 안에선 review_created_at 원본순.
     const { results } = await env.DB.prepare(
-      `SELECT id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at, first_source
+      `SELECT id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, review_date, collected_at, first_source
        FROM place_reviews
        WHERE place_row_id = ?
-       ORDER BY review_created_at DESC
+       ORDER BY review_date IS NULL, review_date DESC, review_created_at DESC
        LIMIT ? OFFSET ?`
     ).bind(placeRowId, limit, offset).all();
 
@@ -1509,7 +1512,51 @@ async function fetchNaverReviewPage(placeId, businessType, after, env) {
  * 리뷰 아이템 → DB INSERT 형식으로 매핑.
  * backfill.mjs mapItem 과 동일 필드.
  */
+/**
+ * 네이버 표시용 상대 날짜 문자열 → ISO YYYY-MM-DD 변환.
+ *
+ * 형식 규칙:
+ *   "5.9.토"     → 2026-05-09  (올해, M.D.요일)
+ *   "5.31.일"    → 2026-05-31  (올해, M.D.요일)
+ *   "25.9.9.화"  → 2025-09-09  (과거, YY.M.D.요일)
+ *   "18.11.1.목" → 2018-11-01  (과거, YY.M.D.요일)
+ *
+ * @param {string|null|undefined} raw      네이버 API item.created 값
+ * @param {Date}                  refDate  기준 시점 (보통 new Date())
+ * @returns {string|null}                  "YYYY-MM-DD" 또는 null
+ */
+function parseNaverReviewDate(raw, refDate) {
+  if (!raw || typeof raw !== 'string') return null;
+  // '.'으로 분리, 공백 제거, 빈 토큰 제거
+  let parts = raw.split('.').map((s) => s.trim()).filter(Boolean);
+  // 마지막 토큰이 요일(월화수목금토일 포함)이면 제거
+  if (parts.length && /[월화수목금토일]/.test(parts[parts.length - 1])) parts.pop();
+  let y, m, d;
+  if (parts.length === 2) {
+    // 올해(연도 생략): [M, D]
+    m = Number(parts[0]);
+    d = Number(parts[1]);
+    y = refDate.getFullYear();
+    // 만든 날짜가 기준일보다 미래면 작년 (예: 5월에 "12.31"을 보면 작년 12월)
+    if (new Date(y, m - 1, d) > refDate) y -= 1;
+  } else if (parts.length === 3) {
+    // [YY, M, D] → 2000 + YY
+    y = 2000 + Number(parts[0]);
+    m = Number(parts[1]);
+    d = Number(parts[2]);
+  } else {
+    return null;
+  }
+  if (
+    !Number.isInteger(m) || !Number.isInteger(d) ||
+    m < 1 || m > 12 || d < 1 || d > 31
+  ) return null;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
+
 function mapReviewItem(item) {
+  const raw = item.created ?? null;
   return {
     naver_review_id: String(item.id),
     author_nick: item.author?.nickname ?? item.nickname ?? null,
@@ -1517,7 +1564,8 @@ function mapReviewItem(item) {
     has_photo: Array.isArray(item.media) && item.media.length > 0 ? 1 : 0,
     owner_reply: item.reply?.body ?? null,
     visited_at: item.visited ?? null,
-    review_created_at: item.created ?? null,
+    review_created_at: raw,
+    review_date: parseNaverReviewDate(raw, new Date()),
   };
 }
 
@@ -1695,8 +1743,8 @@ async function collectPlaceReviews(env, placeRow, opts = {}) {
     const stmts = mapped.map((r) =>
       env.DB.prepare(
         `INSERT OR IGNORE INTO place_reviews
-           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at, first_source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, review_date, collected_at, first_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         crypto.randomUUID(),
         placeRowId,
@@ -1707,6 +1755,7 @@ async function collectPlaceReviews(env, placeRow, opts = {}) {
         r.owner_reply ?? null,
         r.visited_at ?? null,
         r.review_created_at ?? null,
+        r.review_date ?? null,
         now,
         source
       )
@@ -1872,8 +1921,8 @@ async function backfillPlaceChunk(env, placeRow, opts = {}) {
     const stmts = mapped.map((r) =>
       env.DB.prepare(
         `INSERT OR IGNORE INTO place_reviews
-           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, collected_at, first_source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, place_row_id, naver_review_id, author_nick, body, has_photo, owner_reply, visited_at, review_created_at, review_date, collected_at, first_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         crypto.randomUUID(),
         placeRowId,
@@ -1884,6 +1933,7 @@ async function backfillPlaceChunk(env, placeRow, opts = {}) {
         r.owner_reply ?? null,
         r.visited_at ?? null,
         r.review_created_at ?? null,
+        r.review_date ?? null,
         now,
         'backfill'
       )
@@ -2264,13 +2314,13 @@ async function handleGetPlaceStats(request, env, corsHeaders, placeRowId) {
     const replyRate    = storedCount > 0 ? replyCount / storedCount : 0;
     const photoRate    = storedCount > 0 ? photoCount / storedCount : 0;
 
-    // 2) 월별 분포 (최근 12개월, review_created_at 기준)
+    // 2) 월별 분포 (최근 12개월, review_date ISO 기준)
     const { results: monthlyRows } = await env.DB.prepare(`
-      SELECT substr(review_created_at, 1, 7) AS month, COUNT(*) AS count
+      SELECT substr(review_date, 1, 7) AS month, COUNT(*) AS count
       FROM place_reviews
       WHERE place_row_id = ?
-        AND review_created_at IS NOT NULL
-        AND review_created_at >= date('now', '-12 months')
+        AND review_date IS NOT NULL
+        AND review_date >= date('now', '-12 months')
       GROUP BY month
       ORDER BY month ASC
     `).bind(placeRowId).all();

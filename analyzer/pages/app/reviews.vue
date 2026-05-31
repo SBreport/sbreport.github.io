@@ -27,6 +27,7 @@ interface Review {
   owner_reply: string | null
   visited_at: string | null
   review_created_at: string | null
+  review_date: string | null  // ISO YYYY-MM-DD (정렬·집계용)
   collected_at: string
   first_source: 'cron' | 'manual' | 'backfill' | null
 }
@@ -206,6 +207,24 @@ function formatDate(s: string | null | undefined): string {
   const d = new Date(s)
   if (isNaN(d.getTime())) return s
   return d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' })
+}
+
+/** 리뷰 작성일 표시: review_date(ISO)가 있으면 YY.M.D(요일) 형식으로 통일. 없으면 원본 fallback. */
+function formatReviewDate(review_date: string | null | undefined, review_created_at: string | null | undefined): string {
+  if (review_date) {
+    // review_date: "YYYY-MM-DD" → Date 생성 (로컬 자정으로 해석되도록 T00:00 붙임)
+    const d = new Date(review_date + 'T00:00:00')
+    if (!isNaN(d.getTime())) {
+      const yy = String(d.getFullYear()).slice(2)
+      const M = d.getMonth() + 1
+      const D = d.getDate()
+      const days = ['일', '월', '화', '수', '목', '금', '토']
+      const dow = days[d.getDay()]
+      return `${yy}.${M}.${D}(${dow})`
+    }
+  }
+  // fallback: 원본 문자열 그대로
+  return review_created_at || '—'
 }
 
 function formatDateTime(s: string | null | undefined): string {
@@ -698,7 +717,7 @@ async function exportCsv() {
     const csvLines = [headers.join(',')]
     for (const r of allReviews) {
       csvLines.push([
-        csvEscape(formatDate(r.review_created_at)),
+        csvEscape(formatReviewDate(r.review_date, r.review_created_at)),
         csvEscape(r.author_nick),
         csvEscape(r.body),
         csvEscape(formatDate(r.visited_at)),
@@ -756,7 +775,7 @@ async function exportMultiCsv() {
       for (const r of placeReviews) {
         allRows.push([
           csvEscape(placeName(place)),
-          csvEscape(formatDate(r.review_created_at)),
+          csvEscape(formatReviewDate(r.review_date, r.review_created_at)),
           csvEscape(r.author_nick),
           csvEscape(r.body),
           csvEscape(formatDate(r.visited_at)),
@@ -1528,9 +1547,9 @@ onUnmounted(() => {
                     :key="review.id"
                     class="border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors"
                   >
-                    <!-- 작성일 -->
+                    <!-- 작성일 (review_date 기반 YY.M.D(요일) 표시, 없으면 원본 fallback) -->
                     <td class="px-3 py-1.5 whitespace-nowrap text-xs text-gray-500 tabular-nums">
-                      {{ formatDate(review.review_created_at) }}
+                      {{ formatReviewDate(review.review_date, review.review_created_at) }}
                     </td>
                     <!-- 작성자 -->
                     <td class="px-3 py-1.5 text-xs text-gray-700 w-28 max-w-[7rem]">
