@@ -146,6 +146,11 @@ export default {
     if (aiDiagnosisMatch && request.method === 'GET') {
       return handleGetAiDiagnosis(request, env, corsHeaders, aiDiagnosisMatch[1]);
     }
+    // GET /api/places/:id/ai-reviews — 분류/점수대 드릴다운 조회 (researcher 이상)
+    const aiReviewsMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/ai-reviews$/);
+    if (aiReviewsMatch && request.method === 'GET') {
+      return handleGetAiReviews(request, env, corsHeaders, aiReviewsMatch[1]);
+    }
     // POST /api/places/:id/generate-samples — 리뷰 예시 생성 (researcher 이상)
     // GET  /api/places/:id/samples         — 저장된 생성 예시 조회 (researcher 이상)
     // POST /api/places/:id/samples/:sampleId/status — 샘플 평가 라벨 변경 (researcher 이상)
@@ -3741,8 +3746,10 @@ async function callLLMForAuthenticity(env, provider, model, items) {
  * @param {{ heuristicThreshold?: number, maxGpt?: number, provider?: string, model?: string, actorUserId?: string }} opts
  * @returns {Promise<{ analyzed: number, low_quality: number, gpt_called: number, gpt_skipped: number, usage: { prompt_tokens: number, completion_tokens: number, cost_usd: number|null } }>}
  */
+const ANALYZE_GATE = 40; // 내부 고정 — 외부 노출 안 함
+
 async function analyzePlaceReviews(env, placeRowId, {
-  heuristicThreshold = 40,
+  scope = 'suspect',   // 'suspect' | 'all'
   maxGpt = 200,
   provider = 'openai',
   model = null,
@@ -3750,7 +3757,7 @@ async function analyzePlaceReviews(env, placeRowId, {
 } = {}) {
   const resolvedModel = model || PROVIDER_DEFAULT_MODEL[provider] || PROVIDER_DEFAULT_MODEL['openai'];
 
-  // 1. 미캐시 리뷰 로드 (place_reviews.id = review_id)
+  // 1a. 미캐시 리뷰 로드 (분석 행 없는 것)
   const { results: uncachedRows } = await env.DB.prepare(`
     SELECT pr.id AS review_id, pr.body
     FROM place_reviews pr
@@ -3758,7 +3765,18 @@ async function analyzePlaceReviews(env, placeRowId, {
       AND pr.id NOT IN (SELECT review_id FROM place_review_analysis WHERE place_row_id = ?)
   `).bind(placeRowId, placeRowId).all();
 
-  if (uncachedRows.length === 0) {
+  // 1b. 사람추정 재판정 후보 — ai_suspect IS NULL AND rule_low_quality=0 (캐시됐지만 GPT 미판정)
+  const { results: presumedRows } = await env.DB.prepare(`
+    SELECT pra.review_id, pr.body, pra.heuristic_score
+    FROM place_review_analysis pra
+    LEFT JOIN place_reviews pr ON pr.id = pra.review_id
+    WHERE pra.place_row_id = ?
+      AND pra.ai_suspect IS NULL
+      AND (pra.rule_low_quality IS NULL OR pra.rule_low_quality = 0)
+  `).bind(placeRowId).all();
+
+  const hasWork = uncachedRows.length > 0 || presumedRows.length > 0;
+  if (!hasWork) {
     return { analyzed: 0, low_quality: 0, gpt_called: 0, gpt_skipped: 0, usage: { prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 } };
   }
 
@@ -3769,10 +3787,11 @@ async function analyzePlaceReviews(env, placeRowId, {
   const analyzedAt = new Date().toISOString();
   const insertStmts = [];
   let lowQualityCount = 0;
-  const gptQueue = [];   // { review_id, body, heuristicScore, heuristicFlags }
+  // gptQueue: { review_id, body, heuristicScore, heuristicFlags }
+  const gptQueue = [];
   let gptSkipped = 0;
 
-  // 2 & 3. 각 리뷰: 규칙필터 → 휴리스틱
+  // 2 & 3. 미캐시 각 리뷰: 규칙필터 → 휴리스틱
   for (const row of uncachedRows) {
     const { review_id, body } = row;
 
@@ -3792,18 +3811,37 @@ async function analyzePlaceReviews(env, placeRowId, {
     }
   }
 
-  // 4. GPT 게이트: heuristic_score >= heuristicThreshold인 것만, maxGpt 상한
-  // 점수 높은 순 정렬 → 상위 maxGpt개만 GPT 대상
-  const gptCandidates = gptQueue
-    .filter(r => r.heuristicScore >= heuristicThreshold)
+  // 사람추정 재판정 후보를 gptQueue에 추가 (heuristic_score 재사용, 없으면 재계산)
+  for (const row of presumedRows) {
+    const body = row.body ?? '';
+    let heuristicScore = typeof row.heuristic_score === 'number' ? row.heuristic_score : null;
+    let heuristicFlags = [];
+    if (heuristicScore === null) {
+      const computed = computeHeuristicSlopScore(body, factPoolSet);
+      heuristicScore = computed.score;
+      heuristicFlags = computed.flags;
+    }
+    // 이미 gptQueue에 없을 때만 추가 (review_id 중복 방지)
+    gptQueue.push({ review_id: row.review_id, body, heuristicScore, heuristicFlags, isRecheck: true });
+  }
+
+  // 4. GPT 후보 결정
+  // scope='suspect': heuristic_score >= GATE 인 것만
+  // scope='all': 전부
+  const gptCandidates = (
+    scope === 'all'
+      ? [...gptQueue]
+      : gptQueue.filter(r => r.heuristicScore >= ANALYZE_GATE)
+  )
     .sort((a, b) => b.heuristicScore - a.heuristicScore)
     .slice(0, maxGpt);
 
   const gptCandidateIds = new Set(gptCandidates.map(r => r.review_id));
 
-  // 게이트 미달 → presumed_human으로 즉시 캐시
+  // 게이트 미달(또는 scope=suspect에서 score 낮은) 미캐시 → presumed_human으로 즉시 캐시
   for (const row of gptQueue) {
-    if (!gptCandidateIds.has(row.review_id)) {
+    if (!gptCandidateIds.has(row.review_id) && !row.isRecheck) {
+      // 미캐시이면서 GPT 대상 아닌 것만 새로 캐시
       gptSkipped++;
       const flags = JSON.stringify([...row.heuristicFlags, 'presumed_human']);
       insertStmts.push(
@@ -4034,6 +4072,10 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       };
     });
 
+    // pending_all = GPT 미판정 비저품질 건수 (사람추정 + 미분석)
+    const unanalyzed = Math.max(0, total_reviews - total_analyzed - low_quality);
+    const pending_all = presumed_human + unanalyzed;
+
     return jsonResponse({
       place_name:       placeRow.name ?? '',
       suspect_threshold: suspectThreshold,
@@ -4045,6 +4087,7 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       suspect,
       denominator,
       suspect_rate,
+      pending_all,
       distribution,
       flag_breakdown,
       sample_suspect,
@@ -4057,7 +4100,7 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
 /**
  * POST /api/places/:id/analyze-reviews  (admin 전용)
  * 미캐시 리뷰를 규칙필터 → 휴리스틱 triage → GPT 판별 → place_review_analysis 캐시 저장.
- * body: { heuristicThreshold?: number(기본 40), maxGpt?: number(기본 200), provider?: string, model?: string }
+ * body: { scope?: 'suspect'|'all'(기본 'suspect'), maxGpt?: number(기본 200), provider?: string, model?: string }
  */
 async function handleAnalyzeReviews(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
@@ -4074,6 +4117,17 @@ async function handleAnalyzeReviews(request, env, corsHeaders, placeRowId) {
     body = await request.json();
   } catch {
     return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  // scope 파싱 ('suspect' | 'all', 기본 'suspect')
+  const VALID_SCOPES = ['suspect', 'all'];
+  const scope = body?.scope ?? 'suspect';
+  if (!VALID_SCOPES.includes(scope)) {
+    return jsonResponse(
+      { error: 'invalid_scope', message: `scope는 ${VALID_SCOPES.join(' | ')} 중 하나여야 합니다` },
+      400,
+      cors
+    );
   }
 
   // provider / model 파싱
@@ -4102,11 +4156,6 @@ async function handleAnalyzeReviews(request, env, corsHeaders, placeRowId) {
     ? body.model.trim()
     : PROVIDER_DEFAULT_MODEL[provider];
 
-  // heuristicThreshold 파싱 (기본 40, 0 허용)
-  let heuristicThreshold = body?.heuristicThreshold ?? 40;
-  if (typeof heuristicThreshold !== 'number' || !Number.isFinite(heuristicThreshold)) heuristicThreshold = 40;
-  heuristicThreshold = Math.max(0, Math.min(100, Math.floor(heuristicThreshold)));
-
   // maxGpt 파싱 (기본 200)
   let maxGpt = body?.maxGpt ?? 200;
   if (typeof maxGpt !== 'number' || !Number.isFinite(maxGpt)) maxGpt = 200;
@@ -4130,7 +4179,7 @@ async function handleAnalyzeReviews(request, env, corsHeaders, placeRowId) {
   let analysisResult;
   try {
     analysisResult = await analyzePlaceReviews(env, placeRowId, {
-      heuristicThreshold,
+      scope,
       maxGpt,
       provider,
       model,
@@ -4144,13 +4193,165 @@ async function handleAnalyzeReviews(request, env, corsHeaders, placeRowId) {
   }
 
   return jsonResponse({
-    place_name:          placeRow.name ?? '',
+    place_name: placeRow.name ?? '',
     provider,
     model,
-    heuristic_threshold: heuristicThreshold,
-    max_gpt:             maxGpt,
+    scope,
+    max_gpt: maxGpt,
     ...analysisResult,
   }, 200, cors);
+}
+
+/**
+ * GET /api/places/:id/ai-reviews  (researcher 이상)
+ * 분류/점수대 드릴다운 조회.
+ * 쿼리: bucket(low_quality|presumed_human|judged|suspect|all), scoreMin, scoreMax,
+ *       suspectThreshold(기본 60), page(기본 1), size(기본 30, 최대 100)
+ */
+async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  // researcher 이상 (admin 포함)
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 존재 + 소유 확인
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id, name FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  {
+    const isAdmin = authResult.user.role === 'admin';
+    if (!isAdmin && placeRow.user_id !== authResult.user.id) {
+      return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+    }
+  }
+
+  // 쿼리 파라미터 파싱
+  const urlObj = new URL(request.url);
+  const VALID_BUCKETS = ['low_quality', 'presumed_human', 'judged', 'suspect', 'all'];
+  const bucket = urlObj.searchParams.get('bucket') ?? 'all';
+
+  let suspectThreshold = parseInt(urlObj.searchParams.get('suspectThreshold') ?? '60', 10);
+  if (!Number.isFinite(suspectThreshold)) suspectThreshold = 60;
+  suspectThreshold = Math.max(0, Math.min(100, suspectThreshold));
+
+  const scoreMinRaw = urlObj.searchParams.get('scoreMin');
+  const scoreMaxRaw = urlObj.searchParams.get('scoreMax');
+  const scoreMin = scoreMinRaw !== null ? Math.max(0, Math.min(100, parseInt(scoreMinRaw, 10))) : null;
+  const scoreMax = scoreMaxRaw !== null ? Math.max(0, Math.min(100, parseInt(scoreMaxRaw, 10))) : null;
+
+  let page = parseInt(urlObj.searchParams.get('page') ?? '1', 10);
+  if (!Number.isFinite(page) || page < 1) page = 1;
+
+  let size = parseInt(urlObj.searchParams.get('size') ?? '30', 10);
+  if (!Number.isFinite(size) || size < 1) size = 30;
+  size = Math.min(100, size);
+
+  if (!VALID_BUCKETS.includes(bucket)) {
+    return jsonResponse(
+      { error: 'invalid_bucket', message: `bucket는 ${VALID_BUCKETS.join(' | ')} 중 하나여야 합니다` },
+      400,
+      cors
+    );
+  }
+
+  // WHERE 절 조건 구성
+  const conditions = ['pra.place_row_id = ?'];
+  const binds = [placeRowId];
+
+  // 점수대 필터 (scoreMin/scoreMax 우선 — bucket보다 세밀)
+  const hasScoreFilter = scoreMin !== null || scoreMax !== null;
+  if (hasScoreFilter) {
+    conditions.push('pra.ai_suspect IS NOT NULL');
+    if (scoreMin !== null) { conditions.push('pra.ai_suspect >= ?'); binds.push(scoreMin); }
+    if (scoreMax !== null) { conditions.push('pra.ai_suspect <= ?'); binds.push(scoreMax); }
+  } else {
+    // bucket 매핑
+    if (bucket === 'low_quality') {
+      conditions.push('pra.rule_low_quality = 1');
+    } else if (bucket === 'presumed_human') {
+      conditions.push('pra.ai_suspect IS NULL');
+      conditions.push('(pra.rule_low_quality IS NULL OR pra.rule_low_quality = 0)');
+    } else if (bucket === 'judged') {
+      conditions.push('pra.ai_suspect IS NOT NULL');
+    } else if (bucket === 'suspect') {
+      conditions.push('pra.ai_suspect IS NOT NULL');
+      conditions.push('pra.ai_suspect >= ?');
+      binds.push(suspectThreshold);
+    }
+    // bucket='all' → 조건 없음
+  }
+
+  const whereClause = conditions.map(c => `(${c})`).join(' AND ');
+
+  // 정렬 결정
+  const needsScoreSort = hasScoreFilter || bucket === 'suspect' || bucket === 'judged';
+  const orderClause = needsScoreSort
+    ? 'pra.ai_suspect DESC'
+    : 'pr.review_date DESC NULLS LAST';
+
+  const offset = (page - 1) * size;
+
+  try {
+    // total count
+    const countBinds = [...binds];
+    const countRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM place_review_analysis pra LEFT JOIN place_reviews pr ON pr.id = pra.review_id WHERE ${whereClause}`
+    ).bind(...countBinds).first();
+    const total = countRow?.cnt ?? 0;
+
+    // items
+    const itemBinds = [...binds, size, offset];
+    const { results: rows } = await env.DB.prepare(`
+      SELECT
+        pra.review_id,
+        pr.body,
+        pra.ai_suspect,
+        pra.flags,
+        pra.sentiment,
+        pra.reason,
+        pr.review_date,
+        pra.rule_low_quality,
+        pra.heuristic_score
+      FROM place_review_analysis pra
+      LEFT JOIN place_reviews pr ON pr.id = pra.review_id
+      WHERE ${whereClause}
+      ORDER BY ${orderClause}
+      LIMIT ? OFFSET ?
+    `).bind(...itemBinds).all();
+
+    const items = (rows ?? []).map(r => {
+      let flags_parsed = [];
+      try { flags_parsed = JSON.parse(r.flags ?? '[]'); } catch { /* ignore */ }
+      return {
+        review_id:      r.review_id,
+        body:           r.body ?? '',
+        ai_suspect:     r.ai_suspect ?? null,
+        flags:          flags_parsed,
+        sentiment:      r.sentiment ?? null,
+        reason:         r.reason ?? null,
+        review_date:    r.review_date ?? null,
+        rule_low_quality: r.rule_low_quality === 1,
+        heuristic_score: r.heuristic_score ?? null,
+      };
+    });
+
+    return jsonResponse({ total, page, size, items }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
 }
 
 /**
