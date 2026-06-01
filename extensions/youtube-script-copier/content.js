@@ -4,10 +4,12 @@
   'use strict';
 
   const BUTTON_ID = 'yt-script-copy-btn';
+  const CONTAINER_SEL = 'ytd-watch-metadata #top-level-buttons-computed';
   const PARA_MIN_CHARS = 300;   // 이 글자수 이상 + 문장종결 → 문단 분리
   const PARA_MAX_CHARS = 800;   // 이 글자수 초과 시 강제 분리
   const PARA_TIME_GAP  = 10.0;  // 10초 이상 침묵 → 주제 전환으로 간주, 강제 분리
   const LOG = (...args) => console.log('[YT Script Copy]', ...args);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   // ─── Utilities ───────────────────────────────────────────────
 
@@ -173,6 +175,100 @@
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // METHOD 1.5: timedtext caption URL + poToken (가장 견고)
+  // get_transcript가 400(Precondition)으로 죽는 영상(일부공개 등)에서도 동작
+  // ═══════════════════════════════════════════════════════════════
+
+  // 페이지 HTML 텍스트에서 captionTracks 배열을 문자열 인식 괄호매칭으로 추출
+  function extractCaptionTracks(html) {
+    const key = '"captionTracks":';
+    const i = html.indexOf(key);
+    if (i < 0) return [];
+    const start = html.indexOf('[', i + key.length);
+    if (start < 0) return [];
+    let depth = 0, inStr = false, esc = false;
+    for (let j = start; j < html.length; j++) {
+      const ch = html[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') inStr = true;
+      else if (ch === '[') depth++;
+      else if (ch === ']') { depth--; if (depth === 0) {
+        try { return JSON.parse(html.slice(start, j + 1)); } catch { return []; }
+      } }
+    }
+    return [];
+  }
+
+  function pickCaptionTrack(tracks) {
+    if (!tracks.length) return null;
+    return tracks.find(t => t.kind !== 'asr') || tracks[0]; // 수동 자막 우선, 없으면 자동생성
+  }
+
+  // 자막(CC) 버튼을 토글해 YouTube가 /api/timedtext?...&pot= 요청을 쏘게 만들고
+  // Performance Resource Timing에서 poToken을 가로챈다 (영상 재생 불필요)
+  const _potCache = {};
+  async function getCaptionPoToken(videoId) {
+    if (_potCache[videoId]) return _potCache[videoId];
+    const btn = document.querySelector('.ytp-subtitles-button.ytp-button') ||
+      document.querySelector('button.ytp-subtitles-button');
+    if (!btn) { LOG('  CC 버튼 없음'); return ''; }
+    try {
+      performance.clearResourceTimings();
+      btn.click();            // 자막 토글 → timedtext 요청 발생
+      await sleep(250);
+      btn.click();            // 원상복구 (2회 클릭 = 시작 상태로)
+      for (let t = 0; t < 3000; t += 100) {
+        await sleep(100);
+        const e = performance.getEntriesByType('resource')
+          .filter(r => r.name.includes('/api/timedtext?')).pop();
+        if (e) {
+          const pot = new URL(e.name).searchParams.get('pot');
+          if (pot) { _potCache[videoId] = pot; LOG('  poToken 획득, 길이:', pot.length); return pot; }
+        }
+      }
+    } catch (e) { LOG('  poToken 추출 오류:', e.message); }
+    return '';
+  }
+
+  function parseJson3(text) {
+    const data = JSON.parse(text);
+    return (data.events || [])
+      .filter(ev => ev.segs)
+      .map(ev => ({
+        start: (ev.tStartMs || 0) / 1000,
+        text: ev.segs.map(s => s.utf8 || '').join('').replace(/\s+/g, ' ').trim(),
+      }))
+      .filter(s => s.text);
+  }
+
+  async function method1_5_TimedText(videoId) {
+    LOG('Method 1.5: timedtext + poToken 시도...');
+    const tracks = extractCaptionTracks(document.documentElement.innerHTML);
+    if (!tracks.length) throw new Error('captionTracks 없음');
+    const track = pickCaptionTrack(tracks);
+    LOG('  자막 트랙:', track.languageCode, track.kind || 'manual');
+
+    const pot = await getCaptionPoToken(videoId);
+
+    let url = track.baseUrl.replace(/([?&])fmt=[^&]*/g, '$1').replace(/[?&]$/, '');
+    url += (url.includes('?') ? '&' : '?') + 'fmt=json3';
+    if (pot) url += `&pot=${pot}&c=WEB`;
+
+    const resp = await fetch(url); // same-origin → 쿠키 포함 (일부공개/제한 영상 대응)
+    LOG('  timedtext status:', resp.status);
+    const text = await resp.text();
+    if (!text) throw new Error('빈 자막 응답 (poToken 누락 가능)');
+
+    const segments = parseJson3(text);
+    if (segments.length === 0) throw new Error('세그먼트 0개');
+    LOG('  성공! 세그먼트:', segments.length);
+    return segments;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // METHOD 2: Transcript Panel DOM Scraping (fallback)
   // ═══════════════════════════════════════════════════════════════
 
@@ -319,8 +415,10 @@
   // ─── Button Injection ───────────────────────────────────────
 
   function tryInjectButton() {
+    if (location.pathname !== '/watch') return;
     if (document.getElementById(BUTTON_ID)) return;
-    const container = document.querySelector('#flexible-item-buttons, #top-level-buttons-computed');
+    // 재생목록/댓글 메뉴에도 같은 id의 컨테이너가 여러 개 존재 → 메인 액션바로 스코프
+    const container = document.querySelector(CONTAINER_SEL);
     if (!container) return;
 
     const wrapper = document.createElement('div');
@@ -357,25 +455,25 @@
     try {
       const meta = extractMetadata();
 
-      // Try Method 1 (API), then Method 2 (panel scraping) as fallback
+      // Method 1(API) → 1.5(timedtext+poToken) → 2(패널) 순서로 폴백
       let segments = null;
-      let error1 = null;
+      const errs = [];
 
-      try {
-        segments = await method1_API(meta.videoId);
-      } catch (e) {
-        error1 = e;
-        LOG('Method 1 실패:', e.message);
-      }
-
-      if (!segments) {
+      for (const [label, fn] of [
+        ['API', () => method1_API(meta.videoId)],
+        ['timedtext', () => method1_5_TimedText(meta.videoId)],
+        ['패널', () => method2_PanelScrape()],
+      ]) {
         try {
-          segments = await method2_PanelScrape();
+          segments = await fn();
+          if (segments && segments.length) break;
         } catch (e) {
-          LOG('Method 2 실패:', e.message);
-          throw new Error(`API: ${error1?.message || '?'} / 패널: ${e.message}`);
+          errs.push(`${label}: ${e.message}`);
+          LOG(`Method(${label}) 실패:`, e.message);
         }
       }
+
+      if (!segments || !segments.length) throw new Error(errs.join(' / '));
 
       let transcriptSection;
       if (!segments || segments.length === 0) {
@@ -405,11 +503,16 @@
 
   function onNavigate() {
     if (location.pathname !== '/watch') return;
-    waitForElement('#flexible-item-buttons, #top-level-buttons-computed')
-      .then(() => tryInjectButton()).catch(() => {});
+    waitForElement(CONTAINER_SEL).then(() => tryInjectButton()).catch(() => {});
   }
 
-  document.addEventListener('yt-navigate-start', () => { document.getElementById(BUTTON_ID)?.remove(); });
+  // YouTube 폴리머가 액션바를 다시 그리면 버튼이 지워지므로, DOM 변화 시 재주입
+  const reinjectObserver = new MutationObserver(() => {
+    if (location.pathname === '/watch' && !document.getElementById(BUTTON_ID)) tryInjectButton();
+  });
+  reinjectObserver.observe(document.body, { childList: true, subtree: true });
+
   document.addEventListener('yt-navigate-finish', onNavigate);
-  if (location.pathname === '/watch') onNavigate();
+  LOG('content script 로드됨:', location.href);
+  onNavigate();
 })();

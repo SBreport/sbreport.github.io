@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Script Copy",
-  "version": "1.0",
+  "version": "1.1",
   "description": "유튜브 영상의 메타데이터와 스크립트를 클립보드에 복사",
   "content_scripts": [
     {
