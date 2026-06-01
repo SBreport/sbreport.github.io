@@ -1813,15 +1813,6 @@ onUnmounted(() => {
               통계 · AI 인사이트
             </button>
             <button
-              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
-              :class="activeTab === 'collections'
-                ? 'border-primary-500 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'"
-              @click="activeTab = 'collections'"
-            >
-              수집 이력
-            </button>
-            <button
               v-if="authStore.isAdmin"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'samples'
@@ -1829,7 +1820,16 @@ onUnmounted(() => {
                 : 'border-transparent text-gray-500 hover:text-gray-700'"
               @click="activeTab = 'samples'"
             >
-              예시 생성
+              예시 생성 (관리자)
+            </button>
+            <button
+              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+              :class="activeTab === 'collections'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'"
+              @click="activeTab = 'collections'"
+            >
+              수집 이력
             </button>
           </div>
           <!-- ── /탭 바 ──────────────────────────────────────────── -->
@@ -2231,99 +2231,49 @@ onUnmounted(() => {
           </div>
           <!-- ══ /탭 2: 통계 · AI 인사이트 ════════════════════════════ -->
 
-          <!-- ══ 탭 3: 수집 이력 ══════════════════════════════════════ -->
-          <div v-show="activeTab === 'collections'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
-
-            <!-- 탭 헤더 (shrink-0) -->
-            <div class="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-100 bg-gray-50">
-              <span class="text-xs font-medium text-gray-600">수집 이력 (최근 30건)</span>
-              <UButton
-                icon="i-heroicons-arrow-path"
-                size="xs"
-                color="neutral"
-                variant="ghost"
-                :loading="collectionsStatus === 'loading'"
-                aria-label="이력 새로고침"
-                @click="selectedPlace && fetchCollections(selectedPlace.id)"
-              />
-            </div>
-
-            <!-- 본문 스크롤 -->
-            <div class="flex-1 min-h-0 overflow-y-auto">
-              <!-- Loading -->
-              <div v-if="collectionsStatus === 'loading'" class="flex items-center justify-center py-6">
-                <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 animate-spin" />
-              </div>
-              <!-- Error -->
-              <div v-else-if="collectionsStatus === 'error'" class="flex items-center justify-center gap-2 py-6">
-                <UIcon name="i-heroicons-exclamation-circle" class="w-4 h-4 text-red-400 shrink-0" />
-                <span class="text-xs text-red-500">{{ collectionsError }}</span>
-                <button class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1" @click="selectedPlace && fetchCollections(selectedPlace.id)">재시도</button>
-              </div>
-              <!-- Empty -->
-              <div v-else-if="collectionsStatus === 'done' && collectionEvents.length === 0" class="flex items-center justify-center py-6">
-                <p class="text-xs text-gray-400">아직 수집 이력이 없습니다</p>
-              </div>
-              <!-- Success -->
-              <table v-else class="w-full text-xs border-collapse">
-                <thead class="sticky top-0 z-10 bg-gray-50">
-                  <tr>
-                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-36">수집 시각</th>
-                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-16">구분</th>
-                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">신규</th>
-                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">스킵</th>
-                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 border-b border-gray-200">비고</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="ev in collectionEvents"
-                    :key="ev.id"
-                    class="border-b border-gray-100 last:border-0 hover:bg-gray-50"
-                    :class="ev.blocked ? 'bg-red-50' : ''"
-                  >
-                    <td class="px-3 py-1.5 whitespace-nowrap text-gray-500 tabular-nums">{{ formatDateTime(ev.collected_at) }}</td>
-                    <td class="px-3 py-1.5 whitespace-nowrap">
-                      <span
-                        class="inline-block px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap"
-                        :class="ev.source === 'cron' ? 'bg-gray-100 text-gray-600' : ev.source === 'backfill' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-600'"
-                      >{{ ev.source === 'cron' ? '자동' : ev.source === 'backfill' ? '전체' : '수동' }}</span>
-                    </td>
-                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">{{ ev.inserted }}</td>
-                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-400">{{ ev.skipped }}</td>
-                    <td class="px-3 py-1.5">
-                      <span v-if="ev.blocked" class="text-red-500 font-medium" :title="ev.error ?? ''">차단/오류</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-          </div>
-          <!-- ══ /탭 3: 수집 이력 ══════════════════════════════════════ -->
-
-          <!-- ══ 탭 4: 예시 생성 (관리자 전용) ════════════════════════ -->
+          <!-- ══ 탭 3: 예시 생성 (관리자 전용) ════════════════════════ -->
           <div v-if="authStore.isAdmin" v-show="activeTab === 'samples'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
 
             <!-- 탭 상단 고정 영역 (shrink-0) -->
             <div class="shrink-0 flex flex-col divide-y divide-gray-100 border-b border-gray-100 bg-gray-50">
-              <!-- 타이틀 행 -->
-              <div class="flex items-center justify-between px-3 py-2">
-                <div class="flex items-center gap-1.5">
+              <!-- 타이틀 행 + 생성 컨트롤 -->
+              <div class="flex items-center justify-between gap-3 px-3 py-2">
+                <div class="flex items-center gap-1.5 min-w-0">
                   <UIcon name="i-heroicons-beaker" class="w-3.5 h-3.5 text-gray-500 shrink-0" />
                   <span class="text-xs font-medium text-gray-700">리뷰 예시 생성</span>
                   <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap">AI 합성·연구용</span>
                 </div>
-                <!-- 결과 있을 때만 CSV 노출 -->
-                <UButton
-                  v-if="samples.length > 0"
-                  label="CSV"
-                  size="xs"
-                  color="neutral"
-                  variant="outline"
-                  icon="i-heroicons-arrow-down-tray"
-                  @click="exportSamplesCsv"
-                />
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class="text-xs text-gray-500">개수</span>
+                  <input
+                    v-model.number="sampleCount"
+                    type="number"
+                    min="1"
+                    max="30"
+                    class="w-14 px-2 py-1 text-sm border border-gray-200 rounded text-center tabular-nums focus:outline-none focus:border-primary-400"
+                    :disabled="samplesGenerating"
+                  />
+                  <UButton
+                    label="예시 생성"
+                    size="xs"
+                    color="primary"
+                    variant="solid"
+                    icon="i-heroicons-sparkles"
+                    :loading="samplesGenerating"
+                    :disabled="samplesGenerating"
+                    @click="selectedPlace && generateSamples(selectedPlace.id)"
+                  />
+                  <!-- 결과 있을 때만 CSV 노출 -->
+                  <UButton
+                    v-if="samples.length > 0"
+                    label="CSV"
+                    size="xs"
+                    color="neutral"
+                    variant="outline"
+                    icon="i-heroicons-arrow-down-tray"
+                    @click="exportSamplesCsv"
+                  />
+                </div>
               </div>
               <!-- 필터 + 선택삭제 (결과 있을 때) -->
               <div v-if="samples.length > 0" class="flex items-center gap-2 px-3 py-1.5 flex-wrap">
@@ -2393,65 +2343,22 @@ onUnmounted(() => {
                 <span class="text-xs text-red-500">{{ samplesError }}</span>
                 <button class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1" @click="selectedPlace && fetchSamples(selectedPlace.id)">재시도</button>
               </div>
-              <!-- Empty: 중앙 유도 UI (생성 컨트롤 포함) -->
-              <div v-else-if="samplesStatus === 'empty' || samplesStatus === 'idle'" class="flex flex-col items-center justify-center gap-4 px-4 py-10">
+              <!-- Empty: 안내 텍스트 (생성 컨트롤은 상단 고정 바에 있음) -->
+              <div v-else-if="samplesStatus === 'empty' || samplesStatus === 'idle'" class="flex flex-col items-center justify-center gap-3 px-4 py-10">
                 <UIcon name="i-heroicons-document-text" class="w-8 h-8 text-gray-300" />
                 <div class="flex flex-col items-center gap-1">
                   <span class="text-sm font-medium text-gray-500">아직 생성된 예시가 없습니다</span>
-                  <span class="text-xs text-gray-400">이 지점의 실제 리뷰를 분석해 자연스러운 예시를 생성합니다</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-xs text-gray-500">개수</span>
-                  <input
-                    v-model.number="sampleCount"
-                    type="number"
-                    min="1"
-                    max="30"
-                    class="w-14 px-2 py-1 text-sm border border-gray-200 rounded text-center tabular-nums focus:outline-none focus:border-primary-400"
-                    :disabled="samplesGenerating"
-                  />
-                  <UButton
-                    label="예시 생성"
-                    size="sm"
-                    color="primary"
-                    variant="solid"
-                    icon="i-heroicons-sparkles"
-                    :loading="samplesGenerating"
-                    :disabled="samplesGenerating"
-                    @click="selectedPlace && generateSamples(selectedPlace.id)"
-                  />
+                  <span class="text-xs text-gray-400">위 "예시 생성" 버튼을 눌러 이 지점의 실제 리뷰를 바탕으로 예시를 생성합니다</span>
                 </div>
               </div>
-              <!-- Success: 카드 리스트 + 하단 생성 컨트롤 -->
+              <!-- Success: 카드 리스트 -->
               <template v-else-if="samplesStatus === 'done' && samples.length > 0">
-                <!-- 추가 생성 컨트롤 (결과 상단) -->
-                <div class="flex items-center justify-center gap-2 px-3 py-2 border-b border-gray-100 bg-white">
-                  <span class="text-xs text-gray-500">개수</span>
-                  <input
-                    v-model.number="sampleCount"
-                    type="number"
-                    min="1"
-                    max="30"
-                    class="w-14 px-2 py-1 text-sm border border-gray-200 rounded text-center tabular-nums focus:outline-none focus:border-primary-400"
-                    :disabled="samplesGenerating"
-                  />
-                  <UButton
-                    label="예시 생성"
-                    size="sm"
-                    color="primary"
-                    variant="solid"
-                    icon="i-heroicons-sparkles"
-                    :loading="samplesGenerating"
-                    :disabled="samplesGenerating"
-                    @click="selectedPlace && generateSamples(selectedPlace.id)"
-                  />
-                </div>
                 <!-- 필터 결과 없음 안내 -->
                 <div v-if="filteredSamples.length === 0" class="flex items-center justify-center py-6">
                   <p class="text-xs text-gray-400">해당 필터에 맞는 예시가 없습니다</p>
                 </div>
-                <!-- 카드 리스트 (max-width로 사시모드 해소) -->
-                <div v-else class="flex flex-col divide-y divide-gray-100 max-w-2xl mx-auto w-full">
+                <!-- 카드 리스트 (좌측 정렬, 영역 전폭 사용) -->
+                <div v-else class="flex flex-col divide-y divide-gray-100 w-full">
                   <div
                     v-for="sample in filteredSamples"
                     :key="sample.id"
@@ -2469,7 +2376,7 @@ onUnmounted(() => {
                       :checked="checkedSampleIds.has(sample.id)"
                       @change="toggleSampleCheck(sample.id)"
                     />
-                    <p class="flex-1 min-w-0 text-xs text-gray-800 leading-relaxed">{{ sample.body }}</p>
+                    <p class="flex-1 min-w-0 max-w-3xl text-xs text-gray-800 leading-relaxed">{{ sample.body }}</p>
                     <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
                       <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600 whitespace-nowrap">{{ lengthLabel[sample.length] ?? sample.length }}</span>
                       <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700 whitespace-nowrap">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
@@ -2515,7 +2422,78 @@ onUnmounted(() => {
 
             </div>
           </div>
-          <!-- ══ /탭 4: 예시 생성 ════════════════════════════════════ -->
+          <!-- ══ /탭 3: 예시 생성 ════════════════════════════════════ -->
+
+          <!-- ══ 탭 4: 수집 이력 ══════════════════════════════════════ -->
+          <div v-show="activeTab === 'collections'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
+
+            <!-- 탭 헤더 (shrink-0) -->
+            <div class="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-100 bg-gray-50">
+              <span class="text-xs font-medium text-gray-600">수집 이력 (최근 30건)</span>
+              <UButton
+                icon="i-heroicons-arrow-path"
+                size="xs"
+                color="neutral"
+                variant="ghost"
+                :loading="collectionsStatus === 'loading'"
+                aria-label="이력 새로고침"
+                @click="selectedPlace && fetchCollections(selectedPlace.id)"
+              />
+            </div>
+
+            <!-- 본문 스크롤 -->
+            <div class="flex-1 min-h-0 overflow-y-auto">
+              <!-- Loading -->
+              <div v-if="collectionsStatus === 'loading'" class="flex items-center justify-center py-6">
+                <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 animate-spin" />
+              </div>
+              <!-- Error -->
+              <div v-else-if="collectionsStatus === 'error'" class="flex items-center justify-center gap-2 py-6">
+                <UIcon name="i-heroicons-exclamation-circle" class="w-4 h-4 text-red-400 shrink-0" />
+                <span class="text-xs text-red-500">{{ collectionsError }}</span>
+                <button class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1" @click="selectedPlace && fetchCollections(selectedPlace.id)">재시도</button>
+              </div>
+              <!-- Empty -->
+              <div v-else-if="collectionsStatus === 'done' && collectionEvents.length === 0" class="flex items-center justify-center py-6">
+                <p class="text-xs text-gray-400">아직 수집 이력이 없습니다</p>
+              </div>
+              <!-- Success -->
+              <table v-else class="w-full text-xs border-collapse">
+                <thead class="sticky top-0 z-10 bg-gray-50">
+                  <tr>
+                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-36">수집 시각</th>
+                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-16">구분</th>
+                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">신규</th>
+                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">스킵</th>
+                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 border-b border-gray-200">비고</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="ev in collectionEvents"
+                    :key="ev.id"
+                    class="border-b border-gray-100 last:border-0 hover:bg-gray-50"
+                    :class="ev.blocked ? 'bg-red-50' : ''"
+                  >
+                    <td class="px-3 py-1.5 whitespace-nowrap text-gray-500 tabular-nums">{{ formatDateTime(ev.collected_at) }}</td>
+                    <td class="px-3 py-1.5 whitespace-nowrap">
+                      <span
+                        class="inline-block px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap"
+                        :class="ev.source === 'cron' ? 'bg-gray-100 text-gray-600' : ev.source === 'backfill' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-600'"
+                      >{{ ev.source === 'cron' ? '자동' : ev.source === 'backfill' ? '전체' : '수동' }}</span>
+                    </td>
+                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">{{ ev.inserted }}</td>
+                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-400">{{ ev.skipped }}</td>
+                    <td class="px-3 py-1.5">
+                      <span v-if="ev.blocked" class="text-red-500 font-medium" :title="ev.error ?? ''">차단/오류</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+          </div>
+          <!-- ══ /탭 4: 수집 이력 ══════════════════════════════════════ -->
 
         </template>
         <!-- /플레이스 선택 시 탭 구조 -->
