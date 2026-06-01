@@ -1088,8 +1088,49 @@ async function insertSearchHistory(env, { id, user_id, keyword, pc_volume, mobil
 // --- 플레이스 URL에서 placeId/businessType 추출 유틸 ---
 
 /**
+ * naver.me 단축 URL을 최종 리다이렉트 목적지 URL로 해석한다.
+ * - 호스트가 naver.me인 경우에만 fetch(redirect: 'follow')로 추적. SSRF 방지.
+ * - 네트워크 실패 / 타임아웃 시 원본 url 그대로 반환 (기존 추출 경로로 폴백).
+ * @param {string} url
+ * @returns {Promise<string>} 해석된 최종 URL 또는 원본 url
+ */
+async function resolveShortPlaceUrl(url) {
+  let host;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return url; // 파싱 실패 시 원본 반환
+  }
+
+  if (host !== 'naver.me') return url; // naver.me가 아니면 추적 안 함
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      });
+      return res.url || url; // response.url = 최종 리다이렉트 도착 URL
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (e) {
+    console.log(`[RESOLVE_SHORT_URL] 단축링크 해석 실패 (${url}): ${e.message}`);
+    return url; // graceful fallback — 원본으로 기존 추출 시도
+  }
+}
+
+/**
  * 네이버 플레이스 URL에서 placeId와 businessType을 추출한다.
- * naver.me 단축 URL 해석은 Phase 1 범위 밖 — 호출자가 풀 URL을 제공한다는 전제.
+ * naver.me 단축 URL은 resolveShortPlaceUrl()로 먼저 해석 후 이 함수에 전달.
  * @param {string} rawUrl
  * @returns {{ placeId: string, businessType: string|null } | null}
  */
@@ -1140,13 +1181,32 @@ async function handleCreatePlace(request, env, corsHeaders) {
   }
 
   let placeId, businessType;
+  let resolvedUrl = null; // 단축링크 해석 후 최종 URL (저장용)
 
   if (body.url) {
-    // URL로부터 placeId·businessType 추출
-    const info = extractPlaceInfo(body.url);
+    const inputUrl = body.url.trim();
+
+    // naver.me 단축링크 여부 확인 — 맞으면 먼저 해석
+    let targetUrl = inputUrl;
+    try {
+      const inputHost = new URL(inputUrl).hostname;
+      if (inputHost === 'naver.me') {
+        targetUrl = await resolveShortPlaceUrl(inputUrl);
+        resolvedUrl = targetUrl; // 해석된 URL을 저장
+      }
+    } catch {
+      // URL 파싱 실패 시 원본 그대로 (extractPlaceInfo에서 처리)
+    }
+
+    // 해석된(또는 원본) URL에서 placeId·businessType 추출
+    const info = extractPlaceInfo(targetUrl);
     if (!info) {
       return jsonResponse(
-        { error: 'invalid_url', message: '플레이스 URL에서 placeId를 추출할 수 없습니다' },
+        {
+          error: 'invalid_url',
+          message:
+            '플레이스 URL에서 placeId를 추출할 수 없습니다. 단축링크 해석 실패 가능 — 풀 URL(map.naver.com/p/entry/place/...)을 넣어보세요',
+        },
         400,
         cors
       );
@@ -1166,7 +1226,9 @@ async function handleCreatePlace(request, env, corsHeaders) {
   }
 
   let name = body.name ?? null;
-  const placeUrl = body.url ?? null;
+  // 단축링크 입력 시 해석된 최종 URL을 저장 (후속 작업에서 풀 URL이 더 유용).
+  // resolvedUrl은 naver.me 입력일 때만 세팅됨. 일반 풀 URL은 body.url 그대로.
+  const placeUrl = resolvedUrl ?? body.url ?? null;
   const now = new Date().toISOString();
   const newId = crypto.randomUUID();
 

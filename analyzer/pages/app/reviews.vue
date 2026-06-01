@@ -1480,7 +1480,7 @@ onUnmounted(() => {
       <div class="flex items-center gap-2">
         <UInput
           v-model="urlInput"
-          placeholder="네이버 플레이스 URL을 입력하세요 (예: https://map.naver.com/p/...)"
+          placeholder="플레이스 URL 또는 naver.me 단축링크 (예: https://naver.me/...)"
           class="flex-1 text-sm"
           :disabled="registerLoading"
           @keydown.enter="registerPlace"
