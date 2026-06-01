@@ -874,9 +874,8 @@ async function getUserFromDB(env, googleSub) {
   const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
   if (adminEmails.includes(row.email)) {
     row.role = 'admin';
-  } else if (row.role === 'researcher') {
-    // DB에 researcher로 명시된 경우 유지
-    row.role = 'researcher';
+  } else if (row.role === 'admin' || row.role === 'researcher') {
+    // DB에 admin/researcher로 명시된 role 그대로 유지
   } else {
     row.role = 'user';
   }
@@ -2624,7 +2623,7 @@ async function handleAdminListUsers(request, env, corsHeaders) {
       ...u,
       role: adminEmails.includes(u.email)
         ? 'admin'
-        : (u.role === 'researcher' ? 'researcher' : 'user'),
+        : (u.role === 'admin' || u.role === 'researcher' ? u.role : 'user'),
     }));
 
     return jsonResponse({ users }, 200, cors);
