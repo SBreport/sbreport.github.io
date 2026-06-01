@@ -260,6 +260,33 @@ const samplesError = ref<string | null>(null)
 const samplesErrorCode = ref<string | null>(null)
 const samplesGenerating = ref(false)
 
+// ─── 탭 상태 ─────────────────────────────────────────────────────────────────
+
+type DetailTab = 'reviews' | 'stats' | 'samples'
+const activeTab = ref<DetailTab>('reviews')
+
+// ─── usage(비용) 상태 ────────────────────────────────────────────────────────
+
+interface UsageInfo {
+  prompt_tokens: number
+  completion_tokens: number
+  cost_usd: number
+}
+
+interface PlaceUsageSummary {
+  total_cost_usd: number
+  total_calls: number
+  by_kind: { kind: string; calls: number; cost_usd: number }[]
+}
+
+// 이번 분석 usage (POST /report 응답에서)
+const reportUsage = ref<UsageInfo | null>(null)
+// 이번 예시 생성 usage (POST /generate-samples 응답에서)
+const samplesUsage = ref<UsageInfo | null>(null)
+// 지점 누적 usage (GET /api/places/:id/usage)
+const placeUsage = ref<PlaceUsageSummary | null>(null)
+const placeUsageStatus = ref<LoadStatus>('idle')
+
 // enum → 한글 매핑
 const lengthLabel: Record<string, string> = { short: '한줄', medium: '중간', long: '장문' }
 const toneLabel: Record<string, string> = { friendly: '친근', polite: '정중', emotional: '감성', plain: '담백' }
@@ -513,12 +540,34 @@ async function generateReport(placeId: number) {
     }
     const data = await res.json() as ReportJson
     placeReport.value = data
+    reportUsage.value = (data.meta as unknown as { usage?: UsageInfo }).usage ?? null
     reportStatus.value = 'done'
   } catch (e: unknown) {
     reportError.value = e instanceof Error ? e.message : '알 수 없는 오류'
     reportStatus.value = 'error'
   } finally {
     reportGenerating.value = false
+  }
+}
+
+// ─── 지점 누적 usage 조회 ─────────────────────────────────────────────────────
+
+async function fetchPlaceUsage(placeId: number) {
+  placeUsageStatus.value = 'loading'
+  placeUsage.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/usage`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      placeUsageStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as PlaceUsageSummary
+    placeUsage.value = data
+    placeUsageStatus.value = 'done'
+  } catch {
+    placeUsageStatus.value = 'error'
   }
 }
 
@@ -585,10 +634,11 @@ async function generateSamples(placeId: number) {
       samplesStatus.value = 'error'
       return
     }
-    const data = await res.json() as GenerateSamplesResponse
+    const data = await res.json() as GenerateSamplesResponse & { usage?: UsageInfo }
     const newItems = data.samples ?? []
     // 새 생성물을 기존 이력 위에 누적
     samples.value = [...newItems, ...samples.value]
+    samplesUsage.value = data.usage ?? null
     samplesStatus.value = samples.value.length > 0 ? 'done' : 'empty'
   } catch (e: unknown) {
     samplesError.value = e instanceof Error ? e.message : '알 수 없는 오류'
@@ -703,10 +753,16 @@ function selectPlace(place: Place) {
   samplesError.value = null
   samplesErrorCode.value = null
   samplesGenerating.value = false
+  samplesUsage.value = null
+  reportUsage.value = null
+  placeUsage.value = null
+  placeUsageStatus.value = 'idle'
+  activeTab.value = 'reviews'
   fetchReviews(place.id)
   fetchCollections(place.id)
   fetchPlaceStats(place.id)
   fetchPlaceReport(place.id)
+  fetchPlaceUsage(place.id)
   if (authStore.isAdmin) fetchSamples(place.id)
 }
 
@@ -1481,121 +1537,113 @@ onUnmounted(() => {
         </ul>
       </div>
 
-      <!-- 우측: 리뷰 표(위) + 수집 이력(아래) — flex-col 분배 -->
-      <div class="flex-1 min-h-0 flex flex-col gap-3">
+      <!-- 우측: 지점 상세 패널 (탭 3개) — h-full flex-col -->
+      <div class="flex-1 min-h-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden">
 
-        <!-- 우측 상단: 리뷰 표 (flex-[3]) -->
-        <div class="flex-[3] min-h-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden">
+        <!-- ── 공통 헤더 (shrink-0) ────────────────────────────────── -->
+        <div class="shrink-0 flex flex-col border-b border-gray-200 bg-gray-50">
 
-          <!-- 헤더 -->
-          <div class="shrink-0 flex flex-col border-b border-gray-200 bg-gray-50">
-            <!-- 헤더 행 1: 이름 + 버튼들 -->
-            <div class="flex items-center justify-between px-3 py-2">
-              <span class="text-xs font-medium text-gray-600">
-                <template v-if="selectedPlace">
-                  {{ placeName(selectedPlace) }}
-                  <span v-if="reviewsStatus === 'done'" class="font-normal text-gray-400 ml-1">
-                    총 {{ selectedPlace.total_reviews != null ? selectedPlace.total_reviews.toLocaleString('ko-KR') : '—' }}건 중 {{ reviewsTotal.toLocaleString('ko-KR') }}건 보유
-                  </span>
-                </template>
-                <template v-else>리뷰</template>
-              </span>
-              <div class="flex items-center gap-2">
-                <!-- 지금 수집 버튼 -->
+          <!-- 헤더 행 1: 지점명 + 버튼들 -->
+          <div class="flex items-center justify-between px-3 py-2">
+            <span class="text-xs font-medium text-gray-600 min-w-0 truncate">
+              <template v-if="selectedPlace">
+                {{ placeName(selectedPlace) }}
+                <span v-if="reviewsStatus === 'done'" class="font-normal text-gray-400 ml-1">
+                  총 {{ selectedPlace.total_reviews != null ? selectedPlace.total_reviews.toLocaleString('ko-KR') : '—' }}건 중 {{ reviewsTotal.toLocaleString('ko-KR') }}건 보유
+                </span>
+              </template>
+              <template v-else>리뷰</template>
+            </span>
+            <div class="flex items-center gap-2 shrink-0">
+              <!-- 지금 수집 버튼 -->
+              <UButton
+                v-if="selectedPlace"
+                label="지금 수집"
+                size="xs"
+                color="primary"
+                variant="soft"
+                icon="i-heroicons-arrow-down-circle"
+                :loading="collectLoading"
+                :disabled="backfillRunning"
+                @click="collectNow"
+              />
+              <!-- 전체 수집(백필) 버튼 -->
+              <template v-if="selectedPlace">
                 <UButton
-                  v-if="selectedPlace"
-                  label="지금 수집"
-                  size="xs"
-                  color="primary"
-                  variant="soft"
-                  icon="i-heroicons-arrow-down-circle"
-                  :loading="collectLoading"
-                  :disabled="backfillRunning"
-                  @click="collectNow"
-                />
-                <!-- 전체 수집(백필) 버튼 -->
-                <template v-if="selectedPlace">
-                  <!-- 완료 상태 -->
-                  <UButton
-                    v-if="backfillStatus === 'done'"
-                    label="전체 수집 완료"
-                    size="xs"
-                    color="neutral"
-                    variant="outline"
-                    icon="i-heroicons-check-circle"
-                    disabled
-                  />
-                  <!-- 수집 중: 멈춤 버튼 -->
-                  <UButton
-                    v-else-if="backfillRunning"
-                    label="수집 중... (멈춤)"
-                    size="xs"
-                    color="warning"
-                    variant="soft"
-                    icon="i-heroicons-pause-circle"
-                    @click="stopBackfill"
-                  />
-                  <!-- 기본 / 이어하기 버튼 -->
-                  <UButton
-                    v-else
-                    :label="backfillStatus === 'idle' ? '전체 수집' : '이어서 수집'"
-                    size="xs"
-                    color="neutral"
-                    variant="outline"
-                    icon="i-heroicons-archive-box-arrow-down"
-                    :disabled="collectLoading"
-                    @click="backfillAll"
-                  />
-                </template>
-                <!-- CSV 다운로드 버튼 -->
-                <UButton
-                  v-if="reviewsStatus === 'done' && reviewsTotal > 0"
-                  :label="csvLoading ? (csvProgress ? `${csvProgress.current}/${csvProgress.total}` : '받는 중...') : 'CSV'"
+                  v-if="backfillStatus === 'done'"
+                  label="전체 수집 완료"
                   size="xs"
                   color="neutral"
                   variant="outline"
-                  icon="i-heroicons-arrow-down-tray"
-                  :loading="csvLoading"
-                  :disabled="csvLoading"
-                  @click="exportCsv"
+                  icon="i-heroicons-check-circle"
+                  disabled
                 />
-              </div>
+                <UButton
+                  v-else-if="backfillRunning"
+                  label="수집 중... (멈춤)"
+                  size="xs"
+                  color="warning"
+                  variant="soft"
+                  icon="i-heroicons-pause-circle"
+                  @click="stopBackfill"
+                />
+                <UButton
+                  v-else
+                  :label="backfillStatus === 'idle' ? '전체 수집' : '이어서 수집'"
+                  size="xs"
+                  color="neutral"
+                  variant="outline"
+                  icon="i-heroicons-archive-box-arrow-down"
+                  :disabled="collectLoading"
+                  @click="backfillAll"
+                />
+              </template>
+              <!-- CSV 다운로드 버튼 -->
+              <UButton
+                v-if="reviewsStatus === 'done' && reviewsTotal > 0"
+                :label="csvLoading ? (csvProgress ? `${csvProgress.current}/${csvProgress.total}` : '받는 중...') : 'CSV'"
+                size="xs"
+                color="neutral"
+                variant="outline"
+                icon="i-heroicons-arrow-down-tray"
+                :loading="csvLoading"
+                :disabled="csvLoading"
+                @click="exportCsv"
+              />
             </div>
+          </div>
 
-            <!-- 헤더 행 2: 마지막 갱신 요약 + 수집이력 토글 + 자동 갱신 안내 -->
-            <div class="flex items-center justify-between px-3 pb-1.5 gap-3">
-              <!-- 마지막 갱신 요약 + 수집이력 토글 -->
-              <div class="flex items-center gap-1.5 min-w-0">
-                <template v-if="selectedPlace">
-                  <span class="text-xs text-gray-400">
-                    갱신:
-                    <span class="tabular-nums">{{ selectedPlace.last_collected_at ? formatDateTime(selectedPlace.last_collected_at) : '갱신 전' }}</span>
-                  </span>
-                  <span class="text-gray-300 text-xs">·</span>
-                  <button
-                    class="text-xs text-primary-600 hover:text-primary-800 transition-colors flex items-center gap-0.5 whitespace-nowrap"
-                    @click="toggleHistory"
-                  >
-                    수집 이력
-                    <UIcon
-                      :name="showHistory ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-right'"
-                      class="w-3 h-3"
-                    />
-                  </button>
-                </template>
-              </div>
-              <!-- 자동 갱신 안내 -->
-              <div class="flex items-center gap-1 shrink-0 text-gray-400">
-                <UIcon name="i-heroicons-information-circle" class="w-3.5 h-3.5 shrink-0" />
-                <span class="text-xs">매일 새벽 3시(KST) 자동 수집됩니다. 지점별 on/off는 좌측 목록에서 설정.</span>
-              </div>
+          <!-- 헤더 행 2: 갱신 시각 + 수집이력 토글 + 자동 갱신 안내 -->
+          <div class="flex items-center justify-between px-3 pb-1.5 gap-3">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <template v-if="selectedPlace">
+                <span class="text-xs text-gray-400">
+                  갱신:
+                  <span class="tabular-nums">{{ selectedPlace.last_collected_at ? formatDateTime(selectedPlace.last_collected_at) : '갱신 전' }}</span>
+                </span>
+                <span class="text-gray-300 text-xs">·</span>
+                <button
+                  class="text-xs text-primary-600 hover:text-primary-800 transition-colors flex items-center gap-0.5 whitespace-nowrap"
+                  @click="toggleHistory"
+                >
+                  수집 이력
+                  <UIcon
+                    :name="showHistory ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-right'"
+                    class="w-3 h-3"
+                  />
+                </button>
+              </template>
+            </div>
+            <div class="flex items-center gap-1 shrink-0 text-gray-400">
+              <UIcon name="i-heroicons-information-circle" class="w-3.5 h-3.5 shrink-0" />
+              <span class="text-xs">매일 새벽 3시(KST) 자동 수집됩니다. 지점별 on/off는 좌측 목록에서 설정.</span>
             </div>
           </div>
 
           <!-- 수집 결과 토스트 -->
           <div
             v-if="collectToast"
-            class="shrink-0 px-3 py-1.5 text-xs border-b"
+            class="px-3 py-1.5 text-xs border-t"
             :class="{
               'bg-green-50 text-green-700 border-green-100': collectToast.type === 'success',
               'bg-amber-50 text-amber-700 border-amber-100': collectToast.type === 'warn',
@@ -1608,7 +1656,7 @@ onUnmounted(() => {
           <!-- 백필 진행 상태 바 (단일) -->
           <div
             v-if="selectedPlace && backfillStatus !== 'idle'"
-            class="shrink-0 px-3 py-1.5 border-b text-xs flex items-center gap-3"
+            class="px-3 py-1.5 border-t text-xs flex items-center gap-3"
             :class="{
               'bg-blue-50 text-blue-700 border-blue-100': backfillStatus === 'running',
               'bg-green-50 text-green-700 border-green-100': backfillStatus === 'done',
@@ -1616,7 +1664,6 @@ onUnmounted(() => {
               'bg-red-50 text-red-700 border-red-100': backfillStatus === 'error',
             }"
           >
-            <!-- 수집 중: 스피너 + 진행률 -->
             <template v-if="backfillStatus === 'running'">
               <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 shrink-0 animate-spin" />
               <span class="font-medium whitespace-nowrap">전체 수집 중</span>
@@ -1627,7 +1674,6 @@ onUnmounted(() => {
                     <span class="text-blue-500">({{ Math.min(100, Math.round(backfillStoredCount / backfillTotalServer * 100)) }}%)</span>
                   </template>
                 </span>
-                <!-- 진행바 -->
                 <div
                   v-if="backfillTotalServer"
                   class="flex-1 min-w-0 h-1.5 rounded-full bg-blue-100 overflow-hidden"
@@ -1642,7 +1688,6 @@ onUnmounted(() => {
                 <span class="tabular-nums whitespace-nowrap">신규 {{ backfillInsertedTotal.toLocaleString('ko-KR') }}건 수집 중...</span>
               </template>
             </template>
-            <!-- 완료 -->
             <template v-else-if="backfillStatus === 'done'">
               <UIcon name="i-heroicons-check-circle" class="w-3.5 h-3.5 shrink-0" />
               <span class="font-medium">전체 수집 완료</span>
@@ -1650,48 +1695,354 @@ onUnmounted(() => {
                 보유 {{ backfillStoredCount.toLocaleString('ko-KR') }}건
               </span>
             </template>
-            <!-- 차단 / 에러 / 정지 -->
             <template v-else>
               <UIcon name="i-heroicons-exclamation-triangle" class="w-3.5 h-3.5 shrink-0" />
               <span>{{ backfillMessage }}</span>
             </template>
           </div>
 
-          <!-- Idle (플레이스 미선택) -->
-          <div v-if="!selectedPlace" class="flex-1 flex items-center justify-center">
-            <p class="text-sm text-gray-400">좌측에서 플레이스를 선택하세요.</p>
+          <!-- 수집 이력 패널 (인라인 토글) -->
+          <div
+            v-if="selectedPlace && showHistory"
+            class="border-t border-gray-200 flex flex-col"
+            style="max-height: 200px"
+          >
+            <div class="shrink-0 flex items-center justify-between px-3 py-1.5 bg-white border-b border-gray-100">
+              <span class="text-xs font-medium text-gray-600">수집 이력</span>
+              <div class="flex items-center gap-1">
+                <UButton
+                  icon="i-heroicons-arrow-path"
+                  size="xs"
+                  color="neutral"
+                  variant="ghost"
+                  :loading="collectionsStatus === 'loading'"
+                  aria-label="이력 새로고침"
+                  @click="selectedPlace && fetchCollections(selectedPlace.id)"
+                />
+                <UButton
+                  icon="i-heroicons-chevron-up"
+                  size="xs"
+                  color="neutral"
+                  variant="ghost"
+                  aria-label="이력 접기"
+                  @click="showHistory = false"
+                />
+              </div>
+            </div>
+            <div v-if="collectionsStatus === 'loading'" class="flex items-center justify-center py-3">
+              <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 text-gray-400 animate-spin" />
+            </div>
+            <div v-else-if="collectionsStatus === 'error'" class="flex items-center justify-center py-3">
+              <p class="text-xs text-red-500">{{ collectionsError }}</p>
+            </div>
+            <div v-else-if="collectionsStatus === 'done' && collectionEvents.length === 0" class="flex items-center justify-center py-3">
+              <p class="text-xs text-gray-400">아직 수집 이력이 없습니다</p>
+            </div>
+            <div v-else class="overflow-y-auto">
+              <table class="w-full text-xs border-collapse">
+                <thead class="sticky top-0 z-10 bg-gray-50">
+                  <tr>
+                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-36">수집 시각</th>
+                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-16">구분</th>
+                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">신규</th>
+                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">스킵</th>
+                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 border-b border-gray-200">비고</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="ev in collectionEvents"
+                    :key="ev.id"
+                    class="border-b border-gray-100 last:border-0 hover:bg-gray-50"
+                    :class="ev.blocked ? 'bg-red-50' : ''"
+                  >
+                    <td class="px-3 py-1.5 whitespace-nowrap text-gray-500 tabular-nums">{{ formatDateTime(ev.collected_at) }}</td>
+                    <td class="px-3 py-1.5 whitespace-nowrap">
+                      <span
+                        class="inline-block px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap"
+                        :class="ev.source === 'cron' ? 'bg-gray-100 text-gray-600' : ev.source === 'backfill' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-600'"
+                      >{{ ev.source === 'cron' ? '자동' : ev.source === 'backfill' ? '전체' : '수동' }}</span>
+                    </td>
+                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">{{ ev.inserted }}</td>
+                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-400">{{ ev.skipped }}</td>
+                    <td class="px-3 py-1.5">
+                      <span v-if="ev.blocked" class="text-red-500 font-medium" :title="ev.error ?? ''">차단/오류</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
+        </div>
+        <!-- ── /공통 헤더 ────────────────────────────────────────── -->
 
-          <!-- Loading -->
-          <div v-else-if="reviewsStatus === 'loading'" class="flex-1 flex items-center justify-center">
-            <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 animate-spin" />
+        <!-- 플레이스 미선택 안내 -->
+        <div v-if="!selectedPlace" class="flex-1 flex items-center justify-center">
+          <p class="text-sm text-gray-400">좌측에서 플레이스를 선택하세요.</p>
+        </div>
+
+        <!-- 플레이스 선택 시: 탭 바 + 탭 콘텐츠 -->
+        <template v-else>
+
+          <!-- ── 탭 바 (shrink-0) ─────────────────────────────────── -->
+          <div class="shrink-0 flex border-b border-gray-200 bg-white">
+            <button
+              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+              :class="activeTab === 'reviews'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'"
+              @click="activeTab = 'reviews'"
+            >
+              리뷰
+            </button>
+            <button
+              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+              :class="activeTab === 'stats'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'"
+              @click="activeTab = 'stats'"
+            >
+              통계 · AI 인사이트
+            </button>
+            <button
+              v-if="authStore.isAdmin"
+              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+              :class="activeTab === 'samples'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'"
+              @click="activeTab = 'samples'"
+            >
+              예시 생성
+            </button>
           </div>
+          <!-- ── /탭 바 ──────────────────────────────────────────── -->
 
-          <!-- Error -->
-          <div v-else-if="reviewsStatus === 'error'" class="flex-1 flex flex-col items-center justify-center gap-2 p-4">
-            <p class="text-sm text-red-500">{{ reviewsError }}</p>
-            <UButton label="재시도" size="sm" color="neutral" variant="outline" @click="retryReviews" />
+          <!-- ══ 탭 1: 리뷰 ══════════════════════════════════════════ -->
+          <div v-show="activeTab === 'reviews'" class="flex-1 min-h-0 flex flex-col">
+
+            <!-- KPI 4카드 compact (shrink-0) -->
+            <div v-if="statsStatus === 'done' && placeStats" class="shrink-0 flex items-stretch divide-x divide-gray-100 border-b border-gray-100">
+              <div class="flex items-center gap-2 px-3 py-1.5 min-w-0 flex-1">
+                <span class="text-xs text-gray-400 whitespace-nowrap">저장</span>
+                <span class="text-sm font-semibold tabular-nums text-gray-800">{{ placeStats.stored_count.toLocaleString('ko-KR') }}</span>
+              </div>
+              <div class="flex items-center gap-2 px-3 py-1.5 min-w-0 flex-1">
+                <span class="text-xs text-gray-400 whitespace-nowrap">답글률</span>
+                <span class="text-sm font-semibold tabular-nums text-gray-800">{{ (placeStats.reply_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
+              </div>
+              <div class="flex items-center gap-2 px-3 py-1.5 min-w-0 flex-1">
+                <span class="text-xs text-gray-400 whitespace-nowrap">사진율</span>
+                <span class="text-sm font-semibold tabular-nums text-gray-800">{{ (placeStats.photo_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
+              </div>
+              <div class="flex items-center gap-2 px-3 py-1.5 min-w-0 flex-1">
+                <span class="text-xs text-gray-400 whitespace-nowrap">서버 총</span>
+                <span class="text-sm font-semibold tabular-nums text-gray-800">{{ placeStats.total_server != null ? placeStats.total_server.toLocaleString('ko-KR') : '—' }}</span>
+              </div>
+            </div>
+            <div v-else-if="statsStatus === 'loading'" class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 border-b border-gray-100">
+              <UIcon name="i-heroicons-arrow-path" class="w-3 h-3 text-gray-400 animate-spin shrink-0" />
+              <span class="text-xs text-gray-400">통계 집계 중...</span>
+            </div>
+
+            <!-- 리뷰 목록 (flex-1 min-h-0 overflow-y-auto) -->
+            <!-- Loading -->
+            <div v-if="reviewsStatus === 'loading'" class="flex-1 flex items-center justify-center">
+              <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 animate-spin" />
+            </div>
+            <!-- Error -->
+            <div v-else-if="reviewsStatus === 'error'" class="flex-1 flex flex-col items-center justify-center gap-2 p-4">
+              <p class="text-sm text-red-500">{{ reviewsError }}</p>
+              <UButton label="재시도" size="sm" color="neutral" variant="outline" @click="retryReviews" />
+            </div>
+            <!-- Empty -->
+            <div v-else-if="reviewsStatus === 'done' && reviews.length === 0" class="flex-1 flex items-center justify-center">
+              <p class="text-sm text-gray-400">수집된 리뷰가 없습니다.</p>
+            </div>
+            <!-- Success -->
+            <template v-else>
+              <div class="flex-1 min-h-0 overflow-auto">
+                <table class="w-full text-sm border-collapse">
+                  <thead class="sticky top-0 z-10 bg-gray-50">
+                    <tr class="h-8">
+                      <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-20">작성일</th>
+                      <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">작성자</th>
+                      <th class="px-3 text-left font-medium text-gray-600 text-xs border-b border-gray-200">본문</th>
+                      <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-14">답글</th>
+                      <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-10">사진</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="review in reviews"
+                      :key="review.id"
+                      class="border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors"
+                    >
+                      <td class="px-3 py-1.5 whitespace-nowrap text-xs text-gray-500 tabular-nums">
+                        {{ formatReviewDate(review.review_date, review.review_created_at) }}
+                      </td>
+                      <td class="px-3 py-1.5 text-xs text-gray-700 w-28 max-w-[7rem]">
+                        <span class="flex items-center gap-1 min-w-0">
+                          <span
+                            v-if="isNewReview(review)"
+                            class="inline-block shrink-0 w-2 h-2 rounded-full bg-green-500"
+                            title="자동 수집으로 새로 포착된 리뷰"
+                          />
+                          <span class="truncate" :title="review.author_nick || ''">{{ review.author_nick || '—' }}</span>
+                        </span>
+                      </td>
+                      <td class="px-3 py-1.5 text-xs text-gray-800 max-w-0">
+                        <span class="block truncate" :title="review.body || ''">{{ review.body || '—' }}</span>
+                      </td>
+                      <td class="px-3 py-1.5 text-center text-xs text-gray-500 whitespace-nowrap">{{ review.owner_reply ? '있음' : '' }}</td>
+                      <td class="px-3 py-1.5 text-center text-xs text-gray-500 whitespace-nowrap">{{ review.has_photo === 1 ? '○' : '' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <!-- 페이지네이션 (shrink-0) -->
+              <div
+                v-if="reviewsTotal > LIMIT"
+                class="shrink-0 flex items-center justify-between px-3 py-2 border-t border-gray-200 bg-gray-50"
+              >
+                <span class="text-xs text-gray-400">
+                  {{ (currentPage - 1) * LIMIT + 1 }}–{{ Math.min(currentPage * LIMIT, reviewsTotal) }} / {{ reviewsTotal.toLocaleString('ko-KR') }}건
+                </span>
+                <div class="flex items-center gap-1">
+                  <UButton
+                    icon="i-heroicons-chevron-left"
+                    size="xs"
+                    color="neutral"
+                    variant="ghost"
+                    :disabled="currentPage === 1"
+                    aria-label="이전 페이지"
+                    @click="currentPage--"
+                  />
+                  <span class="text-xs text-gray-600 tabular-nums px-1">{{ currentPage }} / {{ Math.ceil(reviewsTotal / LIMIT) }}</span>
+                  <UButton
+                    icon="i-heroicons-chevron-right"
+                    size="xs"
+                    color="neutral"
+                    variant="ghost"
+                    :disabled="currentPage * LIMIT >= reviewsTotal"
+                    aria-label="다음 페이지"
+                    @click="currentPage++"
+                  />
+                </div>
+              </div>
+            </template>
+
           </div>
+          <!-- ══ /탭 1: 리뷰 ══════════════════════════════════════════ -->
 
-          <!-- Empty -->
-          <div v-else-if="reviewsStatus === 'done' && reviews.length === 0" class="flex-1 flex items-center justify-center">
-            <p class="text-sm text-gray-400">수집된 리뷰가 없습니다.</p>
-          </div>
+          <!-- ══ 탭 2: 통계 · AI 인사이트 ════════════════════════════ -->
+          <div v-show="activeTab === 'stats'" class="flex-1 min-h-0 overflow-y-auto">
+            <div class="flex flex-col divide-y divide-gray-100">
 
-          <!-- Success: 리뷰 표 -->
-          <template v-else>
+              <!-- ── 미니 통계 대시보드 ──────────────────────────── -->
+              <!-- Loading -->
+              <div v-if="statsStatus === 'loading'" class="flex items-center gap-1.5 px-3 py-2">
+                <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />
+                <span class="text-xs text-gray-400">통계 집계 중...</span>
+              </div>
+              <!-- Error -->
+              <div v-else-if="statsStatus === 'error'" class="flex items-center gap-1.5 px-3 py-2">
+                <UIcon name="i-heroicons-exclamation-circle" class="w-3.5 h-3.5 text-red-400 shrink-0" />
+                <span class="text-xs text-red-400">통계 로드 실패 — {{ statsError }}</span>
+                <button class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1" @click="selectedPlace && fetchPlaceStats(selectedPlace.id)">재시도</button>
+              </div>
+              <!-- Success -->
+              <template v-else-if="statsStatus === 'done' && placeStats">
 
-            <!-- ── AI 인사이트 패널 (shrink-0, 미니 통계 위) ─────────── -->
-            <div class="shrink-0 border-b border-gray-100">
+                <!-- KPI 4카드 -->
+                <div class="flex items-stretch divide-x divide-gray-100">
+                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                    <span class="text-xs text-gray-400 whitespace-nowrap">저장 리뷰</span>
+                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ placeStats.stored_count.toLocaleString('ko-KR') }}</span>
+                  </div>
+                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                    <span class="text-xs text-gray-400 whitespace-nowrap">답글률</span>
+                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ (placeStats.reply_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
+                  </div>
+                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                    <span class="text-xs text-gray-400 whitespace-nowrap">사진첨부율</span>
+                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ (placeStats.photo_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
+                  </div>
+                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                    <span class="text-xs text-gray-400 whitespace-nowrap">서버 총 리뷰</span>
+                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ placeStats.total_server != null ? placeStats.total_server.toLocaleString('ko-KR') : '—' }}</span>
+                  </div>
+                </div>
 
+                <!-- 키워드 + 월별 분포 + 추이 -->
+                <div class="flex gap-0 divide-x divide-gray-100">
+                  <!-- 키워드 칩 영역 -->
+                  <div v-if="placeStats.top_keywords.length > 0" class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1.5">
+                    <span class="text-xs text-gray-400">리뷰 본문 단순 빈도 (정밀 분석 예정)</span>
+                    <div class="flex flex-wrap gap-1">
+                      <span
+                        v-for="(kw, i) in placeStats.top_keywords"
+                        :key="kw.word"
+                        class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 whitespace-nowrap"
+                        :class="i < 3 ? 'font-medium text-xs' : 'font-normal text-xs text-gray-500'"
+                        :title="`${kw.count}회`"
+                      >{{ kw.word }}<span class="text-gray-400 text-[10px] tabular-nums">{{ kw.count }}</span></span>
+                    </div>
+                  </div>
+                  <!-- 월별 분포 미니 바 차트 -->
+                  <div v-if="placeStats.monthly.length > 0" class="w-52 shrink-0 px-3 py-2 flex flex-col gap-1.5">
+                    <span class="text-xs text-gray-400">월별 리뷰 수 (최근 12개월)</span>
+                    <div class="flex items-end gap-px h-10">
+                      <template v-if="Math.max(...placeStats.monthly.map(m => m.count)) > 0">
+                        <div
+                          v-for="m in placeStats.monthly"
+                          :key="m.month"
+                          class="flex-1 min-w-0 bg-primary-400 rounded-sm transition-all"
+                          :style="{ height: Math.max(2, Math.round(m.count / Math.max(...placeStats.monthly.map(x => x.count)) * 40)) + 'px' }"
+                          :title="`${m.month}: ${m.count}건`"
+                        />
+                      </template>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-gray-400 tabular-nums">
+                      <span>{{ placeStats.monthly[0]?.month?.slice(5) }}</span>
+                      <span>{{ placeStats.monthly[placeStats.monthly.length - 1]?.month?.slice(5) }}</span>
+                    </div>
+                  </div>
+                  <!-- 스냅샷 추이 -->
+                  <div class="w-44 shrink-0 px-3 py-2 flex flex-col gap-1.5">
+                    <span class="text-xs text-gray-400">저장 리뷰 추이</span>
+                    <template v-if="placeStats.snapshots.length >= 2">
+                      <div class="flex items-end gap-px h-10">
+                        <template v-if="Math.max(...placeStats.snapshots.map(s => s.stored_count)) > 0">
+                          <div
+                            v-for="s in placeStats.snapshots"
+                            :key="s.captured_at"
+                            class="flex-1 min-w-0 bg-emerald-400 rounded-sm transition-all"
+                            :style="{ height: Math.max(2, Math.round(s.stored_count / Math.max(...placeStats.snapshots.map(x => x.stored_count)) * 40)) + 'px' }"
+                            :title="`${s.captured_at.slice(0,10)}: ${s.stored_count.toLocaleString('ko-KR')}건`"
+                          />
+                        </template>
+                      </div>
+                      <div class="flex justify-between text-[10px] text-gray-400 tabular-nums">
+                        <span>{{ placeStats.snapshots[0]?.captured_at?.slice(5,10) }}</span>
+                        <span>{{ placeStats.snapshots[placeStats.snapshots.length - 1]?.captured_at?.slice(5,10) }}</span>
+                      </div>
+                    </template>
+                    <div v-else class="flex-1 flex items-center">
+                      <span class="text-xs text-gray-400">데이터 누적 중 (며칠 뒤 표시)</span>
+                    </div>
+                  </div>
+                </div>
+
+              </template>
+
+              <!-- ── AI 인사이트 리포트 ──────────────────────────── -->
               <!-- Loading -->
               <div v-if="reportStatus === 'loading' || reportGenerating" class="flex items-center gap-1.5 px-3 py-2.5">
                 <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />
                 <span class="text-xs text-gray-400">{{ reportGenerating ? 'AI 리포트 생성 중 (수 초 소요)...' : 'AI 인사이트 불러오는 중...' }}</span>
               </div>
-
               <!-- Empty -->
-              <div v-else-if="reportStatus === 'empty'" class="flex items-center justify-between px-3 py-2">
+              <div v-else-if="reportStatus === 'empty'" class="flex items-center justify-between px-3 py-2.5">
                 <div class="flex items-center gap-1.5 min-w-0">
                   <UIcon name="i-heroicons-sparkles" class="w-3.5 h-3.5 text-gray-400 shrink-0" />
                   <span class="text-xs text-gray-400">AI 인사이트 리포트가 없습니다.</span>
@@ -1706,25 +2057,18 @@ onUnmounted(() => {
                   @click="selectedPlace && generateReport(selectedPlace.id)"
                 />
               </div>
-
               <!-- Error -->
-              <div v-else-if="reportStatus === 'error'" class="flex items-center gap-1.5 px-3 py-2">
+              <div v-else-if="reportStatus === 'error'" class="flex items-center gap-1.5 px-3 py-2.5">
                 <UIcon name="i-heroicons-exclamation-circle" class="w-3.5 h-3.5 text-red-400 shrink-0" />
-                <span v-if="reportErrorCode === 'no_openai_key' || reportErrorCode === 'openai_key_missing'" class="text-xs text-red-500">
-                  OpenAI API 키가 설정되지 않았습니다. 관리자에게 문의하세요.
-                </span>
+                <span v-if="reportErrorCode === 'no_openai_key' || reportErrorCode === 'openai_key_missing'" class="text-xs text-red-500">OpenAI API 키가 설정되지 않았습니다. 관리자에게 문의하세요.</span>
                 <span v-else class="text-xs text-red-400">리포트 로드 실패 — {{ reportError }}</span>
-                <button
-                  class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1"
-                  @click="selectedPlace && fetchPlaceReport(selectedPlace.id)"
-                >재시도</button>
+                <button class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1" @click="selectedPlace && fetchPlaceReport(selectedPlace.id)">재시도</button>
               </div>
-
               <!-- Success -->
-              <div v-else-if="reportStatus === 'done' && placeReport" class="flex flex-col divide-y divide-gray-100">
+              <template v-else-if="reportStatus === 'done' && placeReport">
 
-                <!-- 총평 헤더 -->
-                <div class="flex items-start justify-between gap-3 px-3 py-2">
+                <!-- 총평 헤더 + 다시 분석 -->
+                <div class="flex items-start justify-between gap-3 px-3 py-2.5">
                   <div class="flex items-start gap-1.5 min-w-0">
                     <UIcon name="i-heroicons-sparkles" class="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
                     <p class="text-xs text-gray-700 leading-relaxed">
@@ -1733,115 +2077,64 @@ onUnmounted(() => {
                       <span v-if="placeReport.qualitative?.summary">{{ placeReport.qualitative.summary }}</span>
                     </p>
                   </div>
-                  <!-- 다시 분석 버튼 + meta -->
-                  <div class="flex items-center gap-2 shrink-0">
-                    <span class="text-[10px] text-gray-400 tabular-nums whitespace-nowrap">
-                      표본 {{ placeReport.meta.sample_size.toLocaleString('ko-KR') }}건 · {{ placeReport.meta.model }} · {{ placeReport.meta.generated_at.slice(0, 10) }}
+                  <div class="flex flex-col items-end gap-1 shrink-0">
+                    <div class="flex items-center gap-2">
+                      <span class="text-[10px] text-gray-400 tabular-nums whitespace-nowrap">
+                        표본 {{ placeReport.meta.sample_size.toLocaleString('ko-KR') }}건 · {{ placeReport.meta.model }} · {{ placeReport.meta.generated_at.slice(0, 10) }}
+                      </span>
+                      <UButton
+                        label="다시 분석"
+                        size="xs"
+                        color="neutral"
+                        variant="ghost"
+                        icon="i-heroicons-arrow-path"
+                        :loading="reportGenerating"
+                        :disabled="reportGenerating"
+                        @click="selectedPlace && generateReport(selectedPlace.id)"
+                      />
+                    </div>
+                    <!-- 비용 표시 (옵셔널) -->
+                    <span v-if="reportUsage" class="text-[10px] text-gray-400 tabular-nums">
+                      이번 분석 ≈ ${{ reportUsage.cost_usd.toFixed(4) }} (입력 {{ (reportUsage.prompt_tokens / 1000).toFixed(1) }}k · 출력 {{ (reportUsage.completion_tokens / 1000).toFixed(1) }}k)
                     </span>
-                    <UButton
-                      label="다시 분석"
-                      size="xs"
-                      color="neutral"
-                      variant="ghost"
-                      icon="i-heroicons-arrow-path"
-                      :loading="reportGenerating"
-                      :disabled="reportGenerating"
-                      @click="selectedPlace && generateReport(selectedPlace.id)"
-                    />
                   </div>
                 </div>
 
-                <!-- qualitative 블록 (없으면 스킵) -->
                 <template v-if="placeReport.qualitative">
-
-                  <!-- 강점 / 개선점 + 감성 분포 + 테마 칩 (한 행) -->
+                  <!-- 강점 / 개선점 + 감성 분포 + 테마 칩 -->
                   <div class="flex gap-0 divide-x divide-gray-100">
-
-                    <!-- 강점 -->
-                    <div
-                      v-if="placeReport.qualitative.strengths?.length"
-                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1"
-                    >
+                    <div v-if="placeReport.qualitative.strengths?.length" class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1">
                       <span class="text-[10px] font-medium text-green-700 uppercase tracking-wide">강점</span>
                       <div class="flex flex-col gap-1">
-                        <div
-                          v-for="s in placeReport.qualitative.strengths"
-                          :key="s.point"
-                          class="flex flex-col gap-0.5"
-                        >
+                        <div v-for="s in placeReport.qualitative.strengths" :key="s.point" class="flex flex-col gap-0.5">
                           <span class="text-xs font-medium text-gray-800">{{ s.point }}</span>
                           <span class="text-[10px] text-gray-400 italic leading-snug line-clamp-2" :title="s.evidence">"{{ s.evidence }}"</span>
                         </div>
                       </div>
                     </div>
-
-                    <!-- 개선점 -->
-                    <div
-                      v-if="placeReport.qualitative.improvements?.length"
-                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1"
-                    >
+                    <div v-if="placeReport.qualitative.improvements?.length" class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1">
                       <span class="text-[10px] font-medium text-red-600 uppercase tracking-wide">개선점</span>
                       <div class="flex flex-col gap-1">
-                        <div
-                          v-for="imp in placeReport.qualitative.improvements"
-                          :key="imp.point"
-                          class="flex flex-col gap-0.5"
-                        >
+                        <div v-for="imp in placeReport.qualitative.improvements" :key="imp.point" class="flex flex-col gap-0.5">
                           <span class="text-xs font-medium text-gray-800">{{ imp.point }}</span>
                           <span class="text-[10px] text-gray-400 italic leading-snug line-clamp-2" :title="imp.evidence">"{{ imp.evidence }}"</span>
                         </div>
                       </div>
                     </div>
-
-                    <!-- 감성 분포 -->
-                    <div
-                      v-if="placeReport.qualitative.sentiment"
-                      class="w-44 shrink-0 px-3 py-2 flex flex-col gap-1.5"
-                    >
+                    <div v-if="placeReport.qualitative.sentiment" class="w-44 shrink-0 px-3 py-2 flex flex-col gap-1.5">
                       <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wide">감성 분포</span>
-                      <!-- 누적 가로 바 -->
                       <div class="flex h-3 rounded overflow-hidden gap-px">
-                        <div
-                          v-if="placeReport.qualitative.sentiment.positive > 0"
-                          class="bg-green-400"
-                          :style="{ width: placeReport.qualitative.sentiment.positive + '%' }"
-                          :title="`긍정 ${placeReport.qualitative.sentiment.positive}%`"
-                        />
-                        <div
-                          v-if="placeReport.qualitative.sentiment.neutral > 0"
-                          class="bg-gray-300"
-                          :style="{ width: placeReport.qualitative.sentiment.neutral + '%' }"
-                          :title="`중립 ${placeReport.qualitative.sentiment.neutral}%`"
-                        />
-                        <div
-                          v-if="placeReport.qualitative.sentiment.negative > 0"
-                          class="bg-red-300"
-                          :style="{ width: placeReport.qualitative.sentiment.negative + '%' }"
-                          :title="`부정 ${placeReport.qualitative.sentiment.negative}%`"
-                        />
+                        <div v-if="placeReport.qualitative.sentiment.positive > 0" class="bg-green-400" :style="{ width: placeReport.qualitative.sentiment.positive + '%' }" :title="`긍정 ${placeReport.qualitative.sentiment.positive}%`" />
+                        <div v-if="placeReport.qualitative.sentiment.neutral > 0" class="bg-gray-300" :style="{ width: placeReport.qualitative.sentiment.neutral + '%' }" :title="`중립 ${placeReport.qualitative.sentiment.neutral}%`" />
+                        <div v-if="placeReport.qualitative.sentiment.negative > 0" class="bg-red-300" :style="{ width: placeReport.qualitative.sentiment.negative + '%' }" :title="`부정 ${placeReport.qualitative.sentiment.negative}%`" />
                       </div>
-                      <!-- 레전드 -->
                       <div class="flex items-center gap-2 flex-wrap">
-                        <span class="flex items-center gap-1 text-[10px] text-gray-500">
-                          <span class="inline-block w-2 h-2 rounded-sm bg-green-400 shrink-0" />
-                          긍정 {{ placeReport.qualitative.sentiment.positive }}%
-                        </span>
-                        <span class="flex items-center gap-1 text-[10px] text-gray-500">
-                          <span class="inline-block w-2 h-2 rounded-sm bg-gray-300 shrink-0" />
-                          중립 {{ placeReport.qualitative.sentiment.neutral }}%
-                        </span>
-                        <span class="flex items-center gap-1 text-[10px] text-gray-500">
-                          <span class="inline-block w-2 h-2 rounded-sm bg-red-300 shrink-0" />
-                          부정 {{ placeReport.qualitative.sentiment.negative }}%
-                        </span>
+                        <span class="flex items-center gap-1 text-[10px] text-gray-500"><span class="inline-block w-2 h-2 rounded-sm bg-green-400 shrink-0" />긍정 {{ placeReport.qualitative.sentiment.positive }}%</span>
+                        <span class="flex items-center gap-1 text-[10px] text-gray-500"><span class="inline-block w-2 h-2 rounded-sm bg-gray-300 shrink-0" />중립 {{ placeReport.qualitative.sentiment.neutral }}%</span>
+                        <span class="flex items-center gap-1 text-[10px] text-gray-500"><span class="inline-block w-2 h-2 rounded-sm bg-red-300 shrink-0" />부정 {{ placeReport.qualitative.sentiment.negative }}%</span>
                       </div>
                     </div>
-
-                    <!-- 테마 키워드 칩 -->
-                    <div
-                      v-if="placeReport.qualitative.themes?.length"
-                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1.5"
-                    >
+                    <div v-if="placeReport.qualitative.themes?.length" class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1.5">
                       <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wide">테마 키워드</span>
                       <div class="flex flex-wrap gap-1">
                         <span
@@ -1867,7 +2160,6 @@ onUnmounted(() => {
                         </span>
                       </div>
                     </div>
-
                   </div>
 
                   <!-- 대표 리뷰 (긍/부) -->
@@ -1875,11 +2167,7 @@ onUnmounted(() => {
                     v-if="placeReport.qualitative.representative_reviews && (placeReport.qualitative.representative_reviews.positive?.length || placeReport.qualitative.representative_reviews.negative?.length)"
                     class="flex gap-0 divide-x divide-gray-100"
                   >
-                    <!-- 긍정 대표 리뷰 -->
-                    <div
-                      v-if="placeReport.qualitative.representative_reviews.positive?.length"
-                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1"
-                    >
+                    <div v-if="placeReport.qualitative.representative_reviews.positive?.length" class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1">
                       <span class="text-[10px] font-medium text-green-700 uppercase tracking-wide">긍정 대표 리뷰</span>
                       <div class="flex flex-col gap-1">
                         <blockquote
@@ -1890,11 +2178,7 @@ onUnmounted(() => {
                         >{{ q }}</blockquote>
                       </div>
                     </div>
-                    <!-- 부정 대표 리뷰 -->
-                    <div
-                      v-if="placeReport.qualitative.representative_reviews.negative?.length"
-                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1"
-                    >
+                    <div v-if="placeReport.qualitative.representative_reviews.negative?.length" class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1">
                       <span class="text-[10px] font-medium text-red-600 uppercase tracking-wide">부정 대표 리뷰</span>
                       <div class="flex flex-col gap-1">
                         <blockquote
@@ -1908,29 +2192,38 @@ onUnmounted(() => {
                   </div>
 
                 </template>
-
-                <!-- qualitative 없을 때: 정량만 있다는 안내 -->
                 <div v-else class="px-3 py-1.5">
                   <span class="text-[10px] text-gray-400">정성 분석 데이터가 없습니다 (정량 데이터만 포함된 리포트)</span>
                 </div>
 
+              </template>
+
+              <!-- 지점 누적 usage (옵셔널) -->
+              <div v-if="placeUsage" class="px-3 py-2 flex items-center gap-1.5">
+                <UIcon name="i-heroicons-currency-dollar" class="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                <span class="text-[10px] text-gray-400 tabular-nums">
+                  이 지점 누적 ≈ ${{ placeUsage.total_cost_usd.toFixed(4) }}
+                  <template v-for="k in placeUsage.by_kind" :key="k.kind">
+                    · {{ k.kind === 'report' ? '리포트' : k.kind === 'samples' ? '예시' : k.kind }} {{ k.calls }}회
+                  </template>
+                </span>
               </div>
+
             </div>
-            <!-- ── /AI 인사이트 패널 ────────────────────────────────── -->
+          </div>
+          <!-- ══ /탭 2: 통계 · AI 인사이트 ════════════════════════════ -->
 
-            <!-- ── Phase 4-3: 리뷰 예시 생성 패널 (관리자 전용) ─────── -->
-            <div v-if="authStore.isAdmin" class="shrink-0 border-b border-gray-100">
+          <!-- ══ 탭 3: 예시 생성 (관리자 전용) ════════════════════════ -->
+          <div v-if="authStore.isAdmin" v-show="activeTab === 'samples'" class="flex-1 min-h-0 overflow-y-auto">
+            <div class="flex flex-col divide-y divide-gray-100">
 
-              <!-- 패널 헤더 -->
-              <div class="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b border-gray-100">
+              <!-- 생성 컨트롤 헤더 -->
+              <div class="flex items-center justify-between px-3 py-2 bg-gray-50">
                 <div class="flex items-center gap-1.5">
                   <UIcon name="i-heroicons-beaker" class="w-3.5 h-3.5 text-gray-500 shrink-0" />
                   <span class="text-xs font-medium text-gray-700">리뷰 예시 생성</span>
-                  <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap">
-                    AI 합성·연구용
-                  </span>
+                  <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap">AI 합성·연구용</span>
                 </div>
-                <!-- 생성 컨트롤 -->
                 <div class="flex items-center gap-2 shrink-0">
                   <span class="text-xs text-gray-400">개수</span>
                   <input
@@ -1963,368 +2256,69 @@ onUnmounted(() => {
                 </div>
               </div>
 
+              <!-- 비용 표시 (옵셔널) -->
+              <div v-if="samplesUsage || placeUsage" class="flex items-center gap-3 px-3 py-1.5 flex-wrap">
+                <span v-if="samplesUsage" class="text-[10px] text-gray-400 tabular-nums">
+                  이번 생성 ≈ ${{ samplesUsage.cost_usd.toFixed(4) }} (입력 {{ (samplesUsage.prompt_tokens / 1000).toFixed(1) }}k · 출력 {{ (samplesUsage.completion_tokens / 1000).toFixed(1) }}k)
+                </span>
+                <span v-if="placeUsage" class="text-[10px] text-gray-400 tabular-nums">
+                  이 지점 누적 ≈ ${{ placeUsage.total_cost_usd.toFixed(4) }}
+                  <template v-for="k in placeUsage.by_kind" :key="k.kind">
+                    · {{ k.kind === 'report' ? '리포트' : k.kind === 'samples' ? '예시' : k.kind }} {{ k.calls }}회
+                  </template>
+                </span>
+              </div>
+
               <!-- 생성 중 -->
               <div v-if="samplesStatus === 'generating' || samplesGenerating" class="flex items-center gap-1.5 px-3 py-2.5">
                 <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />
                 <span class="text-xs text-gray-400">AI 예시 생성 중 (수 초 소요)...</span>
               </div>
-
-              <!-- Loading (이력 조회 중) -->
+              <!-- Loading -->
               <div v-else-if="samplesStatus === 'loading'" class="flex items-center gap-1.5 px-3 py-2.5">
                 <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />
                 <span class="text-xs text-gray-400">예시 이력 불러오는 중...</span>
               </div>
-
               <!-- Error -->
-              <div v-else-if="samplesStatus === 'error'" class="flex items-center gap-1.5 px-3 py-2">
+              <div v-else-if="samplesStatus === 'error'" class="flex items-center gap-1.5 px-3 py-2.5">
                 <UIcon name="i-heroicons-exclamation-circle" class="w-3.5 h-3.5 text-red-400 shrink-0" />
                 <span class="text-xs text-red-500">{{ samplesError }}</span>
-                <button
-                  class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1"
-                  @click="selectedPlace && fetchSamples(selectedPlace.id)"
-                >재시도</button>
+                <button class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1" @click="selectedPlace && fetchSamples(selectedPlace.id)">재시도</button>
               </div>
-
               <!-- Empty -->
               <div v-else-if="samplesStatus === 'empty' || samplesStatus === 'idle'" class="flex items-center gap-1.5 px-3 py-2.5">
                 <UIcon name="i-heroicons-document-text" class="w-3.5 h-3.5 text-gray-300 shrink-0" />
                 <span class="text-xs text-gray-400">아직 생성된 예시가 없습니다. 위 "예시 생성" 버튼을 누르세요.</span>
               </div>
-
               <!-- Success: 카드 리스트 -->
-              <div v-else-if="samplesStatus === 'done' && samples.length > 0" class="overflow-y-auto" style="max-height: 280px">
-                <div class="flex flex-col divide-y divide-gray-100">
-                  <div
-                    v-for="sample in samples"
-                    :key="sample.id"
-                    class="flex items-start gap-2 px-3 py-2 hover:bg-gray-50 transition-colors group"
-                  >
-                    <!-- 본문 -->
-                    <p class="flex-1 min-w-0 text-xs text-gray-800 leading-relaxed">{{ sample.body }}</p>
-                    <!-- 스타일 칩 + 복사 버튼 -->
-                    <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600 whitespace-nowrap">
-                        {{ lengthLabel[sample.length] ?? sample.length }}
-                      </span>
-                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700 whitespace-nowrap">
-                        {{ toneLabel[sample.tone] ?? sample.tone }}
-                      </span>
-                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700 whitespace-nowrap">
-                        {{ focusLabel[sample.focus] ?? sample.focus }}
-                      </span>
-                      <button
-                        class="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 p-0.5 rounded text-gray-400 hover:text-gray-700"
-                        title="본문 복사"
-                        @click="copySampleBody(sample.body)"
-                      >
-                        <UIcon name="i-heroicons-clipboard-document" class="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-            <!-- ── /Phase 4-3: 리뷰 예시 생성 패널 ───────────────────── -->
-
-            <!-- ── 미니 통계 대시보드 (shrink-0, 리뷰 표 위) ───────── -->
-            <div class="shrink-0 border-b border-gray-100">
-              <!-- Loading -->
-              <div v-if="statsStatus === 'loading'" class="flex items-center gap-1.5 px-3 py-2">
-                <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />
-                <span class="text-xs text-gray-400">통계 집계 중...</span>
-              </div>
-
-              <!-- Error -->
-              <div v-else-if="statsStatus === 'error'" class="flex items-center gap-1.5 px-3 py-2">
-                <UIcon name="i-heroicons-exclamation-circle" class="w-3.5 h-3.5 text-red-400 shrink-0" />
-                <span class="text-xs text-red-400">통계 로드 실패 — {{ statsError }}</span>
-                <button
-                  class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1"
-                  @click="selectedPlace && fetchPlaceStats(selectedPlace.id)"
-                >재시도</button>
-              </div>
-
-              <!-- Success -->
-              <div v-else-if="statsStatus === 'done' && placeStats" class="flex flex-col gap-0 divide-y divide-gray-100">
-
-                <!-- KPI 카드 줄 -->
-                <div class="flex items-stretch divide-x divide-gray-100">
-                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
-                    <span class="text-xs text-gray-400 whitespace-nowrap">저장 리뷰</span>
-                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ placeStats.stored_count.toLocaleString('ko-KR') }}</span>
-                  </div>
-                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
-                    <span class="text-xs text-gray-400 whitespace-nowrap">답글률</span>
-                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ (placeStats.reply_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
-                  </div>
-                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
-                    <span class="text-xs text-gray-400 whitespace-nowrap">사진첨부율</span>
-                    <span class="text-base font-semibold tabular-nums text-gray-800">{{ (placeStats.photo_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
-                  </div>
-                  <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
-                    <span class="text-xs text-gray-400 whitespace-nowrap">서버 총 리뷰</span>
-                    <span class="text-base font-semibold tabular-nums text-gray-800">
-                      {{ placeStats.total_server != null ? placeStats.total_server.toLocaleString('ko-KR') : '—' }}
-                    </span>
-                  </div>
-                </div>
-
-                <!-- 키워드 + 월별 분포 + 추이 (한 줄) -->
-                <div class="flex gap-0 divide-x divide-gray-100">
-
-                  <!-- 키워드 칩 영역 -->
-                  <div
-                    v-if="placeStats.top_keywords.length > 0"
-                    class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1.5"
-                  >
-                    <span class="text-xs text-gray-400">리뷰 본문 단순 빈도 (정밀 분석 예정)</span>
-                    <div class="flex flex-wrap gap-1">
-                      <span
-                        v-for="(kw, i) in placeStats.top_keywords"
-                        :key="kw.word"
-                        class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 whitespace-nowrap"
-                        :class="i < 3 ? 'font-medium text-xs' : 'font-normal text-xs text-gray-500'"
-                        :title="`${kw.count}회`"
-                      >{{ kw.word }}<span class="text-gray-400 text-[10px] tabular-nums">{{ kw.count }}</span></span>
-                    </div>
-                  </div>
-
-                  <!-- 월별 분포 미니 바 차트 -->
-                  <div
-                    v-if="placeStats.monthly.length > 0"
-                    class="w-52 shrink-0 px-3 py-2 flex flex-col gap-1.5"
-                  >
-                    <span class="text-xs text-gray-400">월별 리뷰 수 (최근 12개월)</span>
-                    <div class="flex items-end gap-px h-10">
-                      <template v-if="Math.max(...placeStats.monthly.map(m => m.count)) > 0">
-                        <div
-                          v-for="m in placeStats.monthly"
-                          :key="m.month"
-                          class="flex-1 min-w-0 bg-primary-400 rounded-sm transition-all"
-                          :style="{ height: Math.max(2, Math.round(m.count / Math.max(...placeStats.monthly.map(x => x.count)) * 40)) + 'px' }"
-                          :title="`${m.month}: ${m.count}건`"
-                        />
-                      </template>
-                    </div>
-                    <div class="flex justify-between text-[10px] text-gray-400 tabular-nums">
-                      <span>{{ placeStats.monthly[0]?.month?.slice(5) }}</span>
-                      <span>{{ placeStats.monthly[placeStats.monthly.length - 1]?.month?.slice(5) }}</span>
-                    </div>
-                  </div>
-
-                  <!-- 스냅샷 추이 -->
-                  <div class="w-44 shrink-0 px-3 py-2 flex flex-col gap-1.5">
-                    <span class="text-xs text-gray-400">저장 리뷰 추이</span>
-                    <template v-if="placeStats.snapshots.length >= 2">
-                      <div class="flex items-end gap-px h-10">
-                        <template v-if="Math.max(...placeStats.snapshots.map(s => s.stored_count)) > 0">
-                          <div
-                            v-for="s in placeStats.snapshots"
-                            :key="s.captured_at"
-                            class="flex-1 min-w-0 bg-emerald-400 rounded-sm transition-all"
-                            :style="{ height: Math.max(2, Math.round(s.stored_count / Math.max(...placeStats.snapshots.map(x => x.stored_count)) * 40)) + 'px' }"
-                            :title="`${s.captured_at.slice(0,10)}: ${s.stored_count.toLocaleString('ko-KR')}건`"
-                          />
-                        </template>
-                      </div>
-                      <div class="flex justify-between text-[10px] text-gray-400 tabular-nums">
-                        <span>{{ placeStats.snapshots[0]?.captured_at?.slice(5,10) }}</span>
-                        <span>{{ placeStats.snapshots[placeStats.snapshots.length - 1]?.captured_at?.slice(5,10) }}</span>
-                      </div>
-                    </template>
-                    <div v-else class="flex-1 flex items-center">
-                      <span class="text-xs text-gray-400">데이터 누적 중 (며칠 뒤 표시)</span>
-                    </div>
-                  </div>
-
-                </div>
-              </div>
-            </div>
-            <!-- ── /미니 통계 대시보드 ─────────────────────────────── -->
-
-            <!-- 표 스크롤 영역 -->
-            <div class="flex-1 min-h-0 overflow-auto">
-              <table class="w-full text-sm border-collapse">
-                <thead class="sticky top-0 z-10 bg-gray-50">
-                  <tr class="h-8">
-                    <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-20">작성일</th>
-                    <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">작성자</th>
-                    <th class="px-3 text-left font-medium text-gray-600 text-xs border-b border-gray-200">본문</th>
-                    <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-14">답글</th>
-                    <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-10">사진</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="review in reviews"
-                    :key="review.id"
-                    class="border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors"
-                  >
-                    <!-- 작성일 (review_date 기반 YY.M.D(요일) 표시, 없으면 원본 fallback) -->
-                    <td class="px-3 py-1.5 whitespace-nowrap text-xs text-gray-500 tabular-nums">
-                      {{ formatReviewDate(review.review_date, review.review_created_at) }}
-                    </td>
-                    <!-- 작성자 -->
-                    <td class="px-3 py-1.5 text-xs text-gray-700 w-28 max-w-[7rem]">
-                      <span class="flex items-center gap-1 min-w-0">
-                        <span
-                          v-if="isNewReview(review)"
-                          class="inline-block shrink-0 w-2 h-2 rounded-full bg-green-500"
-                          title="자동 수집으로 새로 포착된 리뷰"
-                        />
-                        <span class="truncate" :title="review.author_nick || ''">{{ review.author_nick || '—' }}</span>
-                      </span>
-                    </td>
-                    <!-- 본문: 한 줄 말줄임, hover title로 전체 확인 -->
-                    <td class="px-3 py-1.5 text-xs text-gray-800 max-w-0">
-                      <span class="block truncate" :title="review.body || ''">{{ review.body || '—' }}</span>
-                    </td>
-                    <!-- 답글여부 -->
-                    <td class="px-3 py-1.5 text-center text-xs text-gray-500 whitespace-nowrap">
-                      {{ review.owner_reply ? '있음' : '' }}
-                    </td>
-                    <!-- 사진여부 -->
-                    <td class="px-3 py-1.5 text-center text-xs text-gray-500 whitespace-nowrap">
-                      {{ review.has_photo === 1 ? '○' : '' }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <!-- 페이지네이션 -->
-            <div
-              v-if="reviewsTotal > LIMIT"
-              class="shrink-0 flex items-center justify-between px-3 py-2 border-t border-gray-200 bg-gray-50"
-            >
-              <span class="text-xs text-gray-400">
-                {{ (currentPage - 1) * LIMIT + 1 }}–{{ Math.min(currentPage * LIMIT, reviewsTotal) }} / {{ reviewsTotal.toLocaleString('ko-KR') }}건
-              </span>
-              <div class="flex items-center gap-1">
-                <UButton
-                  icon="i-heroicons-chevron-left"
-                  size="xs"
-                  color="neutral"
-                  variant="ghost"
-                  :disabled="currentPage === 1"
-                  aria-label="이전 페이지"
-                  @click="currentPage--"
-                />
-                <span class="text-xs text-gray-600 tabular-nums px-1">{{ currentPage }} / {{ Math.ceil(reviewsTotal / LIMIT) }}</span>
-                <UButton
-                  icon="i-heroicons-chevron-right"
-                  size="xs"
-                  color="neutral"
-                  variant="ghost"
-                  :disabled="currentPage * LIMIT >= reviewsTotal"
-                  aria-label="다음 페이지"
-                  @click="currentPage++"
-                />
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <!-- 우측 하단: 수집 이력 패널 (토글, 최대 1/3 높이) -->
-        <div
-          v-if="selectedPlace && showHistory"
-          class="shrink-0 flex flex-col border border-gray-200 rounded-lg overflow-hidden"
-          style="max-height: 34%"
-        >
-          <!-- 헤더 -->
-          <div class="shrink-0 flex items-center justify-between px-3 py-1.5 border-b border-gray-200 bg-gray-50">
-            <span class="text-xs font-medium text-gray-600">수집 이력</span>
-            <div class="flex items-center gap-1">
-              <UButton
-                icon="i-heroicons-arrow-path"
-                size="xs"
-                color="neutral"
-                variant="ghost"
-                :loading="collectionsStatus === 'loading'"
-                aria-label="이력 새로고침"
-                @click="selectedPlace && fetchCollections(selectedPlace.id)"
-              />
-              <UButton
-                icon="i-heroicons-chevron-down"
-                size="xs"
-                color="neutral"
-                variant="ghost"
-                aria-label="이력 접기"
-                @click="showHistory = false"
-              />
-            </div>
-          </div>
-
-          <!-- Loading -->
-          <div v-if="collectionsStatus === 'loading'" class="flex items-center justify-center py-4">
-            <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 text-gray-400 animate-spin" />
-          </div>
-
-          <!-- Error -->
-          <div v-else-if="collectionsStatus === 'error'" class="flex items-center justify-center py-4">
-            <p class="text-xs text-red-500">{{ collectionsError }}</p>
-          </div>
-
-          <!-- Empty -->
-          <div v-else-if="collectionsStatus === 'done' && collectionEvents.length === 0" class="flex items-center justify-center py-4">
-            <p class="text-xs text-gray-400">아직 수집 이력이 없습니다</p>
-          </div>
-
-          <!-- Success: 이력 표 -->
-          <div v-else class="overflow-y-auto">
-            <table class="w-full text-xs border-collapse">
-              <thead class="sticky top-0 z-10 bg-gray-50">
-                <tr>
-                  <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-36">수집 시각</th>
-                  <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-16">구분</th>
-                  <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">신규</th>
-                  <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">스킵</th>
-                  <th class="px-3 py-1.5 text-left font-medium text-gray-500 border-b border-gray-200">비고</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="ev in collectionEvents"
-                  :key="ev.id"
-                  class="border-b border-gray-100 last:border-0 hover:bg-gray-50"
-                  :class="ev.blocked ? 'bg-red-50' : ''"
+              <template v-else-if="samplesStatus === 'done' && samples.length > 0">
+                <div
+                  v-for="sample in samples"
+                  :key="sample.id"
+                  class="flex items-start gap-2 px-3 py-2 hover:bg-gray-50 transition-colors group"
                 >
-                  <td class="px-3 py-1.5 whitespace-nowrap text-gray-500 tabular-nums">
-                    {{ formatDateTime(ev.collected_at) }}
-                  </td>
-                  <td class="px-3 py-1.5 whitespace-nowrap">
-                    <span
-                      class="inline-block px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap"
-                      :class="ev.source === 'cron'
-                        ? 'bg-gray-100 text-gray-600'
-                        : ev.source === 'backfill'
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : 'bg-blue-50 text-blue-600'"
+                  <p class="flex-1 min-w-0 text-xs text-gray-800 leading-relaxed">{{ sample.body }}</p>
+                  <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600 whitespace-nowrap">{{ lengthLabel[sample.length] ?? sample.length }}</span>
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700 whitespace-nowrap">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700 whitespace-nowrap">{{ focusLabel[sample.focus] ?? sample.focus }}</span>
+                    <button
+                      class="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 p-0.5 rounded text-gray-400 hover:text-gray-700"
+                      title="본문 복사"
+                      @click="copySampleBody(sample.body)"
                     >
-                      {{ ev.source === 'cron' ? '자동' : ev.source === 'backfill' ? '전체' : '수동' }}
-                    </span>
-                  </td>
-                  <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">
-                    {{ ev.inserted }}
-                  </td>
-                  <td class="px-3 py-1.5 text-right tabular-nums text-gray-400">
-                    {{ ev.skipped }}
-                  </td>
-                  <td class="px-3 py-1.5">
-                    <span
-                      v-if="ev.blocked"
-                      class="text-red-500 font-medium"
-                      :title="ev.error ?? ''"
-                    >
-                      차단/오류
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+                      <UIcon name="i-heroicons-clipboard-document" class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </template>
+
+            </div>
           </div>
-        </div>
+          <!-- ══ /탭 3: 예시 생성 ════════════════════════════════════ -->
+
+        </template>
+        <!-- /플레이스 선택 시 탭 구조 -->
 
       </div>
     </div>

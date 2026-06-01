@@ -131,6 +131,11 @@ export default {
     if (reportMatch && request.method === 'GET') {
       return handleGetReport(request, env, corsHeaders, reportMatch[1]);
     }
+    // GET /api/places/:id/usage — LLM 호출 누적 비용 조회 (승인 사용자 + 소유 확인)
+    const usageMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/usage$/);
+    if (usageMatch && request.method === 'GET') {
+      return handleGetPlaceUsage(request, env, corsHeaders, usageMatch[1]);
+    }
     // POST /api/places/:id/generate-samples — 리뷰 예시 생성 (관리자 전용)
     // GET  /api/places/:id/samples         — 저장된 생성 예시 조회 (관리자 전용)
     const generateSamplesMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/generate-samples$/);
@@ -2460,6 +2465,7 @@ async function handleDeletePlace(request, env, corsHeaders, placeRowId) {
       env.DB.prepare('DELETE FROM place_review_snapshots WHERE place_row_id = ?').bind(placeRowId),
       env.DB.prepare('DELETE FROM place_insights WHERE place_row_id = ?').bind(placeRowId),
       env.DB.prepare('DELETE FROM place_generated_samples WHERE place_row_id = ?').bind(placeRowId),
+      env.DB.prepare('DELETE FROM llm_usage WHERE place_row_id = ?').bind(placeRowId),
       // user_id 조건 이중 방어 (소유 확인을 이미 했지만 파괴적 작업이므로 한 번 더)
       env.DB.prepare('DELETE FROM review_places WHERE id = ? AND user_id = ?').bind(placeRowId, authResult.user.id),
     ]);
@@ -2876,7 +2882,11 @@ ${stylesText}
 
     const parsed = JSON.parse(content);
     if (!Array.isArray(parsed?.samples)) throw new Error('GPT 응답 구조 오류: samples 배열 없음');
-    return parsed.samples;
+    const usage = {
+      prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+      completion_tokens: data?.usage?.completion_tokens ?? 0,
+    };
+    return { samples: parsed.samples, usage };
   }
 
   // 1차 시도
@@ -2976,20 +2986,25 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 
   // GPT 호출
   let gptSamples;
+  let samplesUsage = { prompt_tokens: 0, completion_tokens: 0 };
   try {
-    gptSamples = await callOpenAIForSamples(env, {
+    const result = await callOpenAIForSamples(env, {
       placeName:    placeRow.name ?? '',
       businessType: placeRow.business_type ?? '',
       factPool,
       fewShotReviews: fewShotReviews.map(r => r.body),
       styles: styleAssignments,
     });
+    gptSamples   = result.samples;
+    samplesUsage = result.usage;
   } catch (err) {
     return jsonResponse({ error: 'openai_error', message: err.message }, 502, cors);
   }
 
   const model = 'gpt-5.4-mini';
   const generatedAt = new Date().toISOString();
+
+  const samplesCostUsd = computeCostUsd(model, samplesUsage.prompt_tokens, samplesUsage.completion_tokens);
 
   // DB 저장 + 응답 샘플 조립
   const samples = [];
@@ -3018,12 +3033,19 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     );
   }
 
-  if (insertStmts.length > 0) {
-    try {
-      await env.DB.batch(insertStmts);
-    } catch (err) {
-      return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
-    }
+  // llm_usage INSERT
+  const usageId = crypto.randomUUID();
+  insertStmts.push(
+    env.DB.prepare(`
+      INSERT INTO llm_usage (id, place_row_id, kind, provider, model, prompt_tokens, completion_tokens, cost_usd, created_at)
+      VALUES (?, ?, 'samples', 'openai', ?, ?, ?, ?, ?)
+    `).bind(usageId, placeRowId, model, samplesUsage.prompt_tokens, samplesUsage.completion_tokens, samplesCostUsd, generatedAt)
+  );
+
+  try {
+    await env.DB.batch(insertStmts);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
   return jsonResponse({
@@ -3031,6 +3053,11 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     model,
     generated_at: generatedAt,
     samples,
+    usage: {
+      prompt_tokens:     samplesUsage.prompt_tokens,
+      completion_tokens: samplesUsage.completion_tokens,
+      cost_usd:          samplesCostUsd,
+    },
   }, 200, cors);
 }
 
@@ -3076,6 +3103,64 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
   }
 
   return jsonResponse({ samples: results }, 200, cors);
+}
+
+/**
+ * GET /api/places/:id/usage  (승인 사용자 + 소유 확인)
+ * 해당 지점의 LLM 호출 누적 비용·횟수 반환.
+ */
+async function handleGetPlaceUsage(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 소유 확인
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  let rows;
+  try {
+    const res = await env.DB.prepare(`
+      SELECT kind, COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost_usd
+      FROM llm_usage
+      WHERE place_row_id = ?
+      GROUP BY kind
+    `).bind(placeRowId).all();
+    rows = res.results ?? [];
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  const byKind = rows.map(r => ({
+    kind:     r.kind,
+    calls:    r.calls,
+    cost_usd: r.cost_usd,
+  }));
+
+  const totalCostUsd = byKind.reduce((sum, r) => sum + r.cost_usd, 0);
+  const totalCalls   = byKind.reduce((sum, r) => sum + r.calls, 0);
+
+  return jsonResponse({
+    total_cost_usd: totalCostUsd,
+    total_calls:    totalCalls,
+    by_kind:        byKind,
+  }, 200, cors);
 }
 
 // --- Phase 4-1: 업체 피드백 리포트 ---
@@ -3160,14 +3245,17 @@ async function handleGenerateReport(request, env, corsHeaders, placeRowId) {
 
   // GPT 호출로 정성 인사이트 생성
   let qualitative;
+  let insightsUsage = { prompt_tokens: 0, completion_tokens: 0 };
   try {
-    qualitative = await callOpenAIForInsights(env, {
+    const result = await callOpenAIForInsights(env, {
       placeName:    placeRow.name ?? '',
       businessType: placeRow.business_type ?? '',
       replyRate:    quantitative.reply_rate,
       totalReviews: quantitative.stored_count,
       reviews:      sampleReviews.map(r => r.body),
     });
+    qualitative    = result.qualitative;
+    insightsUsage  = result.usage;
   } catch (err) {
     return jsonResponse(
       { error: 'openai_error', message: err.message },
@@ -3179,12 +3267,19 @@ async function handleGenerateReport(request, env, corsHeaders, placeRowId) {
   const generatedAt = new Date().toISOString();
   const model = 'gpt-5.4-mini';
 
+  const costUsd = computeCostUsd(model, insightsUsage.prompt_tokens, insightsUsage.completion_tokens);
+
   const reportJson = {
     meta: {
       place_name:   placeRow.name ?? '',
       sample_size:  sampleSize,
       model,
       generated_at: generatedAt,
+      usage: {
+        prompt_tokens:     insightsUsage.prompt_tokens,
+        completion_tokens: insightsUsage.completion_tokens,
+        cost_usd:          costUsd,
+      },
     },
     quantitative: {
       stored_count: quantitative.stored_count,
@@ -3199,17 +3294,24 @@ async function handleGenerateReport(request, env, corsHeaders, placeRowId) {
 
   const reportJsonStr = JSON.stringify(reportJson);
 
-  // place_insights UPSERT (기존 레코드 있으면 갱신)
+  // place_insights UPSERT + llm_usage INSERT — batch
+  const usageId = crypto.randomUUID();
   try {
-    await env.DB.prepare(`
-      INSERT INTO place_insights (place_row_id, report_json, sample_size, model, generated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(place_row_id) DO UPDATE SET
-        report_json  = excluded.report_json,
-        sample_size  = excluded.sample_size,
-        model        = excluded.model,
-        generated_at = excluded.generated_at
-    `).bind(placeRowId, reportJsonStr, sampleSize, model, generatedAt).run();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO place_insights (place_row_id, report_json, sample_size, model, generated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(place_row_id) DO UPDATE SET
+          report_json  = excluded.report_json,
+          sample_size  = excluded.sample_size,
+          model        = excluded.model,
+          generated_at = excluded.generated_at
+      `).bind(placeRowId, reportJsonStr, sampleSize, model, generatedAt),
+      env.DB.prepare(`
+        INSERT INTO llm_usage (id, place_row_id, kind, provider, model, prompt_tokens, completion_tokens, cost_usd, created_at)
+        VALUES (?, ?, 'report', 'openai', ?, ?, ?, ?, ?)
+      `).bind(usageId, placeRowId, model, insightsUsage.prompt_tokens, insightsUsage.completion_tokens, costUsd, generatedAt),
+    ]);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
@@ -3281,6 +3383,28 @@ async function handleGetReport(request, env, corsHeaders, placeRowId) {
  * @param {{ placeName, businessType, replyRate, totalReviews, reviews: string[] }} params
  * @returns {Promise<object>} qualitative JSON
  */
+// --- Phase 4: LLM 비용 추적 ---
+
+/** USD per 1M tokens. model 키로 확장 가능. */
+const MODEL_PRICING = {
+  'gpt-5.4-mini': { input: 0.75, output: 4.50 },
+};
+
+/**
+ * 토큰 수로 USD 비용 계산.
+ * @param {string} model
+ * @param {number} promptTokens
+ * @param {number} completionTokens
+ * @returns {number|null} null = 미등록 모델
+ */
+function computeCostUsd(model, promptTokens, completionTokens) {
+  const p = MODEL_PRICING[model];
+  if (!p) return null;
+  return (promptTokens * p.input + completionTokens * p.output) / 1_000_000;
+}
+
+// --- Phase 4-1 인사이트 생성 ---
+
 async function callOpenAIForInsights(env, { placeName, businessType, replyRate, totalReviews, reviews }) {
   const systemPrompt = `당신은 네이버 플레이스 리뷰를 분석하는 전문가입니다.
 주어진 리뷰 표본을 근거로 업체의 강점·개선점·감성 비율·테마 키워드·대표 리뷰를 도출합니다.
@@ -3356,7 +3480,11 @@ ${reviewsText}`;
     if (!content) {
       throw new Error('OpenAI 응답에 content가 없습니다');
     }
-    return JSON.parse(content);
+    const usage = {
+      prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+      completion_tokens: data?.usage?.completion_tokens ?? 0,
+    };
+    return { qualitative: JSON.parse(content), usage };
   }
 
   // 1차 시도
