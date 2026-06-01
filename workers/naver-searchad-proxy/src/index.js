@@ -3278,10 +3278,14 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
-  // few-shot 표본 선정: length >= 30, review_date DESC
+  // few-shot 표본 선정: 최신순 절반 + 랜덤 분산 절반 → 호평 편향 완화
   let fewShotReviews;
   try {
-    const { results } = await env.DB.prepare(`
+    const halfSize  = Math.ceil(SAMPLE_FEW_SHOT_SIZE / 2);
+    const otherHalf = SAMPLE_FEW_SHOT_SIZE - halfSize;
+
+    // 절반: 최신순 (기존 방식 유지)
+    const { results: recentRows } = await env.DB.prepare(`
       SELECT body
       FROM place_reviews
       WHERE place_row_id = ?
@@ -3289,8 +3293,25 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
         AND length(body) >= 30
       ORDER BY review_date DESC
       LIMIT ?
-    `).bind(placeRowId, SAMPLE_FEW_SHOT_SIZE).all();
-    fewShotReviews = results ?? [];
+    `).bind(placeRowId, halfSize).all();
+
+    // 나머지 절반: 전체 pool에서 랜덤 선택 (시점·길이 분산)
+    // RANDOM()은 SQLite에서 지원되며 Cloudflare D1에서도 동작
+    const { results: randomRows } = await env.DB.prepare(`
+      SELECT body
+      FROM place_reviews
+      WHERE place_row_id = ?
+        AND body IS NOT NULL
+        AND length(body) >= 30
+      ORDER BY RANDOM()
+      LIMIT ?
+    `).bind(placeRowId, otherHalf).all();
+
+    // 중복 제거 (랜덤 절반에서 최신절반이 이미 포함된 경우)
+    const seenBodies = new Set((recentRows ?? []).map(r => r.body));
+    const uniqueRandom = (randomRows ?? []).filter(r => !seenBodies.has(r.body));
+
+    fewShotReviews = [...(recentRows ?? []), ...uniqueRandom];
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
@@ -3318,6 +3339,12 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 - 광고체·홍보체 문장("강력 추천!", "최고의 선택!") 금지.
 - 별점·평점 언급 금지(네이버 별점 폐지됨).
 - 모든 예시가 동일한 구조나 문장 패턴으로 시작/끝나지 않게 다양하게.
+- 장점을 줄줄이 나열하지 마라. "깔끔하고 넓고 친절하고 청결하고 만족스러웠어요" 식 장점 열거 절대 금지. 한두 가지 경험이나 한 장면에 집중해서 풀어써라. 실제 사람은 인상 깊었던 한두 가지를 말하지, 모든 걸 평가하지 않는다.
+- "전체적으로 만족", "추천합니다", "또 가고 싶어요" 같은 정리·총평 문장으로 끝맺지 마라. 실제 리뷰는 결론 없이 끝나기도 한다.
+- "정말", "너무", "완벽", "최고" 같은 과장 형용사와 "~해서 좋았어요"의 반복 패턴을 피하라.
+
+[감정 다양성 — 호평 일색 금지]
+생성하는 묶음 전체를 호평으로만 채우지 마라. 일부는 중립적이거나 사소한 아쉬움(예: "대기가 조금 있었다", "주차가 애매하다" 등)을 자연스럽게 담아라. 단, fact pool이나 실제 리뷰 표본에 근거가 있을 때만 아쉬움을 넣을 것 — 근거 없는 가짜 불만은 금지. 전부 칭찬 일색이면 광고처럼 보여 실패다.
 
 [구체성 필수]
 fact pool(허용 소재)에 있는 구체 항목(시술명, 메뉴명, 직원 호칭, 특징어 등)을 1~2개 자연스럽게 녹여라. fact pool에 없는 메뉴·상품·시술명을 지어내지 말 것.

@@ -9,6 +9,12 @@ const authStore = useAuthStore()
 
 const KAKAO_CHANNEL_URL = 'http://pf.kakao.com/_mCQGG/chat'
 
+// 승인 완료 후 홈으로 재진입.
+// window.location.href를 사용해 앱 상태(auth)를 처음부터 다시 로드.
+function goHome() {
+  window.location.href = '/'
+}
+
 const statusLabel = computed(() => {
   if (authStore.user?.status === 'suspended') return '계정 정지됨'
   return '승인 대기 중'
@@ -58,19 +64,35 @@ const statusDesc = computed(() => {
         </p>
       </div>
 
-      <!-- 카카오톡 문의 버튼 -->
-      <a
-        :href="KAKAO_CHANNEL_URL"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="inline-flex items-center gap-2 px-4 h-9 rounded-md text-sm font-medium bg-amber-400 hover:bg-amber-500 text-gray-900 transition-colors"
-      >
-        <!-- 카카오톡 말풍선 아이콘 -->
-        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M12 3C6.477 3 2 6.918 2 11.75c0 3.072 1.733 5.775 4.346 7.385L5.25 22l3.77-1.966C9.9 20.313 10.937 20.5 12 20.5c5.523 0 10-3.918 10-8.75S17.523 3 12 3Z" />
-        </svg>
-        카카오톡 채널 문의
-      </a>
+      <!-- 버튼 그룹: 홈으로 가기 + 카카오톡 문의 -->
+      <div class="flex flex-col items-center gap-2 w-full">
+        <!-- 홈으로 가기: 승인 완료 후 앱 재진입용 (리로드로 auth 갱신) -->
+        <button
+          type="button"
+          class="inline-flex items-center gap-2 px-4 h-9 rounded-md text-sm font-medium bg-brand-500 hover:bg-brand-600 text-white transition-colors w-full justify-center"
+          @click="goHome"
+        >
+          <!-- 홈 아이콘 -->
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0h6" />
+          </svg>
+          홈으로 가기
+        </button>
+
+        <!-- 카카오톡 문의 버튼 -->
+        <a
+          :href="KAKAO_CHANNEL_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center gap-2 px-4 h-9 rounded-md text-sm font-medium bg-amber-400 hover:bg-amber-500 text-gray-900 transition-colors w-full justify-center"
+        >
+          <!-- 카카오톡 말풍선 아이콘 -->
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 3C6.477 3 2 6.918 2 11.75c0 3.072 1.733 5.775 4.346 7.385L5.25 22l3.77-1.966C9.9 20.313 10.937 20.5 12 20.5c5.523 0 10-3.918 10-8.75S17.523 3 12 3Z" />
+          </svg>
+          카카오톡 채널 문의
+        </a>
+      </div>
 
       <!-- 구분선 -->
       <div class="w-full border-t border-gray-100" />
