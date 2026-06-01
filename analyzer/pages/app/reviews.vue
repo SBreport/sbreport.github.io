@@ -285,6 +285,42 @@ const checkedSampleIds = ref<Set<string>>(new Set())
 const sampleStatusUpdating = ref<Set<string>>(new Set())
 const sampleDeleteLoading = ref(false)
 
+// ─── 예시 테이블 정렬 ────────────────────────────────────────────────────────
+
+type SampleSortKey = 'created_at' | 'length' | 'tone' | 'focus' | 'provider' | 'status'
+const sampleSortKey = ref<SampleSortKey>('created_at')
+const sampleSortAsc = ref(false)  // 기본: 생성시각 desc
+
+function toggleSampleSort(key: SampleSortKey) {
+  if (sampleSortKey.value === key) {
+    sampleSortAsc.value = !sampleSortAsc.value
+  } else {
+    sampleSortKey.value = key
+    sampleSortAsc.value = key !== 'created_at'  // created_at은 desc 기본, 나머진 asc 기본
+  }
+}
+
+// 태그 필터 (다중 선택)
+const filterLengths = ref<Set<string>>(new Set())
+const filterTones = ref<Set<string>>(new Set())
+const filterFocuses = ref<Set<string>>(new Set())
+
+function toggleFilterTag(set: Ref<Set<string>>, value: string) {
+  const next = new Set(set.value)
+  if (next.has(value)) next.delete(value)
+  else next.add(value)
+  set.value = next
+}
+
+// 본문 펼침 상태
+const expandedSampleIds = ref<Set<string>>(new Set())
+function toggleExpandSample(id: string) {
+  const next = new Set(expandedSampleIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedSampleIds.value = next
+}
+
 // ─── 탭 상태 ─────────────────────────────────────────────────────────────────
 
 type DetailTab = 'reviews' | 'stats' | 'collections' | 'samples'
@@ -750,13 +786,38 @@ async function deleteCheckedSamples() {
 
 // 필터된 samples computed
 const filteredSamples = computed(() => {
-  return samples.value.filter(s => {
-    const status = s.status ?? 'active'
-    if (status === 'archived' && !showArchived.value) return false
-    if (sampleFilter.value === 'kept') return status === 'kept'
-    if (sampleFilter.value === 'active') return status === 'active'
-    return true
-  })
+  const sortOrder: Record<string, number> = { short: 0, medium: 1, long: 2 }
+
+  return samples.value
+    .filter(s => {
+      const status = s.status ?? 'active'
+      if (status === 'archived' && !showArchived.value) return false
+      if (sampleFilter.value === 'kept') return status === 'kept'
+      if (sampleFilter.value === 'active') return status === 'active'
+      // 태그 필터 (다중 선택 — 각 필터 내 OR, 필터 간 AND)
+      if (filterLengths.value.size > 0 && !filterLengths.value.has(s.length)) return false
+      if (filterTones.value.size > 0 && !filterTones.value.has(s.tone)) return false
+      if (filterFocuses.value.size > 0 && !filterFocuses.value.has(s.focus)) return false
+      return true
+    })
+    .sort((a, b) => {
+      let cmp = 0
+      const k = sampleSortKey.value
+      if (k === 'created_at') {
+        cmp = (a.created_at ?? '').localeCompare(b.created_at ?? '')
+      } else if (k === 'length') {
+        cmp = (sortOrder[a.length] ?? 99) - (sortOrder[b.length] ?? 99)
+      } else if (k === 'tone') {
+        cmp = (a.tone ?? '').localeCompare(b.tone ?? '')
+      } else if (k === 'focus') {
+        cmp = (a.focus ?? '').localeCompare(b.focus ?? '')
+      } else if (k === 'provider') {
+        cmp = (a.provider ?? '').localeCompare(b.provider ?? '')
+      } else if (k === 'status') {
+        cmp = (a.status ?? 'active').localeCompare(b.status ?? 'active')
+      }
+      return sampleSortAsc.value ? cmp : -cmp
+    })
 })
 
 function toggleSampleCheck(id: string) {
@@ -885,7 +946,7 @@ function selectPlace(place: Place) {
   fetchPlaceStats(place.id)
   fetchPlaceReport(place.id)
   fetchPlaceUsage(place.id)
-  if (authStore.isAdmin) fetchSamples(place.id)
+  if (authStore.isResearcher) fetchSamples(place.id)
 }
 
 function stopBackfill() {
@@ -1840,14 +1901,14 @@ onUnmounted(() => {
               통계 · AI 인사이트
             </button>
             <button
-              v-if="authStore.isAdmin"
+              v-if="authStore.isResearcher"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'samples'
                 ? 'border-primary-500 text-primary-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700'"
               @click="activeTab = 'samples'"
             >
-              예시 생성 (관리자)
+              예시 생성
             </button>
             <button
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
@@ -2258,8 +2319,8 @@ onUnmounted(() => {
           </div>
           <!-- ══ /탭 2: 통계 · AI 인사이트 ════════════════════════════ -->
 
-          <!-- ══ 탭 3: 예시 생성 (관리자 전용) ════════════════════════ -->
-          <div v-if="authStore.isAdmin" v-show="activeTab === 'samples'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <!-- ══ 탭 3: 예시 생성 (researcher/admin 전용) ════════════════ -->
+          <div v-if="authStore.isResearcher" v-show="activeTab === 'samples'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
 
             <!-- 탭 상단 고정 영역 (shrink-0) -->
             <div class="shrink-0 flex flex-col divide-y divide-gray-100 border-b border-gray-100 bg-gray-50">
@@ -2316,6 +2377,7 @@ onUnmounted(() => {
               </div>
               <!-- 필터 + 선택삭제 (결과 있을 때) -->
               <div v-if="samples.length > 0" class="flex items-center gap-2 px-3 py-1.5 flex-wrap">
+                <!-- 상태 필터 -->
                 <div class="flex items-center gap-1">
                   <button
                     v-for="opt in ([{ value: 'all', label: '전체' }, { value: 'kept', label: '좋음' }, { value: 'active', label: '미분류' }] as const)"
@@ -2327,13 +2389,53 @@ onUnmounted(() => {
                     @click="sampleFilter = opt.value"
                   >{{ opt.label }}</button>
                 </div>
+                <span class="text-gray-200 text-xs">|</span>
+                <!-- 길이 태그 필터 -->
+                <div class="flex items-center gap-1">
+                  <button
+                    v-for="[val, lbl] in [['short','한줄'],['medium','중간'],['long','장문']] as const"
+                    :key="val"
+                    class="px-2 py-0.5 rounded text-xs transition-colors whitespace-nowrap"
+                    :class="filterLengths.has(val)
+                      ? 'bg-gray-700 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
+                    @click="toggleFilterTag(filterLengths, val)"
+                  >{{ lbl }}</button>
+                </div>
+                <span class="text-gray-200 text-xs">|</span>
+                <!-- 어조 태그 필터 -->
+                <div class="flex items-center gap-1">
+                  <button
+                    v-for="[val, lbl] in [['friendly','친근'],['polite','정중'],['emotional','감성'],['plain','담백']] as const"
+                    :key="val"
+                    class="px-2 py-0.5 rounded text-xs transition-colors whitespace-nowrap"
+                    :class="filterTones.has(val)
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
+                    @click="toggleFilterTag(filterTones, val)"
+                  >{{ lbl }}</button>
+                </div>
+                <span class="text-gray-200 text-xs">|</span>
+                <!-- 초점 태그 필터 -->
+                <div class="flex items-center gap-1">
+                  <button
+                    v-for="[val, lbl] in [['outcome','결과'],['service','응대'],['space','시설'],['price','가격'],['revisit','재방문']] as const"
+                    :key="val"
+                    class="px-2 py-0.5 rounded text-xs transition-colors whitespace-nowrap"
+                    :class="filterFocuses.has(val)
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
+                    @click="toggleFilterTag(filterFocuses, val)"
+                  >{{ lbl }}</button>
+                </div>
+                <span class="text-gray-200 text-xs">|</span>
                 <button
                   class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors whitespace-nowrap"
                   :class="showArchived ? 'bg-gray-200 text-gray-600' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'"
                   @click="showArchived = !showArchived"
                 >
                   <UIcon name="i-heroicons-eye-slash" class="w-3 h-3" />
-                  숨김 보기
+                  숨김
                 </button>
                 <template v-if="checkedSampleIds.size > 0">
                   <span class="text-gray-300 text-xs">·</span>
@@ -2396,85 +2498,231 @@ onUnmounted(() => {
                   <span class="text-xs text-gray-400">위 "예시 생성" 버튼을 눌러 이 지점의 실제 리뷰를 바탕으로 예시를 생성합니다</span>
                 </div>
               </div>
-              <!-- Success: 카드 리스트 -->
+              <!-- Success: 테이블 뷰 -->
               <template v-else-if="samplesStatus === 'done' && samples.length > 0">
                 <!-- 필터 결과 없음 안내 -->
                 <div v-if="filteredSamples.length === 0" class="flex items-center justify-center py-6">
                   <p class="text-xs text-gray-400">해당 필터에 맞는 예시가 없습니다</p>
                 </div>
-                <!-- 카드 리스트 (좌측 정렬, 영역 전폭 사용) -->
-                <div v-else class="flex flex-col divide-y divide-gray-100 w-full">
-                  <div
-                    v-for="sample in filteredSamples"
-                    :key="sample.id"
-                    class="flex items-start gap-2 px-3 py-2.5 transition-colors group"
-                    :class="{
-                      'opacity-40': (sample.status ?? 'active') === 'archived',
-                      'border-l-2 border-emerald-400': (sample.status ?? 'active') === 'kept',
-                      'hover:bg-gray-50': (sample.status ?? 'active') !== 'archived',
-                    }"
-                  >
-                    <!-- 체크박스 -->
-                    <input
-                      type="checkbox"
-                      class="mt-0.5 w-3.5 h-3.5 shrink-0 cursor-pointer accent-primary-600"
-                      :checked="checkedSampleIds.has(sample.id)"
-                      @change="toggleSampleCheck(sample.id)"
-                    />
-                    <p class="flex-1 min-w-0 max-w-3xl text-xs text-gray-800 leading-relaxed">{{ sample.body }}</p>
-                    <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600 whitespace-nowrap">{{ lengthLabel[sample.length] ?? sample.length }}</span>
-                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700 whitespace-nowrap">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
-                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700 whitespace-nowrap">{{ focusLabel[sample.focus] ?? sample.focus }}</span>
-                      <!-- provider 뱃지 (있을 때만) -->
-                      <span
-                        v-if="sample.provider"
-                        class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap"
-                        :class="{
-                          'bg-green-50 text-green-700': sample.provider === 'openai',
-                          'bg-orange-50 text-orange-700': sample.provider === 'anthropic',
-                          'bg-violet-50 text-violet-700': sample.provider === 'xai',
-                          'bg-gray-100 text-gray-600': !['openai','anthropic','xai'].includes(sample.provider),
-                        }"
-                        :title="sample.provider"
-                      >{{ providerLabel[sample.provider] ?? sample.provider }}</span>
-                      <!-- 좋음/별로 토글 (hover 노출) -->
-                      <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-0.5">
-                        <button
-                          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors"
-                          :class="(sample.status ?? 'active') === 'kept'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-gray-100 text-gray-500 hover:bg-emerald-50 hover:text-emerald-600'"
-                          :disabled="sampleStatusUpdating.has(sample.id)"
-                          :title="(sample.status ?? 'active') === 'kept' ? '좋음 해제' : '좋음으로 표시'"
-                          @click="updateSampleStatus(sample.id, (sample.status ?? 'active') === 'kept' ? 'active' : 'kept')"
-                        >
-                          <UIcon name="i-heroicons-star" class="w-3 h-3" />
-                          좋음
-                        </button>
-                        <button
-                          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors"
-                          :class="(sample.status ?? 'active') === 'archived'
-                            ? 'bg-gray-200 text-gray-600'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
-                          :disabled="sampleStatusUpdating.has(sample.id)"
-                          :title="(sample.status ?? 'active') === 'archived' ? '별로 해제' : '별로로 표시 (숨김)'"
-                          @click="updateSampleStatus(sample.id, (sample.status ?? 'active') === 'archived' ? 'active' : 'archived')"
-                        >
-                          <UIcon name="i-heroicons-eye-slash" class="w-3 h-3" />
-                          별로
-                        </button>
-                      </div>
-                      <button
-                        class="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 p-0.5 rounded text-gray-400 hover:text-gray-700"
-                        title="본문 복사"
-                        @click="copySampleBody(sample.body)"
+                <!-- 테이블 -->
+                <table v-else class="w-full text-xs border-collapse">
+                  <thead class="sticky top-0 z-10 bg-gray-50">
+                    <tr class="h-8">
+                      <!-- 체크박스 전체선택 -->
+                      <th class="px-2 text-center border-b border-gray-200 w-8">
+                        <input
+                          type="checkbox"
+                          class="w-3.5 h-3.5 cursor-pointer accent-primary-600"
+                          :checked="filteredSamples.length > 0 && filteredSamples.every(s => checkedSampleIds.has(s.id))"
+                          :indeterminate="filteredSamples.some(s => checkedSampleIds.has(s.id)) && !filteredSamples.every(s => checkedSampleIds.has(s.id))"
+                          @change="(e) => {
+                            const checked = (e.target as HTMLInputElement).checked
+                            const next = new Set(checkedSampleIds)
+                            filteredSamples.forEach(s => checked ? next.add(s.id) : next.delete(s.id))
+                            checkedSampleIds = next
+                          }"
+                        />
+                      </th>
+                      <!-- 본문 (정렬 없음) -->
+                      <th class="px-3 text-left font-medium text-gray-600 border-b border-gray-200">본문</th>
+                      <!-- 생성시각 -->
+                      <th
+                        class="px-3 text-left font-medium text-gray-600 whitespace-nowrap border-b border-gray-200 w-32 cursor-pointer select-none hover:bg-gray-100 transition-colors"
+                        @click="toggleSampleSort('created_at')"
                       >
-                        <UIcon name="i-heroicons-clipboard-document" class="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                        <span class="inline-flex items-center gap-0.5">
+                          생성시각
+                          <span class="text-gray-400">
+                            <template v-if="sampleSortKey === 'created_at'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
+                            <template v-else>↕</template>
+                          </span>
+                        </span>
+                      </th>
+                      <!-- 길이 -->
+                      <th
+                        class="px-3 text-left font-medium text-gray-600 whitespace-nowrap border-b border-gray-200 w-14 cursor-pointer select-none hover:bg-gray-100 transition-colors"
+                        @click="toggleSampleSort('length')"
+                      >
+                        <span class="inline-flex items-center gap-0.5">
+                          길이
+                          <span class="text-gray-400">
+                            <template v-if="sampleSortKey === 'length'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
+                            <template v-else>↕</template>
+                          </span>
+                        </span>
+                      </th>
+                      <!-- 어조 -->
+                      <th
+                        class="px-3 text-left font-medium text-gray-600 whitespace-nowrap border-b border-gray-200 w-14 cursor-pointer select-none hover:bg-gray-100 transition-colors"
+                        @click="toggleSampleSort('tone')"
+                      >
+                        <span class="inline-flex items-center gap-0.5">
+                          어조
+                          <span class="text-gray-400">
+                            <template v-if="sampleSortKey === 'tone'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
+                            <template v-else>↕</template>
+                          </span>
+                        </span>
+                      </th>
+                      <!-- 초점 -->
+                      <th
+                        class="px-3 text-left font-medium text-gray-600 whitespace-nowrap border-b border-gray-200 w-16 cursor-pointer select-none hover:bg-gray-100 transition-colors"
+                        @click="toggleSampleSort('focus')"
+                      >
+                        <span class="inline-flex items-center gap-0.5">
+                          초점
+                          <span class="text-gray-400">
+                            <template v-if="sampleSortKey === 'focus'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
+                            <template v-else>↕</template>
+                          </span>
+                        </span>
+                      </th>
+                      <!-- 제공자 -->
+                      <th
+                        class="px-3 text-left font-medium text-gray-600 whitespace-nowrap border-b border-gray-200 w-16 cursor-pointer select-none hover:bg-gray-100 transition-colors"
+                        @click="toggleSampleSort('provider')"
+                      >
+                        <span class="inline-flex items-center gap-0.5">
+                          제공자
+                          <span class="text-gray-400">
+                            <template v-if="sampleSortKey === 'provider'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
+                            <template v-else>↕</template>
+                          </span>
+                        </span>
+                      </th>
+                      <!-- 상태 -->
+                      <th
+                        class="px-3 text-left font-medium text-gray-600 whitespace-nowrap border-b border-gray-200 w-14 cursor-pointer select-none hover:bg-gray-100 transition-colors"
+                        @click="toggleSampleSort('status')"
+                      >
+                        <span class="inline-flex items-center gap-0.5">
+                          상태
+                          <span class="text-gray-400">
+                            <template v-if="sampleSortKey === 'status'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
+                            <template v-else>↕</template>
+                          </span>
+                        </span>
+                      </th>
+                      <!-- 액션 -->
+                      <th class="px-3 border-b border-gray-200 w-20" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="sample in filteredSamples"
+                      :key="sample.id"
+                      class="border-b border-gray-100 last:border-0 transition-colors group"
+                      :class="{
+                        'opacity-40': (sample.status ?? 'active') === 'archived',
+                        'border-l-2 border-emerald-400': (sample.status ?? 'active') === 'kept',
+                        'hover:bg-gray-50': (sample.status ?? 'active') !== 'archived',
+                      }"
+                    >
+                      <!-- 체크박스 -->
+                      <td class="px-2 py-1.5 text-center align-top">
+                        <input
+                          type="checkbox"
+                          class="mt-0.5 w-3.5 h-3.5 shrink-0 cursor-pointer accent-primary-600"
+                          :checked="checkedSampleIds.has(sample.id)"
+                          @change="toggleSampleCheck(sample.id)"
+                        />
+                      </td>
+                      <!-- 본문 (클릭 토글 펼침) -->
+                      <td
+                        class="px-3 py-1.5 text-gray-800 cursor-pointer max-w-0 align-top"
+                        @click="toggleExpandSample(sample.id)"
+                      >
+                        <span
+                          v-if="expandedSampleIds.has(sample.id)"
+                          class="block text-xs leading-relaxed whitespace-pre-wrap"
+                        >{{ sample.body }}</span>
+                        <span
+                          v-else
+                          class="block text-xs leading-relaxed line-clamp-2"
+                          :title="sample.body"
+                        >{{ sample.body }}</span>
+                      </td>
+                      <!-- 생성시각 -->
+                      <td class="px-3 py-1.5 whitespace-nowrap text-gray-400 tabular-nums align-top">
+                        {{ sample.created_at ? new Date(sample.created_at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—' }}
+                      </td>
+                      <!-- 길이 -->
+                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600">{{ lengthLabel[sample.length] ?? sample.length }}</span>
+                      </td>
+                      <!-- 어조 -->
+                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
+                      </td>
+                      <!-- 초점 -->
+                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700">{{ focusLabel[sample.focus] ?? sample.focus }}</span>
+                      </td>
+                      <!-- 제공자 -->
+                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                        <span
+                          v-if="sample.provider"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap"
+                          :class="{
+                            'bg-green-50 text-green-700': sample.provider === 'openai',
+                            'bg-orange-50 text-orange-700': sample.provider === 'anthropic',
+                            'bg-violet-50 text-violet-700': sample.provider === 'xai',
+                            'bg-gray-100 text-gray-600': !['openai','anthropic','xai'].includes(sample.provider),
+                          }"
+                        >{{ providerLabel[sample.provider] ?? sample.provider }}</span>
+                        <span v-else class="text-gray-300">—</span>
+                      </td>
+                      <!-- 상태 -->
+                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                        <span
+                          v-if="(sample.status ?? 'active') === 'kept'"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700"
+                        >좋음</span>
+                        <span
+                          v-else-if="(sample.status ?? 'active') === 'archived'"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-500"
+                        >숨김</span>
+                      </td>
+                      <!-- 액션 버튼 (hover) -->
+                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                        <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <!-- 좋음 토글 -->
+                          <button
+                            class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+                            :class="(sample.status ?? 'active') === 'kept'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'text-gray-400 hover:text-emerald-600 hover:bg-emerald-50'"
+                            :disabled="sampleStatusUpdating.has(sample.id)"
+                            :title="(sample.status ?? 'active') === 'kept' ? '좋음 해제' : '좋음으로 표시'"
+                            @click="updateSampleStatus(sample.id, (sample.status ?? 'active') === 'kept' ? 'active' : 'kept')"
+                          >
+                            <UIcon name="i-heroicons-star" class="w-3 h-3" />
+                          </button>
+                          <!-- 숨김 토글 -->
+                          <button
+                            class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+                            :class="(sample.status ?? 'active') === 'archived'
+                              ? 'bg-gray-200 text-gray-600'
+                              : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'"
+                            :disabled="sampleStatusUpdating.has(sample.id)"
+                            :title="(sample.status ?? 'active') === 'archived' ? '숨김 해제' : '숨김'"
+                            @click="updateSampleStatus(sample.id, (sample.status ?? 'active') === 'archived' ? 'active' : 'archived')"
+                          >
+                            <UIcon name="i-heroicons-eye-slash" class="w-3 h-3" />
+                          </button>
+                          <!-- 복사 -->
+                          <button
+                            class="p-0.5 rounded text-gray-400 hover:text-gray-700 transition-colors"
+                            title="본문 복사"
+                            @click="copySampleBody(sample.body)"
+                          >
+                            <UIcon name="i-heroicons-clipboard-document" class="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </template>
 
             </div>

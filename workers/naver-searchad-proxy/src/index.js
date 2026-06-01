@@ -136,10 +136,10 @@ export default {
     if (usageMatch && request.method === 'GET') {
       return handleGetPlaceUsage(request, env, corsHeaders, usageMatch[1]);
     }
-    // POST /api/places/:id/generate-samples — 리뷰 예시 생성 (관리자 전용)
-    // GET  /api/places/:id/samples         — 저장된 생성 예시 조회 (관리자 전용)
-    // POST /api/places/:id/samples/:sampleId/status — 샘플 평가 라벨 변경 (관리자 전용)
-    // POST /api/places/:id/samples/delete  — 샘플 다중 삭제 (관리자 전용)
+    // POST /api/places/:id/generate-samples — 리뷰 예시 생성 (researcher 이상)
+    // GET  /api/places/:id/samples         — 저장된 생성 예시 조회 (researcher 이상)
+    // POST /api/places/:id/samples/:sampleId/status — 샘플 평가 라벨 변경 (researcher 이상)
+    // POST /api/places/:id/samples/delete  — 샘플 다중 삭제 (researcher 이상)
     // 주의: 구체적인 경로(:sampleId/status, delete)를 /samples$ 보다 먼저 매칭
     const generateSamplesMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/generate-samples$/);
     if (generateSamplesMatch && request.method === 'POST') {
@@ -175,6 +175,10 @@ export default {
     const adminMemoMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/memo$/);
     if (adminMemoMatch && request.method === 'POST') {
       return handleAdminSetMemo(request, env, corsHeaders, adminMemoMatch[1]);
+    }
+    const adminRoleMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/role$/);
+    if (adminRoleMatch && request.method === 'POST') {
+      return handleAdminSetRole(request, env, corsHeaders, adminRoleMatch[1]);
     }
 
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
@@ -852,17 +856,27 @@ async function handleMe(request, env, corsHeaders) {
 
 // --- D1 사용자 헬퍼 ---
 
-// D1에서 사용자 조회 + role 결정 (admin: ADMIN_EMAILS 기반, user: 기본)
+// D1에서 사용자 조회 + role 결정
+// 우선순위: ADMIN_EMAILS 포함 → 'admin' (환경변수 우선),
+//           DB role 컬럼이 'researcher' → 'researcher',
+//           그 외 → 'user'
 async function getUserFromDB(env, googleSub) {
   const row = await env.DB.prepare(
-    'SELECT id, google_sub, email, name, picture, status, plan, plan_expires_at FROM users WHERE google_sub = ?'
+    'SELECT id, google_sub, email, name, picture, status, plan, plan_expires_at, role FROM users WHERE google_sub = ?'
   ).bind(googleSub).first();
 
   if (!row) return null;
 
-  // role 결정: ADMIN_EMAILS 환경변수 없으면 admin 0명 (안전 fallback)
+  // ADMIN_EMAILS 환경변수가 있으면 최우선으로 admin 부여
   const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
-  row.role = adminEmails.includes(row.email) ? 'admin' : 'user';
+  if (adminEmails.includes(row.email)) {
+    row.role = 'admin';
+  } else if (row.role === 'researcher') {
+    // DB에 researcher로 명시된 경우 유지
+    row.role = 'researcher';
+  } else {
+    row.role = 'user';
+  }
 
   return row;
 }
@@ -2508,6 +2522,18 @@ async function requireAdmin(request, env) {
   return authResult;
 }
 
+// 연구원 게이트: requireApprovedUser 통과 + user.role이 'admin' 또는 'researcher'면 통과.
+// 통과 시 { user } / 실패 시 { error, status, message }.
+async function requireResearcher(request, env) {
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) return authResult;
+  const role = authResult.user.role;
+  if (role !== 'admin' && role !== 'researcher') {
+    return { error: 'forbidden', status: 403, message: '연구원(researcher) 이상 권한이 필요합니다' };
+  }
+  return authResult;
+}
+
 // GET /api/admin/users — 전체 사용자 목록 (가입 신청 검토용)
 async function handleAdminListUsers(request, env, corsHeaders) {
   const cors = corsHeaders || {};
@@ -2519,15 +2545,17 @@ async function handleAdminListUsers(request, env, corsHeaders) {
 
   try {
     const { results } = await env.DB.prepare(
-      `SELECT id, email, name, picture, status, plan, created_at, last_login_at, approved_at, admin_memo
+      `SELECT id, email, name, picture, status, plan, role, created_at, last_login_at, approved_at, admin_memo
        FROM users ORDER BY created_at DESC`
     ).all();
 
-    // role은 ADMIN_EMAILS 기반으로 응답 시 계산해 부여 (DB에 role 컬럼 없음)
+    // ADMIN_EMAILS에 있으면 'admin' 우선 부여, 아니면 DB role 사용 (null → 'user')
     const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
     const users = (results ?? []).map(u => ({
       ...u,
-      role: adminEmails.includes(u.email) ? 'admin' : 'user',
+      role: adminEmails.includes(u.email)
+        ? 'admin'
+        : (u.role === 'researcher' ? 'researcher' : 'user'),
     }));
 
     return jsonResponse({ users }, 200, cors);
@@ -2644,6 +2672,64 @@ async function handleAdminSetMemo(request, env, corsHeaders, targetUserId) {
   }
 
   return jsonResponse({ id: targetUserId, admin_memo: memoValue }, 200, cors);
+}
+
+// POST /api/admin/users/:id/role — 사용자 role 변경 (admin 전용)
+// body: { role: 'user' | 'researcher' | 'admin' }
+// 본인을 admin 아닌 role로 강등 불가.
+async function handleAdminSetRole(request, env, corsHeaders, targetUserId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  const newRole = body?.role;
+  const ALLOWED_ROLES = ['user', 'researcher', 'admin'];
+  if (!ALLOWED_ROLES.includes(newRole)) {
+    return jsonResponse(
+      { error: 'invalid_role', message: `role은 ${ALLOWED_ROLES.join(' | ')} 중 하나여야 합니다` },
+      400,
+      cors
+    );
+  }
+
+  // 대상 사용자 존재 확인
+  let target;
+  try {
+    target = await env.DB.prepare('SELECT id, email FROM users WHERE id = ?').bind(targetUserId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+  if (!target) {
+    return jsonResponse({ error: 'user_not_found', message: '대상 사용자를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  // 본인 강등 방지: admin이 자기 자신을 admin 아닌 role로 내리는 것 차단
+  if (target.id === authResult.user.id && newRole !== 'admin') {
+    return jsonResponse(
+      { error: 'cannot_demote_self', message: '본인 계정의 role은 변경할 수 없습니다' },
+      400,
+      cors
+    );
+  }
+
+  // ADMIN_EMAILS에 포함된 사용자는 DB role 변경해도 런타임에 항상 admin으로 계산됨 — 그대로 저장만 함
+  try {
+    await env.DB.prepare('UPDATE users SET role = ? WHERE id = ?').bind(newRole, targetUserId).run();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ ok: true, id: targetUserId, role: newRole }, 200, cors);
 }
 
 // --- JWT 유틸리티 (HS256, crypto.subtle 직접 구현) ---
@@ -3119,14 +3205,14 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
 }
 
 /**
- * POST /api/places/:id/generate-samples  (관리자 전용)
+ * POST /api/places/:id/generate-samples  (researcher 이상)
  * fact pool 추출 → few-shot 표본 선정 → 스타일 조합 → GPT 생성 → DB 저장 → 반환.
  */
 async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
 
-  // 관리자 전용
-  const authResult = await requireAdmin(request, env);
+  // researcher 이상 (admin 포함)
+  const authResult = await requireResearcher(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
@@ -3320,19 +3406,21 @@ ${stylesText}
 
     const sampleId = crypto.randomUUID();
     samples.push({
-      id:     sampleId,
-      body:   gptItem.body,
-      length: style.length,
-      tone:   style.tone,
-      focus:  style.focus,
-      status: 'active',
+      id:       sampleId,
+      body:     gptItem.body,
+      length:   style.length,
+      tone:     style.tone,
+      focus:    style.focus,
+      status:   'active',
+      provider,
+      model,
     });
     insertStmts.push(
       env.DB.prepare(`
         INSERT INTO place_generated_samples
-          (id, place_row_id, body, style_length, style_tone, style_focus, model, created_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
-      `).bind(sampleId, placeRowId, gptItem.body, style.length, style.tone, style.focus, model, generatedAt)
+          (id, place_row_id, body, style_length, style_tone, style_focus, model, provider, created_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+      `).bind(sampleId, placeRowId, gptItem.body, style.length, style.tone, style.focus, model, provider, generatedAt)
     );
   }
 
@@ -3366,14 +3454,14 @@ ${stylesText}
 }
 
 /**
- * GET /api/places/:id/samples  (관리자 전용)
+ * GET /api/places/:id/samples  (researcher 이상)
  * 저장된 생성 예시 최근순 반환.
  */
 async function handleGetSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
 
-  // 관리자 전용
-  const authResult = await requireAdmin(request, env);
+  // researcher 이상 (admin 포함)
+  const authResult = await requireResearcher(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
@@ -3404,12 +3492,12 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
   try {
     const sql = statusFilter
       ? `SELECT id, body, style_length AS length, style_tone AS tone,
-                style_focus AS focus, status, model, created_at
+                style_focus AS focus, status, provider, model, created_at
          FROM place_generated_samples
          WHERE place_row_id = ? AND status = ?
          ORDER BY created_at DESC`
       : `SELECT id, body, style_length AS length, style_tone AS tone,
-                style_focus AS focus, status, model, created_at
+                style_focus AS focus, status, provider, model, created_at
          FROM place_generated_samples
          WHERE place_row_id = ?
          ORDER BY created_at DESC`;
@@ -3426,13 +3514,13 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
 }
 
 /**
- * POST /api/places/:id/samples/:sampleId/status  (관리자 전용)
+ * POST /api/places/:id/samples/:sampleId/status  (researcher 이상)
  * 생성 예시 평가 라벨 변경: active | kept | archived
  */
 async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, sampleId) {
   const cors = corsHeaders || {};
 
-  const authResult = await requireAdmin(request, env);
+  const authResult = await requireResearcher(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
@@ -3476,13 +3564,13 @@ async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, s
 }
 
 /**
- * POST /api/places/:id/samples/delete  (관리자 전용)
+ * POST /api/places/:id/samples/delete  (researcher 이상)
  * 생성 예시 다중 삭제. body: { "ids": ["uuid1", ...] }
  */
 async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
 
-  const authResult = await requireAdmin(request, env);
+  const authResult = await requireResearcher(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }

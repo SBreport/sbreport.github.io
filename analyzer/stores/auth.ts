@@ -12,7 +12,7 @@ interface User {
   status?: 'pending' | 'approved' | 'suspended'
   plan?: string
   plan_expires_at?: string | null
-  role?: 'user' | 'admin'
+  role?: 'user' | 'researcher' | 'admin'
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -27,6 +27,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   /** role === 'admin' 일 때만 true */
   const isAdmin = computed(() => user.value?.role === 'admin')
+
+  /** role === 'researcher' 또는 'admin' 일 때 true (admin은 researcher 권한 포함) */
+  const isResearcher = computed(() => user.value?.role === 'researcher' || user.value?.role === 'admin')
 
   /**
    * /api/me 호출하여 user 정보 갱신.
@@ -108,6 +111,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthed,
     isApproved,
     isAdmin,
+    isResearcher,
     setToken,
     logout,
     restore,

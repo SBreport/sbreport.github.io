@@ -16,7 +16,7 @@ interface AdminUser {
   created_at: string
   last_login_at: string | null
   approved_at: string | null
-  role: 'user' | 'admin'
+  role: 'user' | 'researcher' | 'admin'
   admin_memo: string | null
 }
 
@@ -35,6 +35,9 @@ const loadError = ref<string | null>(null)
 
 // 행별 처리 중 상태 (userId → loading)
 const actionLoading = ref<Record<string, boolean>>({})
+
+// role 변경 로딩 (userId → loading)
+const roleLoading = ref<Record<string, boolean>>({})
 
 // 메모 편집 상태 (userId → { editing: boolean, draft: string, saving: boolean })
 const memoState = ref<Record<string, { editing: boolean; draft: string; saving: boolean }>>({})
@@ -170,6 +173,58 @@ async function changeStatus(user: AdminUser, newStatus: 'approved' | 'suspended'
   }
 }
 
+async function changeRole(user: AdminUser, newRole: 'user' | 'researcher' | 'admin') {
+  if (roleLoading.value[user.id]) return
+  if (newRole === user.role) return
+
+  roleLoading.value = { ...roleLoading.value, [user.id]: true }
+
+  // 낙관적 업데이트
+  const prevRole = user.role
+  users.value = users.value.map(u => u.id === user.id ? { ...u, role: newRole } : u)
+
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/admin/users/${user.id}/role`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ role: newRole }),
+    })
+
+    if (!res.ok) {
+      // 롤백
+      users.value = users.value.map(u => u.id === user.id ? { ...u, role: prevRole } : u)
+      let msg = `역할 변경 실패 (${res.status})`
+      try {
+        const body = await res.json() as { error?: string }
+        if (body.error === 'cannot_demote_self') msg = '자신의 역할은 변경할 수 없습니다'
+        else if (body.error === 'forbidden') msg = '관리자 권한이 필요합니다'
+        else if (body.error === 'user_not_found') msg = '사용자를 찾을 수 없습니다'
+        else if (body.error === 'invalid_role') msg = '유효하지 않은 역할값입니다'
+      } catch { /* ignore */ }
+      toast.add({ title: '오류', description: msg, color: 'error' })
+      return
+    }
+
+    const updated = await res.json() as { id: string; role: 'user' | 'researcher' | 'admin' }
+    users.value = users.value.map(u => u.id === updated.id ? { ...u, role: updated.role } : u)
+
+    const roleLabel: Record<string, string> = { user: '일반', researcher: '연구원', admin: '관리자' }
+    toast.add({
+      title: '역할 변경 완료',
+      description: `${user.name || user.email} → ${roleLabel[updated.role] ?? updated.role}`,
+      color: 'success',
+    })
+  } catch (e: unknown) {
+    users.value = users.value.map(u => u.id === user.id ? { ...u, role: prevRole } : u)
+    const msg = e instanceof Error ? e.message : '알 수 없는 오류'
+    toast.add({ title: '오류', description: msg, color: 'error' })
+  } finally {
+    const next = { ...roleLoading.value }
+    delete next[user.id]
+    roleLoading.value = next
+  }
+}
+
 async function saveMemo(user: AdminUser) {
   const state = getMemo(user.id)
   if (state.saving) return
@@ -289,6 +344,7 @@ onMounted(() => {
                 <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">가입일</th>
                 <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">마지막 로그인</th>
                 <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200">메모</th>
+                <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-52">역할</th>
                 <th class="px-3 text-right font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">작업</th>
               </tr>
             </thead>
@@ -398,6 +454,35 @@ onMounted(() => {
                       class="text-xs text-gray-300 group-hover:text-gray-400"
                     >메모 추가</span>
                   </button>
+                </td>
+
+                <!-- role 부여 컨트롤 -->
+                <td class="px-3 py-2.5 align-middle whitespace-nowrap">
+                  <!-- 본인(admin) 행: 강등 비활성 — 현재 역할 표시만 -->
+                  <div v-if="user.id === authStore.user?.id" class="flex items-center gap-1">
+                    <span class="text-xs text-gray-400">(본인)</span>
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-[10px] text-amber-700 font-medium">관리자</span>
+                  </div>
+                  <!-- 다른 사용자: 역할 버튼 그룹 -->
+                  <div v-else class="flex items-center gap-1">
+                    <button
+                      v-for="[val, lbl, cls] in [
+                        ['user', '일반', 'bg-gray-100 text-gray-600'],
+                        ['researcher', '연구원', 'bg-blue-50 text-blue-700'],
+                        ['admin', '관리자', 'bg-amber-50 text-amber-700'],
+                      ] as const"
+                      :key="val"
+                      class="px-2 py-0.5 rounded text-[10px] font-medium transition-colors whitespace-nowrap border"
+                      :class="user.role === val
+                        ? [cls, 'border-current opacity-100']
+                        : 'bg-white text-gray-400 border-gray-200 hover:border-gray-400 hover:text-gray-600'"
+                      :disabled="roleLoading[user.id]"
+                      @click="changeRole(user, val)"
+                    >
+                      <UIcon v-if="roleLoading[user.id] && user.role !== val" name="i-heroicons-arrow-path" class="w-2.5 h-2.5 animate-spin inline" />
+                      {{ lbl }}
+                    </button>
+                  </div>
                 </td>
 
                 <!-- 작업 버튼 -->
