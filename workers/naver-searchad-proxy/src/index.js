@@ -2938,19 +2938,192 @@ ${stylesText}
 }
 
 /**
+ * 멀티 provider 추상화 — 리뷰 예시 생성 LLM 호출.
+ * provider: 'openai' | 'anthropic' | 'xai'
+ * model: 생략 시 PROVIDER_DEFAULT_MODEL[provider] 사용.
+ * 반환: { gptSamples: [{index, body}], usage: { prompt_tokens, completion_tokens } }
+ */
+async function callLLMForSamples(env, provider, model, { systemPrompt, userPrompt, count }) {
+  const maxTokens = Math.max(2000, count * 250);
+
+  if (provider === 'openai') {
+    if (!env.OPENAI_API_KEY) throw Object.assign(new Error('OpenAI API 키가 설정되지 않았습니다'), { code: 'no_openai_key' });
+
+    const body = {
+      model,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      temperature: 0.9,
+      max_completion_tokens: maxTokens,
+    };
+
+    async function fetchOnceOpenAI() {
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`OpenAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('OpenAI 응답에 content가 없습니다');
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.samples)) throw new Error('OpenAI 응답 구조 오류: samples 배열 없음');
+      return {
+        gptSamples: parsed.samples,
+        usage: {
+          prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+          completion_tokens: data?.usage?.completion_tokens ?? 0,
+        },
+      };
+    }
+
+    try {
+      return await fetchOnceOpenAI();
+    } catch (firstErr) {
+      if (firstErr instanceof SyntaxError) return await fetchOnceOpenAI();
+      throw firstErr;
+    }
+  }
+
+  if (provider === 'xai') {
+    if (!env.XAI_API_KEY) throw Object.assign(new Error('xAI API 키가 설정되지 않았습니다'), { code: 'no_xai_key' });
+
+    const body = {
+      model,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      temperature: 0.9,
+      max_completion_tokens: maxTokens,
+    };
+
+    async function fetchOnceXAI() {
+      const resp = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.XAI_API_KEY}`,
+        },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`xAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('xAI 응답에 content가 없습니다');
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.samples)) throw new Error('xAI 응답 구조 오류: samples 배열 없음');
+      return {
+        gptSamples: parsed.samples,
+        usage: {
+          prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+          completion_tokens: data?.usage?.completion_tokens ?? 0,
+        },
+      };
+    }
+
+    try {
+      return await fetchOnceXAI();
+    } catch (firstErr) {
+      if (firstErr instanceof SyntaxError) return await fetchOnceXAI();
+      throw firstErr;
+    }
+  }
+
+  if (provider === 'anthropic') {
+    if (!env.ANTHROPIC_API_KEY) throw Object.assign(new Error('Anthropic API 키가 설정되지 않았습니다'), { code: 'no_anthropic_key' });
+
+    const anthropicBody = {
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [
+        { role: 'user', content: userPrompt },
+      ],
+      tools: [
+        {
+          name: 'emit_samples',
+          description: '생성한 리뷰 예시 목록을 반환한다',
+          input_schema: {
+            type: 'object',
+            properties: {
+              samples: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    index: { type: 'integer' },
+                    body:  { type: 'string' },
+                  },
+                  required: ['index', 'body'],
+                },
+              },
+            },
+            required: ['samples'],
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'emit_samples' },
+      temperature: 0.9,
+    };
+
+    async function fetchOnceAnthropic() {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type':    'application/json',
+          'x-api-key':       env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(anthropicBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`Anthropic API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      // tool_use 블록에서 input 추출
+      const toolBlock = Array.isArray(data?.content)
+        ? data.content.find(b => b.type === 'tool_use' && b.name === 'emit_samples')
+        : null;
+      if (!toolBlock?.input) throw new Error('Anthropic 응답에 emit_samples tool_use 블록이 없습니다');
+      const parsed = toolBlock.input;
+      if (!Array.isArray(parsed?.samples)) throw new Error('Anthropic 응답 구조 오류: samples 배열 없음');
+      return {
+        gptSamples: parsed.samples,
+        usage: {
+          prompt_tokens:     data?.usage?.input_tokens  ?? 0,
+          completion_tokens: data?.usage?.output_tokens ?? 0,
+        },
+      };
+    }
+
+    return await fetchOnceAnthropic();
+  }
+
+  throw new Error(`지원하지 않는 provider: ${provider}`);
+}
+
+/**
  * POST /api/places/:id/generate-samples  (관리자 전용)
  * fact pool 추출 → few-shot 표본 선정 → 스타일 조합 → GPT 생성 → DB 저장 → 반환.
  */
 async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
-
-  if (!env.OPENAI_API_KEY) {
-    return jsonResponse(
-      { error: 'no_openai_key', message: 'OpenAI API 키가 설정되지 않았습니다' },
-      503,
-      cors
-    );
-  }
 
   // 관리자 전용
   const authResult = await requireAdmin(request, env);
@@ -2965,6 +3138,32 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   } catch {
     return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
   }
+
+  // provider / model 파싱
+  const VALID_PROVIDERS = ['openai', 'anthropic', 'xai'];
+  const provider = body?.provider ?? 'openai';
+  if (!VALID_PROVIDERS.includes(provider)) {
+    return jsonResponse(
+      { error: 'invalid_provider', message: `provider는 ${VALID_PROVIDERS.join(' | ')} 중 하나여야 합니다` },
+      400,
+      cors
+    );
+  }
+
+  // provider별 API 키 사전 확인
+  const keyCheck = {
+    openai:    { key: env.OPENAI_API_KEY,    code: 'no_openai_key',    msg: 'OpenAI API 키가 설정되지 않았습니다' },
+    anthropic: { key: env.ANTHROPIC_API_KEY, code: 'no_anthropic_key', msg: 'Anthropic API 키가 설정되지 않았습니다' },
+    xai:       { key: env.XAI_API_KEY,       code: 'no_xai_key',       msg: 'xAI API 키가 설정되지 않았습니다' },
+  };
+  const { key: providerKey, code: keyErrorCode, msg: keyErrorMsg } = keyCheck[provider];
+  if (!providerKey) {
+    return jsonResponse({ error: keyErrorCode, message: keyErrorMsg }, 503, cors);
+  }
+
+  const model = (typeof body?.model === 'string' && body.model.trim())
+    ? body.model.trim()
+    : PROVIDER_DEFAULT_MODEL[provider];
 
   // count 파싱 (기본 10, clamp 1~30)
   let count = body?.count ?? 10;
@@ -3021,24 +3220,90 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   // 스타일 조합 생성
   const styleAssignments = buildStyleAssignments(count);
 
-  // GPT 호출
+  // 공용 프롬프트 구성 (callOpenAIForSamples의 로직 재사용)
+  const styleLine = (s, i) =>
+    `${i + 1}번: length=${s.length} / tone=${s.tone} / focus=${s.focus}`;
+
+  const systemPrompt = `너는 실제 방문자가 직접 쓴 것 같은 한국어 리뷰를 생성한다. 광고스럽거나 AI가 쓴 티가 나면 실패다. 연구용 합성 데이터이며 관리자 전용이다.
+
+[절대 금지]
+- 본문에 업체 이름·지점명을 절대 쓰지 마라. 실제 방문자는 자기 리뷰에 가게 풀네임을 안 쓴다. 지칭이 필요하면 "여기", "이곳", "이 병원", "이 집" 정도만 사용.
+- "친절했습니다", "꼼꼼하게", "안심이 됐습니다", "만족스러웠습니다" 같은 추상 칭찬만 나열 금지. 반드시 아래 fact pool의 구체 항목 1~2개를 자연스럽게 녹여라.
+- 광고체·홍보체 문장("강력 추천!", "최고의 선택!") 금지.
+- 별점·평점 언급 금지(네이버 별점 폐지됨).
+- 모든 예시가 동일한 구조나 문장 패턴으로 시작/끝나지 않게 다양하게.
+
+[구체성 필수]
+fact pool(허용 소재)에 있는 구체 항목(시술명, 메뉴명, 직원 호칭, 특징어 등)을 1~2개 자연스럽게 녹여라. fact pool에 없는 메뉴·상품·시술명을 지어내지 말 것.
+
+[실제 말투 모사]
+아래 제공되는 실제 리뷰 예시들의 어투·문장 호흡·구어체를 모사하라. 실제 사람은:
+- 한두 가지에 집중하고 나머지는 생략한다
+- 구어체를 쓴다 ("~했어요", "~더라구요", "~인 것 같아요", "~거 같음")
+- 가끔 짧게 끊거나 말이 완결되지 않기도 한다
+- 문장이 너무 매끄럽지 않고 날것이다
+
+[길이 엄수]
+- short: 1문장(40자 내외). 딱 한 마디.
+- medium: 2~3문장. 핵심 + 간단한 부연.
+- long: 5문장 이상. 여러 측면을 자연스럽게 풀어냄.
+
+[focus 정의 — 지정된 focus 측면을 중심으로 작성]
+- outcome: 핵심 경험·결과. 식당=음식 맛, 병원=시술 결과·효과, 카페=음료·디저트
+- service: 직원 응대·상담·친절
+- space: 시설·청결·분위기·인테리어
+- price: 가격·가성비·이벤트·혜택
+- revisit: 재방문 의사·주변 추천
+
+[업종 맥락 유지]
+업종(business_type) 맥락을 지킬 것. 병원 리뷰에 음식 맛 언급, 식당 리뷰에 시술 언급 같은 소재 혼입 금지.
+
+[출력 형식]
+반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }
+표본 리뷰와 완전히 동일한 문장 복사 금지. 소재·톤·맥락은 참고 가능.`;
+
+  const factPoolText = factPool.length > 0
+    ? `[허용 소재(fact pool) — 본문에 자연스럽게 녹일 수 있는 실제 소재 목록]\n${factPool.join(', ')}`
+    : '[허용 소재(fact pool)]\n(리뷰 본문 없음 — 업종 일반 상식 범위 내에서만 작성)';
+
+  const fewShotText = fewShotReviews.length > 0
+    ? `[실제 리뷰 예시 — 어투·문장 호흡·구어체 참고용. 문장 그대로 복사 금지]\n${fewShotReviews.map((r, i) => `(${i + 1}) ${r.body}`).join('\n')}`
+    : '[실제 리뷰 예시: 없음]';
+
+  const stylesText = styleAssignments.map(styleLine).join('\n');
+
+  const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 직접 쓰지 말 것]
+업체명: ${placeRow.name ?? ''}
+업종: ${placeRow.business_type || '미분류'}
+
+${factPoolText}
+
+${fewShotText}
+
+[생성할 리뷰 목록]
+${stylesText}
+
+위 ${styleAssignments.length}개 리뷰를 생성해서 JSON으로 응답하시오.`;
+
+  // LLM 호출 (provider 분기)
   let gptSamples;
   let samplesUsage = { prompt_tokens: 0, completion_tokens: 0 };
   try {
-    const result = await callOpenAIForSamples(env, {
-      placeName:    placeRow.name ?? '',
-      businessType: placeRow.business_type ?? '',
-      factPool,
-      fewShotReviews: fewShotReviews.map(r => r.body),
-      styles: styleAssignments,
+    const result = await callLLMForSamples(env, provider, model, {
+      systemPrompt,
+      userPrompt,
+      count,
     });
-    gptSamples   = result.samples;
+    gptSamples   = result.gptSamples;
     samplesUsage = result.usage;
   } catch (err) {
-    return jsonResponse({ error: 'openai_error', message: err.message }, 502, cors);
+    // 키 에러는 503, 나머지는 502
+    if (err.code && err.code.startsWith('no_')) {
+      return jsonResponse({ error: err.code, message: err.message }, 503, cors);
+    }
+    return jsonResponse({ error: 'llm_error', message: err.message }, 502, cors);
   }
 
-  const model = 'gpt-5.4-mini';
   const generatedAt = new Date().toISOString();
 
   const samplesCostUsd = computeCostUsd(model, samplesUsage.prompt_tokens, samplesUsage.completion_tokens);
@@ -3049,7 +3314,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 
   for (let i = 0; i < styleAssignments.length; i++) {
     const style = styleAssignments[i];
-    // GPT 응답에서 index 매칭 (1-based). 없으면 순서대로 사용.
+    // LLM 응답에서 index 매칭 (1-based). 없으면 순서대로 사용.
     const gptItem = gptSamples.find(s => s.index === i + 1) ?? gptSamples[i];
     if (!gptItem?.body) continue;
 
@@ -3076,8 +3341,8 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   insertStmts.push(
     env.DB.prepare(`
       INSERT INTO llm_usage (id, place_row_id, kind, provider, model, prompt_tokens, completion_tokens, cost_usd, created_at)
-      VALUES (?, ?, 'samples', 'openai', ?, ?, ?, ?, ?)
-    `).bind(usageId, placeRowId, model, samplesUsage.prompt_tokens, samplesUsage.completion_tokens, samplesCostUsd, generatedAt)
+      VALUES (?, ?, 'samples', ?, ?, ?, ?, ?, ?)
+    `).bind(usageId, placeRowId, provider, model, samplesUsage.prompt_tokens, samplesUsage.completion_tokens, samplesCostUsd, generatedAt)
   );
 
   try {
@@ -3088,6 +3353,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 
   return jsonResponse({
     place_name:   placeRow.name ?? '',
+    provider,
     model,
     generated_at: generatedAt,
     samples,
@@ -3534,7 +3800,16 @@ async function handleGetReport(request, env, corsHeaders, placeRowId) {
 
 /** USD per 1M tokens. model 키로 확장 가능. */
 const MODEL_PRICING = {
-  'gpt-5.4-mini': { input: 0.75, output: 4.50 },
+  'gpt-5.4-mini':               { input: 0.75, output: 4.50 },
+  'grok-4.3':                   { input: 1.25, output: 2.50 },
+  'claude-haiku-4-5-20251001':  { input: 1.00, output: 5.00 },
+};
+
+/** provider별 기본 모델 */
+const PROVIDER_DEFAULT_MODEL = {
+  openai:    'gpt-5.4-mini',
+  anthropic: 'claude-haiku-4-5-20251001',
+  xai:       'grok-4.3',
 };
 
 /**

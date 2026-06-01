@@ -240,11 +240,13 @@ interface ReviewSample {
   focus: 'outcome' | 'service' | 'space' | 'price' | 'revisit' | string  // string: 구 데이터(taste/mood) 호환
   status?: 'active' | 'kept' | 'archived'
   model?: string
+  provider?: string  // 이번 생성 배치의 provider (openai | anthropic | xai)
   created_at?: string
 }
 
 interface GenerateSamplesResponse {
   place_name: string
+  provider: string
   model: string
   generated_at: string
   samples: ReviewSample[]
@@ -252,11 +254,28 @@ interface GenerateSamplesResponse {
 
 // 리뷰 예시 생성 상태
 const sampleCount = ref(10)
+const sampleProvider = ref<'openai' | 'anthropic' | 'xai'>('openai')
 const samples = ref<ReviewSample[]>([])
 const samplesStatus = ref<'idle' | 'loading' | 'generating' | 'empty' | 'error' | 'done'>('idle')
 const samplesError = ref<string | null>(null)
 const samplesErrorCode = ref<string | null>(null)
 const samplesGenerating = ref(false)
+
+// 마지막 생성 배치 provider/model 기록 (결과 헤더 표시용)
+const lastGenerationInfo = ref<{ provider: string; model: string } | null>(null)
+
+// 제공자 표시명 매핑
+const providerLabel: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Claude',
+  xai: 'Grok',
+}
+
+const PROVIDER_OPTIONS = [
+  { value: 'openai' as const, label: 'OpenAI (gpt-5.4-mini)' },
+  { value: 'anthropic' as const, label: 'Claude (haiku-4.5)' },
+  { value: 'xai' as const, label: 'Grok (grok-4.3)' },
+]
 
 // 예시 관리 상태
 type SampleFilter = 'all' | 'kept' | 'active'
@@ -618,7 +637,7 @@ async function generateSamples(placeId: number) {
     const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/generate-samples`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ count: sampleCount.value }),
+      body: JSON.stringify({ count: sampleCount.value, provider: sampleProvider.value }),
     })
     if (!res.ok) {
       let code = ''
@@ -629,6 +648,10 @@ async function generateSamples(placeId: number) {
         if (body.message) msg = body.message
         if (res.status === 503 && code === 'no_openai_key') {
           msg = 'OpenAI API 키가 설정되지 않았습니다.'
+        } else if (res.status === 503 && code === 'no_anthropic_key') {
+          msg = 'Claude API 키가 설정되지 않았습니다.'
+        } else if (res.status === 503 && code === 'no_xai_key') {
+          msg = 'Grok API 키가 설정되지 않았습니다.'
         } else if (res.status === 400 && code === 'no_sample') {
           msg = '분석할 리뷰가 부족합니다. 리뷰를 먼저 수집하세요.'
         } else if (res.status === 403) {
@@ -641,10 +664,13 @@ async function generateSamples(placeId: number) {
       return
     }
     const data = await res.json() as GenerateSamplesResponse & { usage?: UsageInfo }
-    const newItems = data.samples ?? []
-    // 새 생성물을 기존 이력 위에 누적
+    const batchProvider = data.provider ?? sampleProvider.value
+    const batchModel = data.model ?? ''
+    // 새 생성물에 provider 태그를 붙여 기존 이력 위에 누적
+    const newItems = (data.samples ?? []).map(s => ({ ...s, provider: batchProvider }))
     samples.value = [...newItems, ...samples.value]
     samplesUsage.value = data.usage ?? null
+    lastGenerationInfo.value = { provider: batchProvider, model: batchModel }
     samplesStatus.value = samples.value.length > 0 ? 'done' : 'empty'
   } catch (e: unknown) {
     samplesError.value = e instanceof Error ? e.message : '알 수 없는 오류'
@@ -852,6 +878,7 @@ function selectPlace(place: Place) {
   showArchived.value = false
   checkedSampleIds.value = new Set()
   sampleDeleteLoading.value = false
+  lastGenerationInfo.value = null
   activeTab.value = 'reviews'
   fetchReviews(place.id)
   fetchCollections(place.id)
@@ -2244,6 +2271,18 @@ onUnmounted(() => {
                   <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap">AI 합성·연구용</span>
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
+                  <!-- 제공자 선택 드롭다운 -->
+                  <select
+                    v-model="sampleProvider"
+                    class="h-7 px-2 py-0 text-xs border border-gray-200 rounded bg-white text-gray-700 focus:outline-none focus:border-primary-400 cursor-pointer"
+                    :disabled="samplesGenerating"
+                  >
+                    <option
+                      v-for="opt in PROVIDER_OPTIONS"
+                      :key="opt.value"
+                      :value="opt.value"
+                    >{{ opt.label }}</option>
+                  </select>
                   <span class="text-xs text-gray-500">개수</span>
                   <input
                     v-model.number="sampleCount"
@@ -2310,10 +2349,16 @@ onUnmounted(() => {
                   />
                 </template>
               </div>
-              <!-- 비용 표시 (옵셔널) -->
-              <div v-if="samplesUsage || placeUsage" class="flex items-center gap-3 px-3 py-1.5 flex-wrap">
+              <!-- 비용 표시 + 이번 생성 provider 뱃지 (옵셔널) -->
+              <div v-if="samplesUsage || placeUsage || lastGenerationInfo" class="flex items-center gap-3 px-3 py-1.5 flex-wrap">
+                <!-- 이번 생성 provider/model 표기 -->
+                <span v-if="lastGenerationInfo" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-50 text-[10px] font-medium text-indigo-700 whitespace-nowrap">
+                  <UIcon name="i-heroicons-cpu-chip" class="w-3 h-3 shrink-0" />
+                  이번 생성: {{ providerLabel[lastGenerationInfo.provider] ?? lastGenerationInfo.provider }}
+                  <span v-if="lastGenerationInfo.model" class="font-normal text-indigo-500">{{ lastGenerationInfo.model }}</span>
+                </span>
                 <span v-if="samplesUsage" class="text-[10px] text-gray-400 tabular-nums">
-                  이번 생성 ≈ ${{ samplesUsage.cost_usd.toFixed(4) }} (입력 {{ (samplesUsage.prompt_tokens / 1000).toFixed(1) }}k · 출력 {{ (samplesUsage.completion_tokens / 1000).toFixed(1) }}k)
+                  ≈ ${{ samplesUsage.cost_usd.toFixed(4) }} (입력 {{ (samplesUsage.prompt_tokens / 1000).toFixed(1) }}k · 출력 {{ (samplesUsage.completion_tokens / 1000).toFixed(1) }}k)
                 </span>
                 <span v-if="placeUsage" class="text-[10px] text-gray-400 tabular-nums">
                   이 지점 누적 ≈ ${{ placeUsage.total_cost_usd.toFixed(4) }}
@@ -2381,6 +2426,18 @@ onUnmounted(() => {
                       <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600 whitespace-nowrap">{{ lengthLabel[sample.length] ?? sample.length }}</span>
                       <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700 whitespace-nowrap">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
                       <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700 whitespace-nowrap">{{ focusLabel[sample.focus] ?? sample.focus }}</span>
+                      <!-- provider 뱃지 (있을 때만) -->
+                      <span
+                        v-if="sample.provider"
+                        class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap"
+                        :class="{
+                          'bg-green-50 text-green-700': sample.provider === 'openai',
+                          'bg-orange-50 text-orange-700': sample.provider === 'anthropic',
+                          'bg-violet-50 text-violet-700': sample.provider === 'xai',
+                          'bg-gray-100 text-gray-600': !['openai','anthropic','xai'].includes(sample.provider),
+                        }"
+                        :title="sample.provider"
+                      >{{ providerLabel[sample.provider] ?? sample.provider }}</span>
                       <!-- 좋음/별로 토글 (hover 노출) -->
                       <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-0.5">
                         <button
