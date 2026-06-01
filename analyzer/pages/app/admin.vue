@@ -22,6 +22,19 @@ interface AdminUser {
 
 type LoadStatus = 'idle' | 'loading' | 'done' | 'error'
 
+// ─── 연구원 활동 타입 ─────────────────────────────────────────────────────────
+
+interface ResearcherActivity {
+  user_id: string
+  name: string
+  email: string
+  role: 'researcher' | 'admin'
+  collect_count: number
+  sample_count: number
+  report_count: number
+  total_cost_usd: number
+}
+
 // ─── 상태 ────────────────────────────────────────────────────────────────────
 
 const authStore = useAuthStore()
@@ -41,6 +54,12 @@ const roleLoading = ref<Record<string, boolean>>({})
 
 // 메모 편집 상태 (userId → { editing: boolean, draft: string, saving: boolean })
 const memoState = ref<Record<string, { editing: boolean; draft: string; saving: boolean }>>({})
+
+// ─── 연구원 활동 상태 ─────────────────────────────────────────────────────────
+
+const activities = ref<ResearcherActivity[]>([])
+const activityStatus = ref<LoadStatus>('idle')
+const activityError = ref<string | null>(null)
 
 // ─── 헬퍼 ────────────────────────────────────────────────────────────────────
 
@@ -87,6 +106,29 @@ function onMemoKeydown(e: KeyboardEvent, user: AdminUser) {
 
 const totalCount = computed(() => users.value.length)
 const pendingCount = computed(() => users.value.filter(u => u.status === 'pending').length)
+
+// 연구원 활동 파생값
+const totalCostUsd = computed(() =>
+  activities.value.reduce((sum, r) => sum + r.total_cost_usd, 0)
+)
+
+// 비용이 높은 연구원 강조 임계값: 전체 평균의 1.5배 이상 (최소 $0.01 이상인 경우에만)
+const costHighThreshold = computed(() => {
+  if (activities.value.length === 0) return Infinity
+  const avg = totalCostUsd.value / activities.value.length
+  return Math.max(avg * 1.5, 0.01)
+})
+
+function isHighCost(r: ResearcherActivity) {
+  return r.total_cost_usd >= costHighThreshold.value
+}
+
+function formatCostUsd(usd: number): string {
+  if (usd === 0) return '$0'
+  if (usd < 0.001) return `$${usd.toFixed(6)}`
+  if (usd < 0.01) return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(4)}`
+}
 
 // ─── API 호출 ─────────────────────────────────────────────────────────────────
 
@@ -278,10 +320,40 @@ async function saveMemo(user: AdminUser) {
   }
 }
 
+// ─── 연구원 활동 API ──────────────────────────────────────────────────────────
+
+async function fetchActivities() {
+  activityStatus.value = 'loading'
+  activityError.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/admin/research-activity`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const body = await res.json() as { error?: string }
+        if (body.error === 'forbidden') msg = '관리자 권한이 필요합니다'
+      } catch { /* ignore */ }
+      activityError.value = msg
+      activityStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as { researchers: ResearcherActivity[] }
+    // 비용 높은 순 정렬
+    activities.value = [...data.researchers].sort((a, b) => b.total_cost_usd - a.total_cost_usd)
+    activityStatus.value = 'done'
+  } catch (e: unknown) {
+    activityError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    activityStatus.value = 'error'
+  }
+}
+
 // ─── 초기 로드 ────────────────────────────────────────────────────────────────
 
 onMounted(() => {
   fetchUsers()
+  fetchActivities()
 })
 </script>
 
@@ -536,6 +608,132 @@ onMounted(() => {
             </tbody>
           </table>
         </div>
+      </template>
+    </div>
+
+    <!-- ── 연구원 활동 섹션 ──────────────────────────────────────────────── -->
+    <div class="shrink-0 flex items-center justify-between pt-1">
+      <h2 class="text-sm font-semibold text-gray-800">연구원 활동</h2>
+      <UButton
+        icon="i-heroicons-arrow-path"
+        size="sm"
+        color="neutral"
+        variant="ghost"
+        :loading="activityStatus === 'loading'"
+        label="새로고침"
+        @click="fetchActivities"
+      />
+    </div>
+
+    <!-- 연구원 활동 표 컨테이너 -->
+    <div class="shrink-0 border border-gray-200 rounded-lg overflow-hidden">
+
+      <!-- Loading / Idle -->
+      <div
+        v-if="activityStatus === 'loading' || activityStatus === 'idle'"
+        class="flex items-center justify-center py-8"
+      >
+        <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 animate-spin" />
+      </div>
+
+      <!-- Error -->
+      <div
+        v-else-if="activityStatus === 'error'"
+        class="flex flex-col items-center justify-center gap-2 py-8"
+      >
+        <p class="text-sm text-red-500">{{ activityError }}</p>
+        <UButton label="재시도" size="sm" color="neutral" variant="outline" @click="fetchActivities" />
+      </div>
+
+      <!-- Empty -->
+      <div
+        v-else-if="activityStatus === 'done' && activities.length === 0"
+        class="flex items-center justify-center py-8"
+      >
+        <p class="text-sm text-gray-400">연구원 활동 데이터가 없습니다.</p>
+      </div>
+
+      <!-- Success -->
+      <template v-else>
+        <table class="w-full text-sm border-collapse">
+          <thead class="bg-gray-50">
+            <tr class="h-9">
+              <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200">연구원</th>
+              <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-20">수집</th>
+              <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-20">예시 생성</th>
+              <th class="px-3 text-center font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-20">리포트</th>
+              <th class="px-3 text-right font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28">API 비용</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="r in activities"
+              :key="r.user_id"
+              class="border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors"
+            >
+              <!-- 연구원 -->
+              <td class="px-3 py-2 align-middle">
+                <div class="flex items-center gap-2">
+                  <div class="flex flex-col leading-snug min-w-0">
+                    <span
+                      class="text-sm truncate"
+                      :class="isHighCost(r) ? 'font-semibold text-gray-900' : 'font-medium text-gray-800'"
+                    >{{ r.name || '—' }}</span>
+                    <span class="text-xs text-gray-400 truncate">{{ r.email }}</span>
+                  </div>
+                  <span
+                    class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0"
+                    :class="r.role === 'admin'
+                      ? 'bg-amber-50 text-amber-700'
+                      : 'bg-blue-50 text-blue-700'"
+                  >{{ r.role === 'admin' ? '관리자' : '연구원' }}</span>
+                </div>
+              </td>
+              <!-- 수집 건수 -->
+              <td class="px-3 py-2 align-middle text-center text-xs text-gray-700 tabular-nums">
+                {{ r.collect_count.toLocaleString() }}
+              </td>
+              <!-- 예시 생성 건수 -->
+              <td class="px-3 py-2 align-middle text-center text-xs text-gray-700 tabular-nums">
+                {{ r.sample_count.toLocaleString() }}
+              </td>
+              <!-- 인사이트 리포트 건수 -->
+              <td class="px-3 py-2 align-middle text-center text-xs text-gray-700 tabular-nums">
+                {{ r.report_count.toLocaleString() }}
+              </td>
+              <!-- API 비용 -->
+              <td
+                class="px-3 py-2 align-middle text-right text-xs tabular-nums font-mono"
+                :class="isHighCost(r) ? 'text-orange-600 font-semibold' : 'text-gray-700'"
+              >
+                {{ formatCostUsd(r.total_cost_usd) }}
+                <UIcon
+                  v-if="isHighCost(r)"
+                  name="i-heroicons-exclamation-triangle"
+                  class="w-3 h-3 text-orange-500 inline-block ml-0.5 align-middle"
+                />
+              </td>
+            </tr>
+          </tbody>
+          <!-- 합계 행 -->
+          <tfoot>
+            <tr class="bg-gray-50 border-t border-gray-200">
+              <td class="px-3 py-2 text-xs font-semibold text-gray-600">합계</td>
+              <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700 tabular-nums">
+                {{ activities.reduce((s, r) => s + r.collect_count, 0).toLocaleString() }}
+              </td>
+              <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700 tabular-nums">
+                {{ activities.reduce((s, r) => s + r.sample_count, 0).toLocaleString() }}
+              </td>
+              <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700 tabular-nums">
+                {{ activities.reduce((s, r) => s + r.report_count, 0).toLocaleString() }}
+              </td>
+              <td class="px-3 py-2 text-right text-xs font-semibold text-gray-700 tabular-nums font-mono">
+                {{ formatCostUsd(totalCostUsd) }}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
       </template>
     </div>
 

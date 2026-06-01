@@ -168,6 +168,9 @@ export default {
     if (url.pathname === '/api/admin/users' && request.method === 'GET') {
       return handleAdminListUsers(request, env, corsHeaders);
     }
+    if (url.pathname === '/api/admin/research-activity' && request.method === 'GET') {
+      return handleAdminResearchActivity(request, env, corsHeaders);
+    }
     const adminStatusMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/status$/);
     if (adminStatusMatch && request.method === 'POST') {
       return handleAdminSetStatus(request, env, corsHeaders, adminStatusMatch[1]);
@@ -1790,12 +1793,13 @@ async function runDailyReviewCollection(env) {
 /**
  * @param {object} env         Worker env
  * @param {object} placeRow    { id, place_id, business_type, name } — DB 조회 row
- * @param {object} opts        { maxPages?, source? } (기본 maxPages 3, source 'manual')
+ * @param {object} opts        { maxPages?, source?, actorUserId? } (기본 maxPages 3, source 'manual', actorUserId null=시스템)
  * @returns {Promise<{place_id, total_server, inserted, skipped, pages_fetched, blocked, error?}>}
  */
 async function collectPlaceReviews(env, placeRow, opts = {}) {
   const maxPages = opts.maxPages ?? 3;
   const source = opts.source ?? 'manual';
+  const actorUserId = opts.actorUserId ?? null;
   const placeRowId = placeRow.id;
   const placeId = placeRow.place_id;
   // business_type 없으면 'place'로 폴백
@@ -1938,8 +1942,8 @@ async function collectPlaceReviews(env, placeRow, opts = {}) {
   try {
     await env.DB.prepare(
       `INSERT INTO place_collection_events
-         (id, place_row_id, source, inserted, skipped, pages_fetched, total_server, blocked, error, collected_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, place_row_id, source, inserted, skipped, pages_fetched, total_server, blocked, error, collected_at, actor_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       crypto.randomUUID(),
       placeRowId,
@@ -1950,7 +1954,8 @@ async function collectPlaceReviews(env, placeRow, opts = {}) {
       totalServer,
       blocked ? 1 : 0,
       errorMsg ?? null,
-      now
+      now,
+      actorUserId
     ).run();
   } catch (err) {
     console.error(`[collectPlaceReviews] 이벤트 INSERT 실패: ${err.message}`);
@@ -1966,11 +1971,12 @@ async function collectPlaceReviews(env, placeRow, opts = {}) {
  *
  * @param {object} env        Worker env
  * @param {object} placeRow   { id, place_id, business_type, name, backfill_cursor }
- * @param {object} opts       { maxPages? } (기본 5, 1~10 clamp)
+ * @param {object} opts       { maxPages?, actorUserId? } (기본 5, 1~10 clamp; actorUserId null=시스템)
  * @returns {Promise<{done, inserted, skipped, pages_fetched, blocked, error?, total_server, stored_count}>}
  */
 async function backfillPlaceChunk(env, placeRow, opts = {}) {
   const maxPages = Math.min(Math.max(Math.floor(opts.maxPages ?? 5), 1), 10);
+  const actorUserId = opts.actorUserId ?? null;
   const placeRowId = placeRow.id;
   const placeId = placeRow.place_id;
   const businessType = placeRow.business_type || 'place';
@@ -2111,8 +2117,8 @@ async function backfillPlaceChunk(env, placeRow, opts = {}) {
   try {
     await env.DB.prepare(
       `INSERT INTO place_collection_events
-         (id, place_row_id, source, inserted, skipped, pages_fetched, total_server, blocked, error, collected_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, place_row_id, source, inserted, skipped, pages_fetched, total_server, blocked, error, collected_at, actor_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       crypto.randomUUID(),
       placeRowId,
@@ -2123,7 +2129,8 @@ async function backfillPlaceChunk(env, placeRow, opts = {}) {
       totalServer,
       blocked ? 1 : 0,
       errorMsg ?? null,
-      now
+      now,
+      actorUserId
     ).run();
   } catch (err) {
     console.error(`[backfillPlaceChunk] 이벤트 INSERT 실패: ${err.message}`);
@@ -2203,7 +2210,7 @@ async function handleBackfillPlace(request, env, corsHeaders, placeRowId) {
   // 백필 청크 실행
   let result;
   try {
-    result = await backfillPlaceChunk(env, placeRow, { maxPages });
+    result = await backfillPlaceChunk(env, placeRow, { maxPages, actorUserId: authResult.user.id });
   } catch (err) {
     return jsonResponse({ error: 'backfill_failed', message: err.message }, 500, cors);
   }
@@ -2260,7 +2267,7 @@ async function handleCollectPlace(request, env, corsHeaders, placeRowId) {
   // 증분 수집 실행
   let result;
   try {
-    result = await collectPlaceReviews(env, placeRow, { maxPages, source: 'manual' });
+    result = await collectPlaceReviews(env, placeRow, { maxPages, source: 'manual', actorUserId: authResult.user.id });
   } catch (err) {
     return jsonResponse({ error: 'collect_failed', message: err.message }, 500, cors);
   }
@@ -2794,6 +2801,93 @@ async function handleAdminSetRole(request, env, corsHeaders, targetUserId) {
   return jsonResponse({ ok: true, id: targetUserId, role: newRole }, 200, cors);
 }
 
+// GET /api/admin/research-activity — 연구원별 활동·비용 집계 (admin 전용)
+// users 테이블 기준으로 role=researcher|admin인 사용자마다 활동 수치를 actor_user_id로 LEFT JOIN 집계.
+// 활동이 전혀 없는 연구원도 0으로 표시.
+async function handleAdminResearchActivity(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  try {
+    // ADMIN_EMAILS를 런타임에 admin으로 처리하므로, DB의 role 컬럼 기준으로 researcher/admin 조회.
+    // ADMIN_EMAILS 환경변수에 속한 사용자도 포함하기 위해 전체 approved 사용자를 대상으로 하되,
+    // role 판정은 getUserFromDB와 동일 로직으로 JS에서 적용.
+    const { results: userRows } = await env.DB.prepare(
+      `SELECT id, email, name, role FROM users WHERE status = 'approved' ORDER BY name ASC`
+    ).all();
+
+    const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
+
+    // researcher 또는 admin 역할인 사용자만 필터
+    const researchers = (userRows ?? []).filter(u => {
+      const effectiveRole = adminEmails.includes(u.email) ? 'admin'
+        : (u.role === 'researcher' ? 'researcher' : 'user');
+      return effectiveRole === 'researcher' || effectiveRole === 'admin';
+    }).map(u => ({
+      user_id: u.id,
+      name: u.name,
+      email: u.email,
+      role: adminEmails.includes(u.email) ? 'admin'
+        : (u.role === 'researcher' ? 'researcher' : 'user'),
+    }));
+
+    if (researchers.length === 0) {
+      return jsonResponse({ researchers: [] }, 200, cors);
+    }
+
+    // 활동 집계: 각 테이블별로 actor_user_id 기준 GROUP BY
+    const [collectRes, sampleRes, usageRes] = await Promise.all([
+      env.DB.prepare(
+        `SELECT actor_user_id, COUNT(*) AS cnt
+         FROM place_collection_events
+         WHERE actor_user_id IS NOT NULL
+         GROUP BY actor_user_id`
+      ).all(),
+      env.DB.prepare(
+        `SELECT actor_user_id, COUNT(*) AS cnt
+         FROM place_generated_samples
+         WHERE actor_user_id IS NOT NULL
+         GROUP BY actor_user_id`
+      ).all(),
+      env.DB.prepare(
+        `SELECT actor_user_id,
+                SUM(CASE WHEN kind = 'report' THEN 1 ELSE 0 END) AS report_cnt,
+                COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+         FROM llm_usage
+         WHERE actor_user_id IS NOT NULL
+         GROUP BY actor_user_id`
+      ).all(),
+    ]);
+
+    // 집계 결과를 Map으로 변환
+    const collectMap = new Map((collectRes.results ?? []).map(r => [r.actor_user_id, r.cnt]));
+    const sampleMap  = new Map((sampleRes.results  ?? []).map(r => [r.actor_user_id, r.cnt]));
+    const usageMap   = new Map((usageRes.results   ?? []).map(r => [
+      r.actor_user_id,
+      { report_cnt: r.report_cnt ?? 0, total_cost_usd: r.total_cost_usd ?? 0 },
+    ]));
+
+    const result = researchers.map(u => ({
+      user_id:        u.user_id,
+      name:           u.name,
+      email:          u.email,
+      role:           u.role,
+      collect_count:  collectMap.get(u.user_id) ?? 0,
+      sample_count:   sampleMap.get(u.user_id)  ?? 0,
+      report_count:   usageMap.get(u.user_id)?.report_cnt      ?? 0,
+      total_cost_usd: usageMap.get(u.user_id)?.total_cost_usd  ?? 0,
+    }));
+
+    return jsonResponse({ researchers: result }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
 // --- JWT 유틸리티 (HS256, crypto.subtle 직접 구현) ---
 
 function base64urlEncode(buf) {
@@ -3318,7 +3412,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   if (typeof count !== 'number' || !Number.isFinite(count)) count = 10;
   count = Math.max(1, Math.min(30, Math.floor(count)));
 
-  // 플레이스 소유 확인 (관리자이므로 user_id 비교 없이 존재만 확인)
+  // 플레이스 소유 확인 (admin은 전체 접근, researcher는 자기 지점만)
   let placeRow;
   try {
     placeRow = await env.DB.prepare(
@@ -3330,6 +3424,11 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 
   if (!placeRow) {
     return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  const isAdmin = authResult.user.role === 'admin';
+  if (!isAdmin && placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
   }
 
   // fact pool 추출
@@ -3507,9 +3606,9 @@ ${stylesText}
     insertStmts.push(
       env.DB.prepare(`
         INSERT INTO place_generated_samples
-          (id, place_row_id, body, style_length, style_tone, style_focus, model, provider, created_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-      `).bind(sampleId, placeRowId, gptItem.body, style.length, style.tone, style.focus, model, provider, generatedAt)
+          (id, place_row_id, body, style_length, style_tone, style_focus, model, provider, created_at, status, actor_user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+      `).bind(sampleId, placeRowId, gptItem.body, style.length, style.tone, style.focus, model, provider, generatedAt, authResult.user.id)
     );
   }
 
@@ -3517,9 +3616,9 @@ ${stylesText}
   const usageId = crypto.randomUUID();
   insertStmts.push(
     env.DB.prepare(`
-      INSERT INTO llm_usage (id, place_row_id, kind, provider, model, prompt_tokens, completion_tokens, cost_usd, created_at)
-      VALUES (?, ?, 'samples', ?, ?, ?, ?, ?, ?)
-    `).bind(usageId, placeRowId, provider, model, samplesUsage.prompt_tokens, samplesUsage.completion_tokens, samplesCostUsd, generatedAt)
+      INSERT INTO llm_usage (id, place_row_id, kind, provider, model, prompt_tokens, completion_tokens, cost_usd, created_at, actor_user_id)
+      VALUES (?, ?, 'samples', ?, ?, ?, ?, ?, ?, ?)
+    `).bind(usageId, placeRowId, provider, model, samplesUsage.prompt_tokens, samplesUsage.completion_tokens, samplesCostUsd, generatedAt, authResult.user.id)
   );
 
   try {
@@ -3555,11 +3654,11 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
-  // 플레이스 존재 확인
+  // 플레이스 존재 + 소유 확인 (admin은 전체, researcher는 자기 지점만)
   let placeRow;
   try {
     placeRow = await env.DB.prepare(
-      'SELECT id FROM review_places WHERE id = ?'
+      'SELECT id, user_id FROM review_places WHERE id = ?'
     ).bind(placeRowId).first();
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
@@ -3567,6 +3666,13 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
 
   if (!placeRow) {
     return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  {
+    const isAdmin = authResult.user.role === 'admin';
+    if (!isAdmin && placeRow.user_id !== authResult.user.id) {
+      return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+    }
   }
 
   // ?status= 필터 (없으면 전체 반환)
@@ -3627,6 +3733,27 @@ async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, s
     return jsonResponse({ error: 'invalid_status', message: 'status는 active | kept | archived 중 하나여야 합니다' }, 400, cors);
   }
 
+  // 플레이스 소유 확인 (admin은 전체, researcher는 자기 지점만)
+  let placeOwnerRow;
+  try {
+    placeOwnerRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeOwnerRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  {
+    const isAdmin = authResult.user.role === 'admin';
+    if (!isAdmin && placeOwnerRow.user_id !== authResult.user.id) {
+      return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+    }
+  }
+
   // 해당 sample이 이 place 소속인지 확인
   let sample;
   try {
@@ -3679,6 +3806,27 @@ async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
   // 최대 100개 제한 (안전 장치)
   if (ids.length > 100) {
     return jsonResponse({ error: 'too_many_ids', message: '한 번에 최대 100개까지 삭제 가능합니다' }, 400, cors);
+  }
+
+  // 플레이스 소유 확인 (admin은 전체, researcher는 자기 지점만)
+  let placeOwnerRow;
+  try {
+    placeOwnerRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeOwnerRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  {
+    const isAdmin = authResult.user.role === 'admin';
+    if (!isAdmin && placeOwnerRow.user_id !== authResult.user.id) {
+      return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+    }
   }
 
   const placeholders = ids.map(() => '?').join(', ');
@@ -3898,9 +4046,9 @@ async function handleGenerateReport(request, env, corsHeaders, placeRowId) {
           generated_at = excluded.generated_at
       `).bind(placeRowId, reportJsonStr, sampleSize, model, generatedAt),
       env.DB.prepare(`
-        INSERT INTO llm_usage (id, place_row_id, kind, provider, model, prompt_tokens, completion_tokens, cost_usd, created_at)
-        VALUES (?, ?, 'report', 'openai', ?, ?, ?, ?, ?)
-      `).bind(usageId, placeRowId, model, insightsUsage.prompt_tokens, insightsUsage.completion_tokens, costUsd, generatedAt),
+        INSERT INTO llm_usage (id, place_row_id, kind, provider, model, prompt_tokens, completion_tokens, cost_usd, created_at, actor_user_id)
+        VALUES (?, ?, 'report', 'openai', ?, ?, ?, ?, ?, ?)
+      `).bind(usageId, placeRowId, model, insightsUsage.prompt_tokens, insightsUsage.completion_tokens, costUsd, generatedAt, authResult.user.id),
     ]);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
