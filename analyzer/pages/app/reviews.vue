@@ -321,9 +321,64 @@ function toggleExpandSample(id: string) {
   expandedSampleIds.value = next
 }
 
+// ─── AI 진단 (Phase 4-2) 타입 ────────────────────────────────────────────────
+
+interface AiDiagnosisSuspectReview {
+  review_id: string
+  body: string
+  ai_suspect: number
+  flags: string[]
+  sentiment: string | null
+  reason: string | null
+  review_date: string | null
+}
+
+interface AiDiagnosisResult {
+  place_name: string
+  suspect_threshold: number
+  total_reviews: number
+  total_analyzed: number
+  low_quality: number
+  presumed_human: number
+  gpt_judged: number
+  suspect: number
+  denominator: number
+  suspect_rate: number
+  distribution: Record<string, number>
+  flag_breakdown: Record<string, number>
+  sample_suspect: AiDiagnosisSuspectReview[]
+}
+
+// AI 진단 상태
+const aiDiagnosisStatus = ref<LoadStatus>('idle')
+const aiDiagnosisError = ref<string | null>(null)
+const aiDiagnosis = ref<AiDiagnosisResult | null>(null)
+const aiDiagnosisThreshold = ref(60)  // 0~100, 기본 60
+
+// AI 진단 실행 (POST) 상태 — 관리자 전용
+const aiAnalyzeRunning = ref(false)
+const aiAnalyzeError = ref<string | null>(null)
+const aiAnalyzeSummary = ref<{
+  analyzed: number
+  gpt_called: number
+  gpt_skipped: number
+  low_quality: number
+  cost_usd: number
+} | null>(null)
+const aiAnalyzeFullScan = ref(false)  // 전수 분석(heuristicThreshold: 0) 체크박스
+
+// 의심 리뷰 본문 펼침 상태
+const expandedDiagnosisIds = ref<Set<string>>(new Set())
+function toggleExpandDiagnosis(id: string) {
+  const next = new Set(expandedDiagnosisIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedDiagnosisIds.value = next
+}
+
 // ─── 탭 상태 ─────────────────────────────────────────────────────────────────
 
-type DetailTab = 'reviews' | 'stats' | 'collections' | 'samples'
+type DetailTab = 'reviews' | 'stats' | 'collections' | 'samples' | 'ai-diagnosis'
 const activeTab = ref<DetailTab>('reviews')
 
 // ─── usage(비용) 상태 ────────────────────────────────────────────────────────
@@ -634,6 +689,81 @@ async function fetchPlaceUsage(placeId: number) {
 
 // ─── 리뷰 예시 생성 API (Phase 4-3) ─────────────────────────────────────────
 
+// ─── AI 진단 조회/실행 ──────────────────────────────────────────────────────
+
+async function fetchAiDiagnosis(placeId: number) {
+  aiDiagnosisStatus.value = 'loading'
+  aiDiagnosisError.value = null
+  aiDiagnosis.value = null
+  try {
+    const params = new URLSearchParams({ suspectThreshold: String(aiDiagnosisThreshold.value) })
+    const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/ai-diagnosis?${params}`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const body = await res.json() as { message?: string }
+        if (body.message) msg = body.message
+      } catch { /* ignore */ }
+      aiDiagnosisError.value = msg
+      aiDiagnosisStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as AiDiagnosisResult
+    aiDiagnosis.value = data
+    aiDiagnosisStatus.value = 'done'
+  } catch (e: unknown) {
+    aiDiagnosisError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    aiDiagnosisStatus.value = 'error'
+  }
+}
+
+async function runAiAnalyze(placeId: number) {
+  if (aiAnalyzeRunning.value) return
+  aiAnalyzeRunning.value = true
+  aiAnalyzeError.value = null
+  aiAnalyzeSummary.value = null
+  try {
+    const body: Record<string, unknown> = {}
+    if (aiAnalyzeFullScan.value) body.heuristicThreshold = 0
+    const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/analyze-reviews`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      let msg = `분석 실패 (${res.status})`
+      try {
+        const errBody = await res.json() as { message?: string }
+        if (errBody.message) msg = errBody.message
+      } catch { /* ignore */ }
+      aiAnalyzeError.value = msg
+      return
+    }
+    const data = await res.json() as {
+      analyzed?: number
+      gpt_called?: number
+      gpt_skipped?: number
+      low_quality?: number
+      cost_usd?: number
+    }
+    aiAnalyzeSummary.value = {
+      analyzed:    data.analyzed    ?? 0,
+      gpt_called:  data.gpt_called  ?? 0,
+      gpt_skipped: data.gpt_skipped ?? 0,
+      low_quality: data.low_quality ?? 0,
+      cost_usd:    data.cost_usd    ?? 0,
+    }
+    // 완료 후 결과 자동 재조회
+    await fetchAiDiagnosis(placeId)
+  } catch (e: unknown) {
+    aiAnalyzeError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+  } finally {
+    aiAnalyzeRunning.value = false
+  }
+}
+
 async function fetchSamples(placeId: number) {
   samplesStatus.value = 'loading'
   samplesError.value = null
@@ -940,6 +1070,14 @@ function selectPlace(place: Place) {
   checkedSampleIds.value = new Set()
   sampleDeleteLoading.value = false
   lastGenerationInfo.value = null
+  aiDiagnosis.value = null
+  aiDiagnosisStatus.value = 'idle'
+  aiDiagnosisError.value = null
+  aiAnalyzeRunning.value = false
+  aiAnalyzeError.value = null
+  aiAnalyzeSummary.value = null
+  aiAnalyzeFullScan.value = false
+  expandedDiagnosisIds.value = new Set()
   activeTab.value = 'reviews'
   fetchReviews(place.id)
   fetchCollections(place.id)
@@ -947,6 +1085,7 @@ function selectPlace(place: Place) {
   fetchPlaceReport(place.id)
   fetchPlaceUsage(place.id)
   if (authStore.isResearcher) fetchSamples(place.id)
+  if (authStore.isResearcher) fetchAiDiagnosis(place.id)
 }
 
 function stopBackfill() {
@@ -1911,6 +2050,16 @@ onUnmounted(() => {
               예시 생성
             </button>
             <button
+              v-if="authStore.isResearcher"
+              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+              :class="activeTab === 'ai-diagnosis'
+                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                : 'border-transparent text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
+              @click="activeTab = 'ai-diagnosis'"
+            >
+              AI 진단
+            </button>
+            <button
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'collections'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2729,7 +2878,216 @@ onUnmounted(() => {
           </div>
           <!-- ══ /탭 3: 예시 생성 ════════════════════════════════════ -->
 
-          <!-- ══ 탭 4: 수집 이력 ══════════════════════════════════════ -->
+          <!-- ══ 탭 4: AI 진단 (researcher/admin 전용) ════════════════ -->
+          <div v-if="authStore.isResearcher" v-show="activeTab === 'ai-diagnosis'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
+
+            <!-- 고정 헤더 영역 (shrink-0) -->
+            <div class="shrink-0 flex flex-col divide-y divide-gray-100 dark:divide-slate-700 border-b border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800">
+
+              <!-- 타이틀 행 -->
+              <div class="flex items-center justify-between gap-3 px-3 py-2">
+                <div class="flex items-center gap-1.5 min-w-0">
+                  <UIcon name="i-heroicons-shield-exclamation" class="w-3.5 h-3.5 text-gray-500 dark:text-slate-400 shrink-0" />
+                  <span class="text-xs font-medium text-gray-700 dark:text-slate-300">AI 진단</span>
+                  <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 whitespace-nowrap">연구용</span>
+                </div>
+                <UButton
+                  icon="i-heroicons-arrow-path"
+                  size="xs"
+                  color="neutral"
+                  variant="ghost"
+                  :loading="aiDiagnosisStatus === 'loading'"
+                  aria-label="진단 결과 새로고침"
+                  @click="selectedPlace && fetchAiDiagnosis(selectedPlace.id)"
+                />
+              </div>
+
+              <!-- Disclaimer -->
+              <div class="px-3 py-1.5 flex items-start gap-1.5">
+                <UIcon name="i-heroicons-information-circle" class="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0 mt-0.5" />
+                <p class="text-[11px] text-amber-700 dark:text-amber-300 leading-snug">
+                  AI 판별은 확률적 추정입니다. 판단 근거(플래그·사유)와 함께 참고용으로만 활용하세요.
+                </p>
+              </div>
+
+              <!-- 관리자 전용: 진단 실행 -->
+              <div v-if="authStore.isAdmin" class="px-3 py-2 flex flex-col gap-2">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <label class="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      v-model="aiAnalyzeFullScan"
+                      type="checkbox"
+                      class="w-3.5 h-3.5 rounded border-gray-300 dark:border-slate-600 text-primary-600 focus:ring-primary-500 cursor-pointer"
+                      :disabled="aiAnalyzeRunning"
+                    />
+                    <span class="text-xs text-gray-600 dark:text-slate-400">전수 분석(보정용)</span>
+                  </label>
+                  <UButton
+                    label="AI 진단 실행"
+                    size="xs"
+                    color="warning"
+                    variant="solid"
+                    icon="i-heroicons-cpu-chip"
+                    :loading="aiAnalyzeRunning"
+                    :disabled="aiAnalyzeRunning"
+                    @click="selectedPlace && runAiAnalyze(selectedPlace.id)"
+                  />
+                  <span class="text-[11px] text-gray-400 dark:text-slate-500">GPT 호출로 소액 과금</span>
+                </div>
+                <!-- 실행 결과 요약 -->
+                <div v-if="aiAnalyzeSummary" class="text-[11px] text-gray-500 dark:text-slate-400">
+                  완료: 분석 {{ aiAnalyzeSummary.analyzed }}건 / GPT {{ aiAnalyzeSummary.gpt_called }}건 호출 / 스킵 {{ aiAnalyzeSummary.gpt_skipped }}건 / 저품질 {{ aiAnalyzeSummary.low_quality }}건 / 비용 ${{ aiAnalyzeSummary.cost_usd.toFixed(4) }}
+                </div>
+                <!-- 실행 오류 -->
+                <div v-if="aiAnalyzeError" class="flex items-center gap-1 text-[11px] text-red-500">
+                  <UIcon name="i-heroicons-exclamation-circle" class="w-3 h-3 shrink-0" />
+                  {{ aiAnalyzeError }}
+                </div>
+              </div>
+
+              <!-- 의심 기준 슬라이더 -->
+              <div class="px-3 py-2 flex items-center gap-3">
+                <span class="text-[11px] text-gray-500 dark:text-slate-400 whitespace-nowrap shrink-0">의심 기준</span>
+                <input
+                  v-model.number="aiDiagnosisThreshold"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  class="flex-1 h-1.5 accent-primary-500 cursor-pointer"
+                  @change="selectedPlace && fetchAiDiagnosis(selectedPlace.id)"
+                />
+                <span class="text-[11px] font-medium tabular-nums text-gray-700 dark:text-slate-300 w-8 text-right shrink-0">{{ aiDiagnosisThreshold }}점</span>
+              </div>
+
+            </div>
+            <!-- /고정 헤더 -->
+
+            <!-- 본문 스크롤 영역 -->
+            <div class="flex-1 min-h-0 overflow-y-auto bg-white dark:bg-slate-900">
+
+              <!-- Loading -->
+              <div v-if="aiDiagnosisStatus === 'loading'" class="flex items-center justify-center py-8">
+                <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 dark:text-slate-500 animate-spin" />
+              </div>
+
+              <!-- Error -->
+              <div v-else-if="aiDiagnosisStatus === 'error'" class="flex flex-col items-center justify-center gap-2 py-8 px-4">
+                <UIcon name="i-heroicons-exclamation-circle" class="w-5 h-5 text-red-400 shrink-0" />
+                <p class="text-xs text-red-500 text-center">{{ aiDiagnosisError }}</p>
+                <button class="text-xs text-primary-600 hover:text-primary-800 dark:hover:text-primary-300 transition-colors" @click="selectedPlace && fetchAiDiagnosis(selectedPlace.id)">재시도</button>
+              </div>
+
+              <!-- Empty (미분석) -->
+              <div v-else-if="aiDiagnosisStatus === 'done' && aiDiagnosis && aiDiagnosis.total_analyzed === 0" class="flex flex-col items-center justify-center gap-2 py-8 px-4">
+                <UIcon name="i-heroicons-magnifying-glass" class="w-6 h-6 text-gray-300 dark:text-slate-600" />
+                <p class="text-xs text-gray-400 dark:text-slate-500">아직 진단을 실행하지 않았습니다</p>
+                <p v-if="authStore.isAdmin" class="text-[11px] text-gray-400 dark:text-slate-500">상단 "AI 진단 실행" 버튼으로 분석을 시작하세요.</p>
+              </div>
+
+              <!-- Success -->
+              <div v-else-if="aiDiagnosisStatus === 'done' && aiDiagnosis" class="flex flex-col gap-3 p-3">
+
+                <!-- 헤드라인 지표 -->
+                <div class="flex items-baseline gap-2 flex-wrap">
+                  <span class="text-2xl font-bold tabular-nums text-gray-800 dark:text-slate-100">{{ Math.round(aiDiagnosis.suspect_rate * 100) }}<span class="text-base font-normal">%</span></span>
+                  <span class="text-xs text-gray-500 dark:text-slate-400">예상 AI 의심 비율</span>
+                  <span class="text-[11px] text-gray-400 dark:text-slate-500">(분석 {{ aiDiagnosis.denominator }}건 중 {{ aiDiagnosis.suspect }}건, 저품질 제외)</span>
+                </div>
+
+                <!-- 커버리지 -->
+                <div class="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-slate-400">
+                  <UIcon name="i-heroicons-chart-bar" class="w-3.5 h-3.5 shrink-0" />
+                  <span>분석 {{ aiDiagnosis.total_analyzed.toLocaleString('ko-KR') }} / {{ aiDiagnosis.total_reviews.toLocaleString('ko-KR') }}건</span>
+                  <span v-if="aiDiagnosis.total_analyzed < aiDiagnosis.total_reviews" class="text-amber-500 dark:text-amber-400">— 미분석 {{ (aiDiagnosis.total_reviews - aiDiagnosis.total_analyzed).toLocaleString('ko-KR') }}건, 진단 실행으로 추가 분석 가능</span>
+                </div>
+
+                <!-- 분포 미니바 -->
+                <div v-if="aiDiagnosis.gpt_judged > 0">
+                  <p class="text-[11px] text-gray-400 dark:text-slate-500 mb-1">점수 분포 (GPT 판정 {{ aiDiagnosis.gpt_judged }}건)</p>
+                  <div class="flex items-end gap-1">
+                    <div
+                      v-for="(bucket, idx) in ['0-19','20-39','40-59','60-79','80-100']"
+                      :key="bucket"
+                      class="flex flex-col items-center gap-0.5 flex-1 min-w-0"
+                    >
+                      <span class="text-[10px] tabular-nums text-gray-500 dark:text-slate-400">{{ aiDiagnosis.distribution[bucket] ?? 0 }}</span>
+                      <div
+                        class="w-full rounded-sm"
+                        :class="idx >= 3 ? 'bg-red-400 dark:bg-red-500' : idx === 2 ? 'bg-amber-300 dark:bg-amber-500' : 'bg-gray-200 dark:bg-slate-700'"
+                        :style="{ height: `${Math.max(4, Math.round(((aiDiagnosis.distribution[bucket] ?? 0) / aiDiagnosis.gpt_judged) * 40))}px` }"
+                      />
+                      <span class="text-[10px] text-gray-400 dark:text-slate-500 whitespace-nowrap">{{ bucket }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 플래그 분해 -->
+                <div v-if="Object.keys(aiDiagnosis.flag_breakdown).length > 0">
+                  <p class="text-[11px] text-gray-400 dark:text-slate-500 mb-1">의심 리뷰 플래그 ({{ aiDiagnosis.suspect_threshold }}점 이상)</p>
+                  <div class="flex flex-wrap gap-1">
+                    <span
+                      v-for="(cnt, flag) in Object.fromEntries(Object.entries(aiDiagnosis.flag_breakdown).sort((a,b) => b[1]-a[1]))"
+                      :key="flag"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300"
+                    >
+                      <span>{{ flag }}</span><span class="font-medium tabular-nums">{{ cnt }}</span>
+                    </span>
+                  </div>
+                </div>
+
+                <!-- 의심 리뷰 목록 -->
+                <div v-if="aiDiagnosis.sample_suspect.length > 0">
+                  <p class="text-[11px] text-gray-400 dark:text-slate-500 mb-1">의심 리뷰 ({{ aiDiagnosis.suspect_threshold }}점 이상, 상위 {{ aiDiagnosis.sample_suspect.length }}건)</p>
+                  <div class="flex flex-col gap-2">
+                    <div
+                      v-for="item in aiDiagnosis.sample_suspect"
+                      :key="item.review_id"
+                      class="border border-gray-100 dark:border-slate-700 rounded p-2.5 flex flex-col gap-1.5 bg-gray-50 dark:bg-slate-800"
+                    >
+                      <!-- 헤더 행 -->
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold tabular-nums"
+                          :class="item.ai_suspect >= 80 ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' : item.ai_suspect >= 60 ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300' : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300'"
+                        >{{ item.ai_suspect }}점</span>
+                        <span v-if="item.sentiment" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300">
+                          {{ item.sentiment === 'positive' ? '긍정' : item.sentiment === 'negative' ? '부정' : '중립' }}
+                        </span>
+                        <span
+                          v-for="f in item.flags"
+                          :key="f"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-300"
+                        >{{ f }}</span>
+                        <span v-if="item.review_date" class="text-[10px] text-gray-400 dark:text-slate-500 ml-auto">{{ item.review_date }}</span>
+                      </div>
+                      <!-- 본문 -->
+                      <p
+                        class="text-xs text-gray-700 dark:text-slate-300 leading-relaxed cursor-pointer"
+                        :class="expandedDiagnosisIds.has(item.review_id) ? '' : 'line-clamp-3'"
+                        @click="toggleExpandDiagnosis(item.review_id)"
+                      >{{ item.body || '(본문 없음)' }}</p>
+                      <!-- GPT 사유 -->
+                      <p v-if="item.reason" class="text-[11px] text-gray-500 dark:text-slate-400 italic">{{ item.reason }}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 의심 리뷰 없음 -->
+                <div v-else-if="aiDiagnosis.gpt_judged > 0" class="text-xs text-gray-400 dark:text-slate-500">
+                  {{ aiDiagnosis.suspect_threshold }}점 이상 의심 리뷰가 없습니다.
+                </div>
+
+              </div>
+              <!-- /Success -->
+
+            </div>
+            <!-- /본문 스크롤 -->
+
+          </div>
+          <!-- ══ /탭 4: AI 진단 ══════════════════════════════════════ -->
+
+          <!-- ══ 탭 5: 수집 이력 ══════════════════════════════════════ -->
           <div v-show="activeTab === 'collections'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
 
             <!-- 탭 헤더 (shrink-0) -->
@@ -2798,7 +3156,7 @@ onUnmounted(() => {
             </div>
 
           </div>
-          <!-- ══ /탭 4: 수집 이력 ══════════════════════════════════════ -->
+          <!-- ══ /탭 5: 수집 이력 ══════════════════════════════════════ -->
 
         </template>
         <!-- /플레이스 선택 시 탭 구조 -->

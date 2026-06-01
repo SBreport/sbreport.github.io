@@ -141,6 +141,11 @@ export default {
     if (analyzeReviewsMatch && request.method === 'POST') {
       return handleAnalyzeReviews(request, env, corsHeaders, analyzeReviewsMatch[1]);
     }
+    // GET /api/places/:id/ai-diagnosis — AI 진단 결과 조회 (researcher 이상)
+    const aiDiagnosisMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/ai-diagnosis$/);
+    if (aiDiagnosisMatch && request.method === 'GET') {
+      return handleGetAiDiagnosis(request, env, corsHeaders, aiDiagnosisMatch[1]);
+    }
     // POST /api/places/:id/generate-samples — 리뷰 예시 생성 (researcher 이상)
     // GET  /api/places/:id/samples         — 저장된 생성 예시 조회 (researcher 이상)
     // POST /api/places/:id/samples/:sampleId/status — 샘플 평가 라벨 변경 (researcher 이상)
@@ -3899,6 +3904,154 @@ async function analyzePlaceReviews(env, placeRowId, {
         : 0,
     },
   };
+}
+
+/**
+ * GET /api/places/:id/ai-diagnosis  (researcher 이상, admin 포함)
+ * 진단 집계 결과 조회. 비용 0 (DB 조회 전용).
+ * 쿼리: suspectThreshold(기본 60, 0~100) — 이 점수 이상을 "AI 의심"으로 카운트.
+ */
+async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  // researcher 이상 (admin 포함)
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 존재 + 소유 확인 (admin은 전체, researcher는 자기 지점만)
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id, name FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  {
+    const isAdmin = authResult.user.role === 'admin';
+    if (!isAdmin && placeRow.user_id !== authResult.user.id) {
+      return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+    }
+  }
+
+  // suspectThreshold 파싱 (기본 60, 0~100)
+  const urlObj = new URL(request.url);
+  let suspectThreshold = parseInt(urlObj.searchParams.get('suspectThreshold') ?? '60', 10);
+  if (!Number.isFinite(suspectThreshold)) suspectThreshold = 60;
+  suspectThreshold = Math.max(0, Math.min(100, suspectThreshold));
+
+  try {
+    // 1) 지점 전체 리뷰 수
+    const totalReviewsRow = await env.DB.prepare(
+      'SELECT COUNT(*) AS cnt FROM place_reviews WHERE place_row_id = ?'
+    ).bind(placeRowId).first();
+    const total_reviews = totalReviewsRow?.cnt ?? 0;
+
+    // 2) 분석 행 집계
+    const aggRow = await env.DB.prepare(`
+      SELECT
+        COUNT(*)                                           AS total_analyzed,
+        SUM(CASE WHEN rule_low_quality = 1 THEN 1 ELSE 0 END) AS low_quality,
+        SUM(CASE WHEN ai_suspect IS NULL AND (rule_low_quality IS NULL OR rule_low_quality = 0) THEN 1 ELSE 0 END) AS presumed_human,
+        SUM(CASE WHEN ai_suspect IS NOT NULL THEN 1 ELSE 0 END) AS gpt_judged,
+        SUM(CASE WHEN ai_suspect >= ? THEN 1 ELSE 0 END) AS suspect
+      FROM place_review_analysis
+      WHERE place_row_id = ?
+    `).bind(suspectThreshold, placeRowId).first();
+
+    const total_analyzed  = aggRow?.total_analyzed  ?? 0;
+    const low_quality     = aggRow?.low_quality     ?? 0;
+    const presumed_human  = aggRow?.presumed_human  ?? 0;
+    const gpt_judged      = aggRow?.gpt_judged      ?? 0;
+    const suspect         = aggRow?.suspect         ?? 0;
+    const denominator     = total_analyzed - low_quality;
+    const suspect_rate    = denominator > 0 ? suspect / denominator : 0;
+
+    // 3) ai_suspect 버킷 분포 (gpt_judged 대상)
+    const buckets = ['0-19', '20-39', '40-59', '60-79', '80-100'];
+    const bucketRanges = [[0, 19], [20, 39], [40, 59], [60, 79], [80, 100]];
+    const distribution = {};
+    for (let i = 0; i < buckets.length; i++) {
+      const [lo, hi] = bucketRanges[i];
+      const row = await env.DB.prepare(
+        'SELECT COUNT(*) AS cnt FROM place_review_analysis WHERE place_row_id = ? AND ai_suspect IS NOT NULL AND ai_suspect >= ? AND ai_suspect <= ?'
+      ).bind(placeRowId, lo, hi).first();
+      distribution[buckets[i]] = row?.cnt ?? 0;
+    }
+
+    // 4) flag_breakdown — ai_suspect >= suspectThreshold인 것들의 flags 집계
+    const suspectFlagRows = await env.DB.prepare(
+      'SELECT flags FROM place_review_analysis WHERE place_row_id = ? AND ai_suspect >= ? AND flags IS NOT NULL'
+    ).bind(placeRowId, suspectThreshold).all();
+    const flag_breakdown = {};
+    for (const row of (suspectFlagRows.results ?? [])) {
+      let parsed;
+      try { parsed = JSON.parse(row.flags); } catch { continue; }
+      if (Array.isArray(parsed)) {
+        for (const f of parsed) {
+          if (typeof f === 'string') {
+            flag_breakdown[f] = (flag_breakdown[f] ?? 0) + 1;
+          }
+        }
+      }
+    }
+
+    // 5) 의심 리뷰 상위 30건 (JOIN place_reviews)
+    const sampleRows = await env.DB.prepare(`
+      SELECT
+        pra.review_id,
+        pr.body,
+        pra.ai_suspect,
+        pra.flags,
+        pra.sentiment,
+        pra.reason,
+        pr.review_date
+      FROM place_review_analysis pra
+      LEFT JOIN place_reviews pr ON pr.id = pra.review_id
+      WHERE pra.place_row_id = ? AND pra.ai_suspect >= ?
+      ORDER BY pra.ai_suspect DESC
+      LIMIT 30
+    `).bind(placeRowId, suspectThreshold).all();
+
+    const sample_suspect = (sampleRows.results ?? []).map(r => {
+      let flags_parsed = [];
+      try { flags_parsed = JSON.parse(r.flags ?? '[]'); } catch { /* ignore */ }
+      return {
+        review_id:   r.review_id,
+        body:        r.body ?? '',
+        ai_suspect:  r.ai_suspect,
+        flags:       flags_parsed,
+        sentiment:   r.sentiment ?? null,
+        reason:      r.reason ?? null,
+        review_date: r.review_date ?? null,
+      };
+    });
+
+    return jsonResponse({
+      place_name:       placeRow.name ?? '',
+      suspect_threshold: suspectThreshold,
+      total_reviews,
+      total_analyzed,
+      low_quality,
+      presumed_human,
+      gpt_judged,
+      suspect,
+      denominator,
+      suspect_rate,
+      distribution,
+      flag_breakdown,
+      sample_suspect,
+    }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
 }
 
 /**
