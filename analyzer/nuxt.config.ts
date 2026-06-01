@@ -37,11 +37,10 @@ export default defineNuxtConfig({
     strict: true,
   },
 
-  // 색상 모드: MVP는 라이트 고정 (시스템 다크 따라가지 않음).
-  // Nuxt UI 컴포넌트만 다크 변형을 갖고 직접 짠 컴포넌트는 라이트 고정이라
-  // 화면이 어정쩡하게 섞이는 문제 회피. 다크 완전 지원은 추후 별도 작업.
+  // 색상 모드: 라이트/다크/시스템 토글 지원 (헤더 토글 버튼으로 제어).
+  // 초기 기본값은 시스템 설정을 따름. 사용자 선택은 localStorage에 저장됨.
   colorMode: {
-    preference: 'light',
+    preference: 'system',
     fallback: 'light',
   },
 

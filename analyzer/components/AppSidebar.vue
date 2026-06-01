@@ -64,7 +64,7 @@ function isActive(to: string): boolean {
     transition-[width] 200ms (기획서 4.8)
   -->
   <nav
-    class="flex flex-col h-full border-r border-slate-200 bg-white overflow-hidden transition-[width] duration-200"
+    class="flex flex-col h-full border-r border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden transition-[width] duration-200"
     :class="uiStore.sidebarOpen ? 'w-60' : 'w-14'"
     :aria-label="'사이드바 내비게이션'"
   >
@@ -76,8 +76,8 @@ function isActive(to: string): boolean {
           :to="item.to"
           class="flex items-center gap-3 px-2 py-2 rounded-md text-sm transition-colors"
           :class="isActive(item.to)
-            ? 'bg-primary-50 text-primary-700 font-medium'
-            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'"
+            ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 font-medium'
+            : 'text-slate-600 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-700 hover:text-gray-900 dark:hover:text-slate-100'"
         >
           <span class="shrink-0 w-5 h-5 flex items-center justify-center">
             <UIcon :name="item.icon" class="w-5 h-5" />
@@ -93,7 +93,7 @@ function isActive(to: string): boolean {
 
       <!-- 구분선 -->
       <li class="my-1">
-        <div class="border-t border-slate-200" />
+        <div class="border-t border-gray-200 dark:border-slate-700" />
       </li>
 
       <!-- 하단 메뉴 (설정, 이용권) -->
@@ -102,8 +102,8 @@ function isActive(to: string): boolean {
           :to="item.to"
           class="flex items-center gap-3 px-2 py-2 rounded-md text-sm transition-colors"
           :class="isActive(item.to)
-            ? 'bg-primary-50 text-primary-700 font-medium'
-            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'"
+            ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 font-medium'
+            : 'text-slate-600 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-700 hover:text-gray-900 dark:hover:text-slate-100'"
         >
           <span class="shrink-0 w-5 h-5 flex items-center justify-center">
             <UIcon :name="item.icon" class="w-5 h-5" />
@@ -123,8 +123,8 @@ function isActive(to: string): boolean {
           :to="adminMenuItem.to"
           class="flex items-center gap-3 px-2 py-2 rounded-md text-sm transition-colors"
           :class="isActive(adminMenuItem.to)
-            ? 'bg-primary-50 text-primary-700 font-medium'
-            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'"
+            ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 font-medium'
+            : 'text-slate-600 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-700 hover:text-gray-900 dark:hover:text-slate-100'"
         >
           <span class="shrink-0 w-5 h-5 flex items-center justify-center">
             <UIcon :name="adminMenuItem.icon" class="w-5 h-5" />
@@ -140,8 +140,8 @@ function isActive(to: string): boolean {
     </ul>
 
     <!-- 하단: 유저 정보 (로그인 상태일 때만 표시) -->
-    <div v-if="authStore.user" class="shrink-0 border-t border-slate-200 p-2">
-      <div class="flex items-center gap-3 px-2 py-2 text-xs text-slate-500">
+    <div v-if="authStore.user" class="shrink-0 border-t border-gray-200 dark:border-slate-700 p-2">
+      <div class="flex items-center gap-3 px-2 py-2 text-xs text-slate-500 dark:text-slate-400">
         <span class="shrink-0 w-5 h-5 flex items-center justify-center">
           <UIcon name="i-heroicons-user-circle" class="w-5 h-5" />
         </span>

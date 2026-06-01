@@ -17,14 +17,11 @@ body {
 }
 
 /*
-  다크모드 강제 비활성화.
-  nuxt.config.ts에 colorMode.preference='light'로 설정했지만,
-  일부 PC의 시스템 다크모드 설정이 @nuxt/ui의 dark 클래스를 붙이는 경우 방어.
-  color-scheme: light 로 브라우저 네이티브 UI(스크롤바·인풋 등)도 라이트 강제.
+  color-scheme: 라이트/다크 모두 허용.
+  .dark 클래스(Nuxt UI 컴포넌트가 html 태그에 붙임)에 따라 브라우저 네이티브 UI도 전환.
 */
-:root,
-.dark {
-  color-scheme: light !important;
+:root {
+  color-scheme: light dark;
 }
 
 /* 폰트: Pretendard (CDN은 nuxt.config head.link에서 로드) */
