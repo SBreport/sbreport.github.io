@@ -438,7 +438,7 @@ onMounted(() => {
     height 체인: default 레이아웃 main(flex-1 min-h-0 overflow-y-auto p-6) → h-full flex flex-col
     고정 헤더/카드 shrink-0 / 표 영역 flex-1 min-h-0 overflow-y-auto
   -->
-  <div class="h-full flex flex-col gap-3 overflow-hidden">
+  <div class="h-full flex flex-col gap-3 overflow-hidden max-w-7xl">
 
     <!-- ── 페이지 헤더 (shrink-0) ──────────────────────────────────────────── -->
     <div class="shrink-0 flex items-center justify-between">
