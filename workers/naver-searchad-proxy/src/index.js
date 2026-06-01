@@ -136,6 +136,11 @@ export default {
     if (usageMatch && request.method === 'GET') {
       return handleGetPlaceUsage(request, env, corsHeaders, usageMatch[1]);
     }
+    // POST /api/places/:id/analyze-reviews — AI 리뷰 진단 (admin 전용)
+    const analyzeReviewsMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/analyze-reviews$/);
+    if (analyzeReviewsMatch && request.method === 'POST') {
+      return handleAnalyzeReviews(request, env, corsHeaders, analyzeReviewsMatch[1]);
+    }
     // POST /api/places/:id/generate-samples — 리뷰 예시 생성 (researcher 이상)
     // GET  /api/places/:id/samples         — 저장된 생성 예시 조회 (researcher 이상)
     // POST /api/places/:id/samples/:sampleId/status — 샘플 평가 라벨 변경 (researcher 이상)
@@ -3392,6 +3397,607 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
   }
 
   throw new Error(`지원하지 않는 provider: ${provider}`);
+}
+
+// =============================================================================
+// Phase 4-2 — AI 리뷰 진단 탐지 엔진
+// =============================================================================
+
+/**
+ * 1단계 규칙 필터 — 명백한 저품질 리뷰 판별 (무료, deterministic).
+ * true = 저품질(빈·극초단문·자모·특수문자만) → AI 아님, GPT 호출 스킵.
+ * @param {string|null} body
+ * @returns {boolean}
+ */
+function classifyRuleLowQuality(body) {
+  if (body == null) return true;
+  const trimmed = body.trim();
+  // 빈 문자열 또는 길이 ≤ 2
+  if (trimmed.length <= 2) return true;
+  // 자모만 (한글 자음·모음·공백만으로 구성)
+  if (/^[ㄱ-ㅎㅏ-ㅣ\s]+$/.test(trimmed)) return true;
+  // 한글 음절(가-힣)도 없고 영문자(a-zA-Z)도 없음 → 특수문자·숫자·기호·이모지만
+  if (!/[가-힣a-zA-Z]/.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * 2단계 휴리스틱 슬롭 점수 (무료, deterministic).
+ * §8.2 신호를 가점 합산 후 0~100 클램프.
+ * @param {string} body 리뷰 본문
+ * @param {Set<string>} factPoolSet extractFactPool 결과를 Set으로 변환한 것
+ * @returns {{ score: number, flags: string[] }}
+ *
+ * 후속 TODO: 템플릿 유사도 (동일 골격 반복) — 리뷰 간 비교라 이번엔 생략
+ */
+function computeHeuristicSlopScore(body, factPoolSet) {
+  const flags = [];
+  let score = 0;
+
+  if (!body || body.trim().length === 0) return { score: 0, flags };
+
+  // ── 신호 1: 격식체 종결어미 비율 높음 ────────────────────────────────
+  // 문장 끝 격식 패턴 수 / 전체 종결 패턴 수 비율
+  const FORMAL_ENDINGS = /습니다|였습니다|입니다|됩니다|습니까|겠습니다|드립니다|합니다|았습니다|었습니다/g;
+  const CASUAL_ENDINGS = /아요|어요|이에요|예요|죠|네요|거든요|더라구요|인 것 같아요|같아요|같음|ㄴ것 같|거 같|것 같|것같|했어|이야|이에요|라구요|라고요/g;
+  const formalCount  = (body.match(FORMAL_ENDINGS) || []).length;
+  const casualCount  = (body.match(CASUAL_ENDINGS) || []).length;
+  const totalEndings = formalCount + casualCount;
+  if (totalEndings > 0) {
+    const formalRatio = formalCount / totalEndings;
+    if (formalRatio >= 0.7) {
+      // 격식 종결이 70% 이상
+      score += 30;
+      flags.push('격식체');
+    } else if (formalRatio >= 0.4) {
+      score += 15;
+      flags.push('격식체');
+    }
+  } else if (formalCount >= 2) {
+    // 구어 없이 격식만 2개+
+    score += 25;
+    flags.push('격식체');
+  }
+
+  // ── 신호 2: 추상 칭찬어 다수 + fact pool 구체명사 겹침 0 ──────────────
+  const ABSTRACT_PRAISE = [
+    '친절', '깨끗', '청결', '만족', '추천', '최고', '정성', '꼼꼼', '편안',
+    '훌륭', '탁월', '완벽', '감동', '뛰어나', '좋았', '좋아요', '좋습니다',
+    '마음에 들', '마음에들', '강추', '극추',
+  ];
+  const abstractCount = ABSTRACT_PRAISE.filter(w => body.includes(w)).length;
+
+  // fact pool과 토큰 겹침 확인
+  const tokens = body.split(/[\s.,!?;:·""''()\[\]{}<>/\\|@#$%^&*+=~`\-—–…]+/u)
+    .map(t => t.trim())
+    .filter(t => t.length >= 2);
+  const hasFactOverlap = tokens.some(t => factPoolSet.has(t));
+
+  if (abstractCount >= 3 && !hasFactOverlap) {
+    score += 25;
+    flags.push('추상칭찬');
+  } else if (abstractCount >= 2 && !hasFactOverlap) {
+    score += 12;
+    flags.push('추상칭찬');
+  }
+
+  // ── 신호 3: 구체성 결여 — 본문 토큰이 fact pool과 하나도 안 겹침 ────────
+  if (!hasFactOverlap && factPoolSet.size > 0) {
+    score += 15;
+    flags.push('구체성결여');
+  }
+
+  // ── 신호 4: 장점 나열 패턴 (형용사 3개+ "~고/~며/~하고"로 연결) ─────────
+  // 한국어 형용사 어간 + 연결어미 패턴: ~고, ~며, ~하고, ~이고
+  const ADJ_CHAIN = /(?:[가-힣]{1,6}(?:하고|이고|으며|고|며)\s*){2,}[가-힣]{1,6}(?:했어요|합니다|했습니다|이에요|이어요|요)/g;
+  const chainMatches = body.match(ADJ_CHAIN) || [];
+  if (chainMatches.length > 0) {
+    score += 20;
+    flags.push('장점나열');
+  }
+
+  // ── 신호 5: 정갈한 문장(격식체 or 오타 없음) + 끝 그림이모지 ─────────────
+  // 그림이모지: 기본 이모지 유니코드 범위 (U+1F300~U+1F9FF, U+2600~U+27BF, U+FE0F 등)
+  const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{FE0F}]/u;
+  const lastChars = body.trim().slice(-10);
+  const endsWithEmoji = EMOJI_RE.test(lastChars);
+  if (endsWithEmoji && (formalCount >= 1 || (abstractCount >= 2 && casualCount === 0))) {
+    score += 15;
+    flags.push('정갈끝이모지');
+  }
+
+  return { score: Math.min(100, Math.max(0, score)), flags };
+}
+
+/**
+ * 3단계 LLM 진정성 판별 — 배치 호출 (유료, §8.3 기준).
+ * callLLMForSamples와 동일한 provider 분기 패턴.
+ * @param {object} env
+ * @param {string} provider  'openai' | 'anthropic' | 'xai'
+ * @param {string} model
+ * @param {{ review_id: string, body: string }[]} items  배치 (20~30건 권장)
+ * @returns {Promise<{ results: { review_id:string, ai_suspect:number, flags:string[], sentiment:string, reason:string }[], usage: {prompt_tokens:number, completion_tokens:number} }>}
+ */
+async function callLLMForAuthenticity(env, provider, model, items) {
+  const systemPrompt = `너는 한국어 네이버 플레이스 리뷰가 AI·광고 대행사에 의해 작성됐을 가능성을 판별하는 전문가다.
+
+[판별 기준]
+🚩 AI/광고 의심 신호:
+- 구체성 결여: 메뉴·시술·직원·시간·상황 등 실제 경험 디테일 없이 일반 칭찬만 나열
+- 템플릿성: "친절하고 깨끗하고 만족스러웠어요" 류 상투어 나열
+- 광고체·문어체(격식체) 어조, 부자연스러운 과장
+- 업종 맥락 불일치 (리뷰 내용이 업종과 어울리지 않음)
+
+✅ 진짜(사람) 확률 ↑ 신호:
+- 구체적 불만·개인 감정
+- 특정 메뉴명·직원명·날짜·날씨 등 디테일 포함
+- 비대칭 평가 (좋은 점과 아쉬운 점 혼재)
+- 오타·구어체·말 줄임
+
+[출력 규칙]
+반드시 다음 JSON 구조만 응답 (다른 텍스트 없이 순수 JSON):
+{
+  "results": [
+    {
+      "review_id": "...",
+      "ai_suspect": 0,
+      "flags": [],
+      "sentiment": "positive",
+      "reason": "한 줄 근거"
+    }
+  ]
+}
+
+- ai_suspect: 0~100 정수. 높을수록 AI/광고 의심 (낮을수록 진짜 사람 리뷰).
+- flags: 해당하는 것만 포함. 후보: ["구체성결여","템플릿성","광고체","격식체","업종불일치","추상칭찬","과장"]
+- sentiment: "positive" | "neutral" | "negative"
+- reason: 판단 근거 한 줄 (30자 이내)
+- 입력된 모든 review_id에 대해 빠짐없이 결과를 반환할 것.`;
+
+  const reviewsText = items
+    .map((item, i) => `[${i + 1}] review_id=${item.review_id}\n${item.body}`)
+    .join('\n\n');
+  const userPrompt = `다음 ${items.length}개 리뷰를 판별하라:\n\n${reviewsText}`;
+
+  const maxTokens = Math.max(1000, items.length * 120);
+
+  if (provider === 'openai') {
+    if (!env.OPENAI_API_KEY) throw Object.assign(new Error('OpenAI API 키가 설정되지 않았습니다'), { code: 'no_openai_key' });
+
+    const reqBody = {
+      model,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      temperature: 0.1,
+      max_completion_tokens: maxTokens,
+    };
+
+    async function fetchOnceOpenAI() {
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+        body: JSON.stringify(reqBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`OpenAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('OpenAI 응답에 content가 없습니다');
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.results)) throw new Error('OpenAI 응답 구조 오류: results 배열 없음');
+      return {
+        results: parsed.results,
+        usage: {
+          prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+          completion_tokens: data?.usage?.completion_tokens ?? 0,
+        },
+      };
+    }
+
+    try {
+      return await fetchOnceOpenAI();
+    } catch (firstErr) {
+      if (firstErr instanceof SyntaxError) return await fetchOnceOpenAI();
+      throw firstErr;
+    }
+  }
+
+  if (provider === 'xai') {
+    if (!env.XAI_API_KEY) throw Object.assign(new Error('xAI API 키가 설정되지 않았습니다'), { code: 'no_xai_key' });
+
+    const reqBody = {
+      model,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      temperature: 0.1,
+      max_completion_tokens: maxTokens,
+    };
+
+    async function fetchOnceXAI() {
+      const resp = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.XAI_API_KEY}` },
+        body: JSON.stringify(reqBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`xAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('xAI 응답에 content가 없습니다');
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.results)) throw new Error('xAI 응답 구조 오류: results 배열 없음');
+      return {
+        results: parsed.results,
+        usage: {
+          prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+          completion_tokens: data?.usage?.completion_tokens ?? 0,
+        },
+      };
+    }
+
+    try {
+      return await fetchOnceXAI();
+    } catch (firstErr) {
+      if (firstErr instanceof SyntaxError) return await fetchOnceXAI();
+      throw firstErr;
+    }
+  }
+
+  if (provider === 'anthropic') {
+    if (!env.ANTHROPIC_API_KEY) throw Object.assign(new Error('Anthropic API 키가 설정되지 않았습니다'), { code: 'no_anthropic_key' });
+
+    const anthropicBody = {
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      tools: [
+        {
+          name: 'emit_analysis',
+          description: '리뷰 진정성 분석 결과를 반환한다',
+          input_schema: {
+            type: 'object',
+            properties: {
+              results: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    review_id:  { type: 'string' },
+                    ai_suspect: { type: 'integer' },
+                    flags:      { type: 'array', items: { type: 'string' } },
+                    sentiment:  { type: 'string' },
+                    reason:     { type: 'string' },
+                  },
+                  required: ['review_id', 'ai_suspect', 'flags', 'sentiment', 'reason'],
+                },
+              },
+            },
+            required: ['results'],
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'emit_analysis' },
+      temperature: 0.1,
+    };
+
+    async function fetchOnceAnthropic() {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type':      'application/json',
+          'x-api-key':         env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(anthropicBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`Anthropic API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const toolBlock = Array.isArray(data?.content)
+        ? data.content.find(b => b.type === 'tool_use' && b.name === 'emit_analysis')
+        : null;
+      if (!toolBlock?.input) throw new Error('Anthropic 응답에 emit_analysis tool_use 블록이 없습니다');
+      const parsed = toolBlock.input;
+      if (!Array.isArray(parsed?.results)) throw new Error('Anthropic 응답 구조 오류: results 배열 없음');
+      return {
+        results: parsed.results,
+        usage: {
+          prompt_tokens:     data?.usage?.input_tokens  ?? 0,
+          completion_tokens: data?.usage?.output_tokens ?? 0,
+        },
+      };
+    }
+
+    return await fetchOnceAnthropic();
+  }
+
+  throw new Error(`지원하지 않는 provider: ${provider}`);
+}
+
+/**
+ * AI 리뷰 진단 오케스트레이션.
+ * 미캐시 리뷰를 로드 → 규칙필터 → 휴리스틱 triage → GPT 배치 판별 → DB 캐시 저장.
+ *
+ * @param {object} env
+ * @param {string} placeRowId
+ * @param {{ heuristicThreshold?: number, maxGpt?: number, provider?: string, model?: string, actorUserId?: string }} opts
+ * @returns {Promise<{ analyzed: number, low_quality: number, gpt_called: number, gpt_skipped: number, usage: { prompt_tokens: number, completion_tokens: number, cost_usd: number|null } }>}
+ */
+async function analyzePlaceReviews(env, placeRowId, {
+  heuristicThreshold = 40,
+  maxGpt = 200,
+  provider = 'openai',
+  model = null,
+  actorUserId = null,
+} = {}) {
+  const resolvedModel = model || PROVIDER_DEFAULT_MODEL[provider] || PROVIDER_DEFAULT_MODEL['openai'];
+
+  // 1. 미캐시 리뷰 로드 (place_reviews.id = review_id)
+  const { results: uncachedRows } = await env.DB.prepare(`
+    SELECT pr.id AS review_id, pr.body
+    FROM place_reviews pr
+    WHERE pr.place_row_id = ?
+      AND pr.id NOT IN (SELECT review_id FROM place_review_analysis WHERE place_row_id = ?)
+  `).bind(placeRowId, placeRowId).all();
+
+  if (uncachedRows.length === 0) {
+    return { analyzed: 0, low_quality: 0, gpt_called: 0, gpt_skipped: 0, usage: { prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 } };
+  }
+
+  // fact pool 추출 (구체성 결여 신호 계산에 사용)
+  const factPoolArr = await extractFactPool(env, placeRowId, SAMPLE_FACT_POOL_SIZE);
+  const factPoolSet = new Set(factPoolArr);
+
+  const analyzedAt = new Date().toISOString();
+  const insertStmts = [];
+  let lowQualityCount = 0;
+  const gptQueue = [];   // { review_id, body, heuristicScore, heuristicFlags }
+  let gptSkipped = 0;
+
+  // 2 & 3. 각 리뷰: 규칙필터 → 휴리스틱
+  for (const row of uncachedRows) {
+    const { review_id, body } = row;
+
+    if (classifyRuleLowQuality(body)) {
+      // 규칙 저품질 → ai_suspect=null, 즉시 캐시
+      lowQualityCount++;
+      insertStmts.push(
+        env.DB.prepare(`
+          INSERT OR REPLACE INTO place_review_analysis
+            (review_id, place_row_id, ai_suspect, rule_low_quality, heuristic_score, flags, sentiment, reason, model, analyzed_at)
+          VALUES (?, ?, NULL, 1, 0, '[]', NULL, NULL, NULL, ?)
+        `).bind(review_id, placeRowId, analyzedAt)
+      );
+    } else {
+      const { score, flags } = computeHeuristicSlopScore(body ?? '', factPoolSet);
+      gptQueue.push({ review_id, body: body ?? '', heuristicScore: score, heuristicFlags: flags });
+    }
+  }
+
+  // 4. GPT 게이트: heuristic_score >= heuristicThreshold인 것만, maxGpt 상한
+  // 점수 높은 순 정렬 → 상위 maxGpt개만 GPT 대상
+  const gptCandidates = gptQueue
+    .filter(r => r.heuristicScore >= heuristicThreshold)
+    .sort((a, b) => b.heuristicScore - a.heuristicScore)
+    .slice(0, maxGpt);
+
+  const gptCandidateIds = new Set(gptCandidates.map(r => r.review_id));
+
+  // 게이트 미달 → presumed_human으로 즉시 캐시
+  for (const row of gptQueue) {
+    if (!gptCandidateIds.has(row.review_id)) {
+      gptSkipped++;
+      const flags = JSON.stringify([...row.heuristicFlags, 'presumed_human']);
+      insertStmts.push(
+        env.DB.prepare(`
+          INSERT OR REPLACE INTO place_review_analysis
+            (review_id, place_row_id, ai_suspect, rule_low_quality, heuristic_score, flags, sentiment, reason, model, analyzed_at)
+          VALUES (?, ?, NULL, 0, ?, ?, NULL, NULL, NULL, ?)
+        `).bind(row.review_id, placeRowId, row.heuristicScore, flags, analyzedAt)
+      );
+    }
+  }
+
+  // 5. GPT 배치 호출
+  const BATCH_SIZE = 25;
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  const gptResultMap = new Map(); // review_id → result
+
+  for (let i = 0; i < gptCandidates.length; i += BATCH_SIZE) {
+    const batch = gptCandidates.slice(i, i + BATCH_SIZE).map(r => ({
+      review_id: r.review_id,
+      body:      r.body,
+    }));
+    const { results, usage } = await callLLMForAuthenticity(env, provider, resolvedModel, batch);
+    totalPromptTokens     += usage.prompt_tokens;
+    totalCompletionTokens += usage.completion_tokens;
+    for (const r of results) {
+      gptResultMap.set(r.review_id, r);
+    }
+  }
+
+  // 6. GPT 결과 + heuristic flags 병합 → INSERT
+  for (const cand of gptCandidates) {
+    const gptResult = gptResultMap.get(cand.review_id);
+    if (!gptResult) {
+      // GPT가 해당 review_id 결과를 빠뜨린 경우 — heuristic만으로 저장
+      const flags = JSON.stringify(cand.heuristicFlags);
+      insertStmts.push(
+        env.DB.prepare(`
+          INSERT OR REPLACE INTO place_review_analysis
+            (review_id, place_row_id, ai_suspect, rule_low_quality, heuristic_score, flags, sentiment, reason, model, analyzed_at)
+          VALUES (?, ?, NULL, 0, ?, ?, NULL, 'GPT 응답 누락', ?, ?)
+        `).bind(cand.review_id, placeRowId, cand.heuristicScore, flags, resolvedModel, analyzedAt)
+      );
+      continue;
+    }
+    // heuristic flags + gpt flags 합산 (중복 제거)
+    const mergedFlagsSet = new Set([...cand.heuristicFlags, ...(gptResult.flags ?? [])]);
+    const mergedFlags = JSON.stringify([...mergedFlagsSet]);
+    const aiSuspect = typeof gptResult.ai_suspect === 'number'
+      ? Math.min(100, Math.max(0, Math.round(gptResult.ai_suspect)))
+      : null;
+    insertStmts.push(
+      env.DB.prepare(`
+        INSERT OR REPLACE INTO place_review_analysis
+          (review_id, place_row_id, ai_suspect, rule_low_quality, heuristic_score, flags, sentiment, reason, model, analyzed_at)
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        cand.review_id, placeRowId, aiSuspect,
+        cand.heuristicScore, mergedFlags,
+        gptResult.sentiment ?? null, gptResult.reason ?? null, resolvedModel, analyzedAt
+      )
+    );
+  }
+
+  // llm_usage 기록 (GPT 호출이 있었던 경우만)
+  if (gptCandidates.length > 0) {
+    const costUsd = computeCostUsd(resolvedModel, totalPromptTokens, totalCompletionTokens);
+    const usageId = crypto.randomUUID();
+    insertStmts.push(
+      env.DB.prepare(`
+        INSERT INTO llm_usage
+          (id, place_row_id, kind, provider, model, prompt_tokens, completion_tokens, cost_usd, created_at, actor_user_id)
+        VALUES (?, ?, 'analysis', ?, ?, ?, ?, ?, ?, ?)
+      `).bind(usageId, placeRowId, provider, resolvedModel, totalPromptTokens, totalCompletionTokens, costUsd, analyzedAt, actorUserId)
+    );
+  }
+
+  // 배치 INSERT
+  if (insertStmts.length > 0) {
+    // D1 batch는 한 번에 최대 100개 — 청크로 나눠 처리
+    const CHUNK = 100;
+    for (let i = 0; i < insertStmts.length; i += CHUNK) {
+      await env.DB.batch(insertStmts.slice(i, i + CHUNK));
+    }
+  }
+
+  return {
+    analyzed:    uncachedRows.length,
+    low_quality: lowQualityCount,
+    gpt_called:  gptCandidates.length,
+    gpt_skipped: gptSkipped,
+    usage: {
+      prompt_tokens:     totalPromptTokens,
+      completion_tokens: totalCompletionTokens,
+      cost_usd:          gptCandidates.length > 0
+        ? computeCostUsd(resolvedModel, totalPromptTokens, totalCompletionTokens)
+        : 0,
+    },
+  };
+}
+
+/**
+ * POST /api/places/:id/analyze-reviews  (admin 전용)
+ * 미캐시 리뷰를 규칙필터 → 휴리스틱 triage → GPT 판별 → place_review_analysis 캐시 저장.
+ * body: { heuristicThreshold?: number(기본 40), maxGpt?: number(기본 200), provider?: string, model?: string }
+ */
+async function handleAnalyzeReviews(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  // admin 전용
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 요청 body 파싱
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  // provider / model 파싱
+  const VALID_PROVIDERS = ['openai', 'anthropic', 'xai'];
+  const provider = body?.provider ?? 'openai';
+  if (!VALID_PROVIDERS.includes(provider)) {
+    return jsonResponse(
+      { error: 'invalid_provider', message: `provider는 ${VALID_PROVIDERS.join(' | ')} 중 하나여야 합니다` },
+      400,
+      cors
+    );
+  }
+
+  // provider별 API 키 사전 확인
+  const keyCheck = {
+    openai:    { key: env.OPENAI_API_KEY,    code: 'no_openai_key',    msg: 'OpenAI API 키가 설정되지 않았습니다' },
+    anthropic: { key: env.ANTHROPIC_API_KEY, code: 'no_anthropic_key', msg: 'Anthropic API 키가 설정되지 않았습니다' },
+    xai:       { key: env.XAI_API_KEY,       code: 'no_xai_key',       msg: 'xAI API 키가 설정되지 않았습니다' },
+  };
+  const { key: providerKey, code: keyErrorCode, msg: keyErrorMsg } = keyCheck[provider];
+  if (!providerKey) {
+    return jsonResponse({ error: keyErrorCode, message: keyErrorMsg }, 503, cors);
+  }
+
+  const model = (typeof body?.model === 'string' && body.model.trim())
+    ? body.model.trim()
+    : PROVIDER_DEFAULT_MODEL[provider];
+
+  // heuristicThreshold 파싱 (기본 40, 0 허용)
+  let heuristicThreshold = body?.heuristicThreshold ?? 40;
+  if (typeof heuristicThreshold !== 'number' || !Number.isFinite(heuristicThreshold)) heuristicThreshold = 40;
+  heuristicThreshold = Math.max(0, Math.min(100, Math.floor(heuristicThreshold)));
+
+  // maxGpt 파싱 (기본 200)
+  let maxGpt = body?.maxGpt ?? 200;
+  if (typeof maxGpt !== 'number' || !Number.isFinite(maxGpt)) maxGpt = 200;
+  maxGpt = Math.max(1, Math.min(5000, Math.floor(maxGpt)));
+
+  // 플레이스 존재 확인 (admin은 전체 접근 가능)
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, name FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  // 분석 실행
+  let analysisResult;
+  try {
+    analysisResult = await analyzePlaceReviews(env, placeRowId, {
+      heuristicThreshold,
+      maxGpt,
+      provider,
+      model,
+      actorUserId: authResult.user.id,
+    });
+  } catch (err) {
+    if (err.code === 'no_openai_key' || err.code === 'no_anthropic_key' || err.code === 'no_xai_key') {
+      return jsonResponse({ error: err.code, message: err.message }, 503, cors);
+    }
+    return jsonResponse({ error: 'analysis_error', message: err.message }, 502, cors);
+  }
+
+  return jsonResponse({
+    place_name:          placeRow.name ?? '',
+    provider,
+    model,
+    heuristic_threshold: heuristicThreshold,
+    max_gpt:             maxGpt,
+    ...analysisResult,
+  }, 200, cors);
 }
 
 /**
