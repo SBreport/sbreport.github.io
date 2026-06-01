@@ -182,6 +182,89 @@ const placeStats = ref<PlaceStats | null>(null)
 const statsStatus = ref<LoadStatus>('idle')
 const statsError = ref<string | null>(null)
 
+// ─── AI 인사이트 리포트 타입 ──────────────────────────────────────────────────
+
+interface ReportMeta {
+  place_name: string
+  sample_size: number
+  model: string
+  generated_at: string
+}
+
+interface ReportQuantitative {
+  stored_count: number
+  total_server: number | null
+  reply_rate: number
+  photo_rate: number
+  monthly: { month: string; count: number }[]
+  snapshots: { captured_at: string; total_reviews: number; stored_count: number }[]
+}
+
+interface ReportStrength {
+  point: string
+  evidence: string
+}
+
+interface ReportTheme {
+  keyword: string
+  sentiment: 'positive' | 'neutral' | 'negative'
+  mentions: number
+}
+
+interface ReportQualitative {
+  summary: string
+  strengths: ReportStrength[]
+  improvements: ReportStrength[]
+  sentiment: { positive: number; neutral: number; negative: number }
+  themes: ReportTheme[]
+  representative_reviews: { positive: string[]; negative: string[] }
+}
+
+interface ReportJson {
+  meta: ReportMeta
+  quantitative: ReportQuantitative
+  qualitative?: ReportQualitative
+}
+
+// AI 인사이트 리포트 상태
+const placeReport = ref<ReportJson | null>(null)
+const reportStatus = ref<'idle' | 'loading' | 'empty' | 'error' | 'done'>('idle')
+const reportError = ref<string | null>(null)
+const reportErrorCode = ref<string | null>(null)  // 'no_openai_key' 등
+const reportGenerating = ref(false)
+
+// ─── 리뷰 예시 생성 (Phase 4-3) 타입 ────────────────────────────────────────
+
+interface ReviewSample {
+  id: string
+  body: string
+  length: 'short' | 'medium' | 'long'
+  tone: 'friendly' | 'polite' | 'emotional' | 'plain'
+  focus: 'taste' | 'service' | 'mood' | 'price' | 'revisit'
+  model?: string
+  created_at?: string
+}
+
+interface GenerateSamplesResponse {
+  place_name: string
+  model: string
+  generated_at: string
+  samples: ReviewSample[]
+}
+
+// 리뷰 예시 생성 상태
+const sampleCount = ref(10)
+const samples = ref<ReviewSample[]>([])
+const samplesStatus = ref<'idle' | 'loading' | 'generating' | 'empty' | 'error' | 'done'>('idle')
+const samplesError = ref<string | null>(null)
+const samplesErrorCode = ref<string | null>(null)
+const samplesGenerating = ref(false)
+
+// enum → 한글 매핑
+const lengthLabel: Record<string, string> = { short: '한줄', medium: '중간', long: '장문' }
+const toneLabel: Record<string, string> = { friendly: '친근', polite: '정중', emotional: '감성', plain: '담백' }
+const focusLabel: Record<string, string> = { taste: '맛·품질', service: '서비스', mood: '분위기', price: '가격', revisit: '재방문' }
+
 // ─── 신규 리뷰 판별 (cron 자동 수집으로 처음 적재된 리뷰만 신규로 표시) ─────
 
 function isNewReview(review: Review): boolean {
@@ -369,6 +452,179 @@ async function fetchPlaceStats(placeId: number) {
   }
 }
 
+async function fetchPlaceReport(placeId: number) {
+  reportStatus.value = 'loading'
+  reportError.value = null
+  reportErrorCode.value = null
+  placeReport.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/report`, {
+      headers: authHeaders(),
+    })
+    if (res.status === 404) {
+      reportStatus.value = 'empty'
+      return
+    }
+    if (!res.ok) {
+      let code = ''
+      try {
+        const body = await res.json() as { error?: string; code?: string }
+        code = body.code ?? body.error ?? ''
+      } catch { /* ignore */ }
+      reportErrorCode.value = code
+      reportError.value = `오류 ${res.status}`
+      reportStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as ReportJson
+    placeReport.value = data
+    reportStatus.value = 'done'
+  } catch {
+    // 백엔드 미완성 시 조용히 empty 처리
+    reportStatus.value = 'empty'
+  }
+}
+
+async function generateReport(placeId: number) {
+  if (reportGenerating.value) return
+  reportGenerating.value = true
+  reportError.value = null
+  reportErrorCode.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/report`, {
+      method: 'POST',
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let code = ''
+      let msg = `생성 실패 (${res.status})`
+      try {
+        const body = await res.json() as { error?: string; code?: string; message?: string }
+        code = body.code ?? body.error ?? ''
+        if (body.message) msg = body.message
+        if (res.status === 503 && (code === 'no_openai_key' || code === 'openai_key_missing')) {
+          msg = 'OpenAI API 키가 설정되지 않았습니다. 관리자에게 문의하세요.'
+        }
+      } catch { /* ignore */ }
+      reportErrorCode.value = code
+      reportError.value = msg
+      reportStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as ReportJson
+    placeReport.value = data
+    reportStatus.value = 'done'
+  } catch (e: unknown) {
+    reportError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    reportStatus.value = 'error'
+  } finally {
+    reportGenerating.value = false
+  }
+}
+
+// ─── 리뷰 예시 생성 API (Phase 4-3) ─────────────────────────────────────────
+
+async function fetchSamples(placeId: number) {
+  samplesStatus.value = 'loading'
+  samplesError.value = null
+  samplesErrorCode.value = null
+  samples.value = []
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/samples`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let code = ''
+      try {
+        const body = await res.json() as { error?: string }
+        code = body.error ?? ''
+      } catch { /* ignore */ }
+      samplesErrorCode.value = code
+      samplesError.value = `오류 ${res.status}`
+      samplesStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as { samples: ReviewSample[] }
+    samples.value = data.samples ?? []
+    samplesStatus.value = samples.value.length > 0 ? 'done' : 'empty'
+  } catch (e: unknown) {
+    samplesError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    samplesStatus.value = 'error'
+  }
+}
+
+async function generateSamples(placeId: number) {
+  if (samplesGenerating.value) return
+  samplesGenerating.value = true
+  samplesStatus.value = 'generating'
+  samplesError.value = null
+  samplesErrorCode.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/generate-samples`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ count: sampleCount.value }),
+    })
+    if (!res.ok) {
+      let code = ''
+      let msg = `생성 실패 (${res.status})`
+      try {
+        const body = await res.json() as { error?: string; message?: string }
+        code = body.error ?? ''
+        if (body.message) msg = body.message
+        if (res.status === 503 && code === 'no_openai_key') {
+          msg = 'OpenAI API 키가 설정되지 않았습니다.'
+        } else if (res.status === 400 && code === 'no_sample') {
+          msg = '분석할 리뷰가 부족합니다. 리뷰를 먼저 수집하세요.'
+        } else if (res.status === 403) {
+          msg = '관리자 전용 기능입니다.'
+        }
+      } catch { /* ignore */ }
+      samplesErrorCode.value = code
+      samplesError.value = msg
+      samplesStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as GenerateSamplesResponse
+    const newItems = data.samples ?? []
+    // 새 생성물을 기존 이력 위에 누적
+    samples.value = [...newItems, ...samples.value]
+    samplesStatus.value = samples.value.length > 0 ? 'done' : 'empty'
+  } catch (e: unknown) {
+    samplesError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    samplesStatus.value = 'error'
+  } finally {
+    samplesGenerating.value = false
+  }
+}
+
+function copySampleBody(body: string) {
+  navigator.clipboard.writeText(body).catch(() => { /* 무시 */ })
+}
+
+function exportSamplesCsv() {
+  if (samples.value.length === 0) return
+  const headers = ['본문', '길이', '어조', '초점']
+  const lines = [headers.join(',')]
+  for (const s of samples.value) {
+    lines.push([
+      csvEscape(s.body),
+      csvEscape(lengthLabel[s.length] ?? s.length),
+      csvEscape(toneLabel[s.tone] ?? s.tone),
+      csvEscape(focusLabel[s.focus] ?? s.focus),
+    ].join(','))
+  }
+  const bom = '﻿'
+  const blob = new Blob([bom + lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const pname = selectedPlace.value ? placeName(selectedPlace.value).replace(/[^a-zA-Z0-9가-힣_-]/g, '_') : 'samples'
+  a.download = `review_samples_${pname}_${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 async function collectNow() {
   if (!selectedPlace.value || collectLoading.value) return
   collectLoading.value = true
@@ -437,9 +693,21 @@ function selectPlace(place: Place) {
   placeStats.value = null
   statsStatus.value = 'idle'
   statsError.value = null
+  placeReport.value = null
+  reportStatus.value = 'idle'
+  reportError.value = null
+  reportErrorCode.value = null
+  reportGenerating.value = false
+  samples.value = []
+  samplesStatus.value = 'idle'
+  samplesError.value = null
+  samplesErrorCode.value = null
+  samplesGenerating.value = false
   fetchReviews(place.id)
   fetchCollections(place.id)
   fetchPlaceStats(place.id)
+  fetchPlaceReport(place.id)
+  if (authStore.isAdmin) fetchSamples(place.id)
 }
 
 function toggleHistory() {
@@ -1412,6 +1680,352 @@ onUnmounted(() => {
 
           <!-- Success: 리뷰 표 -->
           <template v-else>
+
+            <!-- ── AI 인사이트 패널 (shrink-0, 미니 통계 위) ─────────── -->
+            <div class="shrink-0 border-b border-gray-100">
+
+              <!-- Loading -->
+              <div v-if="reportStatus === 'loading' || reportGenerating" class="flex items-center gap-1.5 px-3 py-2.5">
+                <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />
+                <span class="text-xs text-gray-400">{{ reportGenerating ? 'AI 리포트 생성 중 (수 초 소요)...' : 'AI 인사이트 불러오는 중...' }}</span>
+              </div>
+
+              <!-- Empty -->
+              <div v-else-if="reportStatus === 'empty'" class="flex items-center justify-between px-3 py-2">
+                <div class="flex items-center gap-1.5 min-w-0">
+                  <UIcon name="i-heroicons-sparkles" class="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                  <span class="text-xs text-gray-400">AI 인사이트 리포트가 없습니다.</span>
+                </div>
+                <UButton
+                  label="리포트 생성"
+                  size="xs"
+                  color="primary"
+                  variant="soft"
+                  icon="i-heroicons-sparkles"
+                  :disabled="reportGenerating"
+                  @click="selectedPlace && generateReport(selectedPlace.id)"
+                />
+              </div>
+
+              <!-- Error -->
+              <div v-else-if="reportStatus === 'error'" class="flex items-center gap-1.5 px-3 py-2">
+                <UIcon name="i-heroicons-exclamation-circle" class="w-3.5 h-3.5 text-red-400 shrink-0" />
+                <span v-if="reportErrorCode === 'no_openai_key' || reportErrorCode === 'openai_key_missing'" class="text-xs text-red-500">
+                  OpenAI API 키가 설정되지 않았습니다. 관리자에게 문의하세요.
+                </span>
+                <span v-else class="text-xs text-red-400">리포트 로드 실패 — {{ reportError }}</span>
+                <button
+                  class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1"
+                  @click="selectedPlace && fetchPlaceReport(selectedPlace.id)"
+                >재시도</button>
+              </div>
+
+              <!-- Success -->
+              <div v-else-if="reportStatus === 'done' && placeReport" class="flex flex-col divide-y divide-gray-100">
+
+                <!-- 총평 헤더 -->
+                <div class="flex items-start justify-between gap-3 px-3 py-2">
+                  <div class="flex items-start gap-1.5 min-w-0">
+                    <UIcon name="i-heroicons-sparkles" class="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                    <p class="text-xs text-gray-700 leading-relaxed">
+                      <span class="font-medium text-gray-900">AI 인사이트</span>
+                      <span v-if="placeReport.qualitative?.summary" class="text-gray-400 mx-1">—</span>
+                      <span v-if="placeReport.qualitative?.summary">{{ placeReport.qualitative.summary }}</span>
+                    </p>
+                  </div>
+                  <!-- 다시 분석 버튼 + meta -->
+                  <div class="flex items-center gap-2 shrink-0">
+                    <span class="text-[10px] text-gray-400 tabular-nums whitespace-nowrap">
+                      표본 {{ placeReport.meta.sample_size.toLocaleString('ko-KR') }}건 · {{ placeReport.meta.model }} · {{ placeReport.meta.generated_at.slice(0, 10) }}
+                    </span>
+                    <UButton
+                      label="다시 분석"
+                      size="xs"
+                      color="neutral"
+                      variant="ghost"
+                      icon="i-heroicons-arrow-path"
+                      :loading="reportGenerating"
+                      :disabled="reportGenerating"
+                      @click="selectedPlace && generateReport(selectedPlace.id)"
+                    />
+                  </div>
+                </div>
+
+                <!-- qualitative 블록 (없으면 스킵) -->
+                <template v-if="placeReport.qualitative">
+
+                  <!-- 강점 / 개선점 + 감성 분포 + 테마 칩 (한 행) -->
+                  <div class="flex gap-0 divide-x divide-gray-100">
+
+                    <!-- 강점 -->
+                    <div
+                      v-if="placeReport.qualitative.strengths?.length"
+                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1"
+                    >
+                      <span class="text-[10px] font-medium text-green-700 uppercase tracking-wide">강점</span>
+                      <div class="flex flex-col gap-1">
+                        <div
+                          v-for="s in placeReport.qualitative.strengths"
+                          :key="s.point"
+                          class="flex flex-col gap-0.5"
+                        >
+                          <span class="text-xs font-medium text-gray-800">{{ s.point }}</span>
+                          <span class="text-[10px] text-gray-400 italic leading-snug line-clamp-2" :title="s.evidence">"{{ s.evidence }}"</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- 개선점 -->
+                    <div
+                      v-if="placeReport.qualitative.improvements?.length"
+                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1"
+                    >
+                      <span class="text-[10px] font-medium text-red-600 uppercase tracking-wide">개선점</span>
+                      <div class="flex flex-col gap-1">
+                        <div
+                          v-for="imp in placeReport.qualitative.improvements"
+                          :key="imp.point"
+                          class="flex flex-col gap-0.5"
+                        >
+                          <span class="text-xs font-medium text-gray-800">{{ imp.point }}</span>
+                          <span class="text-[10px] text-gray-400 italic leading-snug line-clamp-2" :title="imp.evidence">"{{ imp.evidence }}"</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- 감성 분포 -->
+                    <div
+                      v-if="placeReport.qualitative.sentiment"
+                      class="w-44 shrink-0 px-3 py-2 flex flex-col gap-1.5"
+                    >
+                      <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wide">감성 분포</span>
+                      <!-- 누적 가로 바 -->
+                      <div class="flex h-3 rounded overflow-hidden gap-px">
+                        <div
+                          v-if="placeReport.qualitative.sentiment.positive > 0"
+                          class="bg-green-400"
+                          :style="{ width: placeReport.qualitative.sentiment.positive + '%' }"
+                          :title="`긍정 ${placeReport.qualitative.sentiment.positive}%`"
+                        />
+                        <div
+                          v-if="placeReport.qualitative.sentiment.neutral > 0"
+                          class="bg-gray-300"
+                          :style="{ width: placeReport.qualitative.sentiment.neutral + '%' }"
+                          :title="`중립 ${placeReport.qualitative.sentiment.neutral}%`"
+                        />
+                        <div
+                          v-if="placeReport.qualitative.sentiment.negative > 0"
+                          class="bg-red-300"
+                          :style="{ width: placeReport.qualitative.sentiment.negative + '%' }"
+                          :title="`부정 ${placeReport.qualitative.sentiment.negative}%`"
+                        />
+                      </div>
+                      <!-- 레전드 -->
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="flex items-center gap-1 text-[10px] text-gray-500">
+                          <span class="inline-block w-2 h-2 rounded-sm bg-green-400 shrink-0" />
+                          긍정 {{ placeReport.qualitative.sentiment.positive }}%
+                        </span>
+                        <span class="flex items-center gap-1 text-[10px] text-gray-500">
+                          <span class="inline-block w-2 h-2 rounded-sm bg-gray-300 shrink-0" />
+                          중립 {{ placeReport.qualitative.sentiment.neutral }}%
+                        </span>
+                        <span class="flex items-center gap-1 text-[10px] text-gray-500">
+                          <span class="inline-block w-2 h-2 rounded-sm bg-red-300 shrink-0" />
+                          부정 {{ placeReport.qualitative.sentiment.negative }}%
+                        </span>
+                      </div>
+                    </div>
+
+                    <!-- 테마 키워드 칩 -->
+                    <div
+                      v-if="placeReport.qualitative.themes?.length"
+                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1.5"
+                    >
+                      <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wide">테마 키워드</span>
+                      <div class="flex flex-wrap gap-1">
+                        <span
+                          v-for="t in placeReport.qualitative.themes"
+                          :key="t.keyword"
+                          class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs whitespace-nowrap"
+                          :class="{
+                            'bg-green-50 text-green-700': t.sentiment === 'positive',
+                            'bg-gray-100 text-gray-600': t.sentiment === 'neutral',
+                            'bg-red-50 text-red-600': t.sentiment === 'negative',
+                          }"
+                          :title="`${t.mentions}회 언급 · ${t.sentiment === 'positive' ? '긍정' : t.sentiment === 'neutral' ? '중립' : '부정'}`"
+                        >
+                          {{ t.keyword }}
+                          <span
+                            class="tabular-nums text-[10px]"
+                            :class="{
+                              'text-green-500': t.sentiment === 'positive',
+                              'text-gray-400': t.sentiment === 'neutral',
+                              'text-red-400': t.sentiment === 'negative',
+                            }"
+                          >{{ t.mentions }}</span>
+                        </span>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  <!-- 대표 리뷰 (긍/부) -->
+                  <div
+                    v-if="placeReport.qualitative.representative_reviews && (placeReport.qualitative.representative_reviews.positive?.length || placeReport.qualitative.representative_reviews.negative?.length)"
+                    class="flex gap-0 divide-x divide-gray-100"
+                  >
+                    <!-- 긍정 대표 리뷰 -->
+                    <div
+                      v-if="placeReport.qualitative.representative_reviews.positive?.length"
+                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1"
+                    >
+                      <span class="text-[10px] font-medium text-green-700 uppercase tracking-wide">긍정 대표 리뷰</span>
+                      <div class="flex flex-col gap-1">
+                        <blockquote
+                          v-for="(q, i) in placeReport.qualitative.representative_reviews.positive.slice(0, 2)"
+                          :key="i"
+                          class="border-l-2 border-green-200 pl-2 text-[10px] text-gray-600 italic leading-snug line-clamp-2"
+                          :title="q"
+                        >{{ q }}</blockquote>
+                      </div>
+                    </div>
+                    <!-- 부정 대표 리뷰 -->
+                    <div
+                      v-if="placeReport.qualitative.representative_reviews.negative?.length"
+                      class="flex-1 min-w-0 px-3 py-2 flex flex-col gap-1"
+                    >
+                      <span class="text-[10px] font-medium text-red-600 uppercase tracking-wide">부정 대표 리뷰</span>
+                      <div class="flex flex-col gap-1">
+                        <blockquote
+                          v-for="(q, i) in placeReport.qualitative.representative_reviews.negative.slice(0, 2)"
+                          :key="i"
+                          class="border-l-2 border-red-200 pl-2 text-[10px] text-gray-600 italic leading-snug line-clamp-2"
+                          :title="q"
+                        >{{ q }}</blockquote>
+                      </div>
+                    </div>
+                  </div>
+
+                </template>
+
+                <!-- qualitative 없을 때: 정량만 있다는 안내 -->
+                <div v-else class="px-3 py-1.5">
+                  <span class="text-[10px] text-gray-400">정성 분석 데이터가 없습니다 (정량 데이터만 포함된 리포트)</span>
+                </div>
+
+              </div>
+            </div>
+            <!-- ── /AI 인사이트 패널 ────────────────────────────────── -->
+
+            <!-- ── Phase 4-3: 리뷰 예시 생성 패널 (관리자 전용) ─────── -->
+            <div v-if="authStore.isAdmin" class="shrink-0 border-b border-gray-100">
+
+              <!-- 패널 헤더 -->
+              <div class="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b border-gray-100">
+                <div class="flex items-center gap-1.5">
+                  <UIcon name="i-heroicons-beaker" class="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                  <span class="text-xs font-medium text-gray-700">리뷰 예시 생성</span>
+                  <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap">
+                    AI 합성·연구용
+                  </span>
+                </div>
+                <!-- 생성 컨트롤 -->
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class="text-xs text-gray-400">개수</span>
+                  <input
+                    v-model.number="sampleCount"
+                    type="number"
+                    min="1"
+                    max="30"
+                    class="w-12 px-1.5 py-0.5 text-xs border border-gray-200 rounded text-center tabular-nums focus:outline-none focus:border-primary-400"
+                    :disabled="samplesGenerating"
+                  />
+                  <UButton
+                    label="예시 생성"
+                    size="xs"
+                    color="primary"
+                    variant="soft"
+                    icon="i-heroicons-sparkles"
+                    :loading="samplesGenerating"
+                    :disabled="samplesGenerating"
+                    @click="selectedPlace && generateSamples(selectedPlace.id)"
+                  />
+                  <UButton
+                    v-if="samples.length > 0"
+                    label="CSV"
+                    size="xs"
+                    color="neutral"
+                    variant="outline"
+                    icon="i-heroicons-arrow-down-tray"
+                    @click="exportSamplesCsv"
+                  />
+                </div>
+              </div>
+
+              <!-- 생성 중 -->
+              <div v-if="samplesStatus === 'generating' || samplesGenerating" class="flex items-center gap-1.5 px-3 py-2.5">
+                <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />
+                <span class="text-xs text-gray-400">AI 예시 생성 중 (수 초 소요)...</span>
+              </div>
+
+              <!-- Loading (이력 조회 중) -->
+              <div v-else-if="samplesStatus === 'loading'" class="flex items-center gap-1.5 px-3 py-2.5">
+                <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />
+                <span class="text-xs text-gray-400">예시 이력 불러오는 중...</span>
+              </div>
+
+              <!-- Error -->
+              <div v-else-if="samplesStatus === 'error'" class="flex items-center gap-1.5 px-3 py-2">
+                <UIcon name="i-heroicons-exclamation-circle" class="w-3.5 h-3.5 text-red-400 shrink-0" />
+                <span class="text-xs text-red-500">{{ samplesError }}</span>
+                <button
+                  class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1"
+                  @click="selectedPlace && fetchSamples(selectedPlace.id)"
+                >재시도</button>
+              </div>
+
+              <!-- Empty -->
+              <div v-else-if="samplesStatus === 'empty' || samplesStatus === 'idle'" class="flex items-center gap-1.5 px-3 py-2.5">
+                <UIcon name="i-heroicons-document-text" class="w-3.5 h-3.5 text-gray-300 shrink-0" />
+                <span class="text-xs text-gray-400">아직 생성된 예시가 없습니다. 위 "예시 생성" 버튼을 누르세요.</span>
+              </div>
+
+              <!-- Success: 카드 리스트 -->
+              <div v-else-if="samplesStatus === 'done' && samples.length > 0" class="overflow-y-auto" style="max-height: 280px">
+                <div class="flex flex-col divide-y divide-gray-100">
+                  <div
+                    v-for="sample in samples"
+                    :key="sample.id"
+                    class="flex items-start gap-2 px-3 py-2 hover:bg-gray-50 transition-colors group"
+                  >
+                    <!-- 본문 -->
+                    <p class="flex-1 min-w-0 text-xs text-gray-800 leading-relaxed">{{ sample.body }}</p>
+                    <!-- 스타일 칩 + 복사 버튼 -->
+                    <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600 whitespace-nowrap">
+                        {{ lengthLabel[sample.length] ?? sample.length }}
+                      </span>
+                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700 whitespace-nowrap">
+                        {{ toneLabel[sample.tone] ?? sample.tone }}
+                      </span>
+                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700 whitespace-nowrap">
+                        {{ focusLabel[sample.focus] ?? sample.focus }}
+                      </span>
+                      <button
+                        class="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 p-0.5 rounded text-gray-400 hover:text-gray-700"
+                        title="본문 복사"
+                        @click="copySampleBody(sample.body)"
+                      >
+                        <UIcon name="i-heroicons-clipboard-document" class="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+            <!-- ── /Phase 4-3: 리뷰 예시 생성 패널 ───────────────────── -->
 
             <!-- ── 미니 통계 대시보드 (shrink-0, 리뷰 표 위) ───────── -->
             <div class="shrink-0 border-b border-gray-100">

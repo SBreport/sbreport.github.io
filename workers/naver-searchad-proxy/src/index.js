@@ -122,6 +122,25 @@ export default {
     if (statsMatch && request.method === 'GET') {
       return handleGetPlaceStats(request, env, corsHeaders, statsMatch[1]);
     }
+    // POST /api/places/:id/report — 업체 피드백 리포트 생성 (GPT + 정량 SQL)
+    // GET  /api/places/:id/report — 캐시된 리포트 조회
+    const reportMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/report$/);
+    if (reportMatch && request.method === 'POST') {
+      return handleGenerateReport(request, env, corsHeaders, reportMatch[1]);
+    }
+    if (reportMatch && request.method === 'GET') {
+      return handleGetReport(request, env, corsHeaders, reportMatch[1]);
+    }
+    // POST /api/places/:id/generate-samples — 리뷰 예시 생성 (관리자 전용)
+    // GET  /api/places/:id/samples         — 저장된 생성 예시 조회 (관리자 전용)
+    const generateSamplesMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/generate-samples$/);
+    if (generateSamplesMatch && request.method === 'POST') {
+      return handleGenerateSamples(request, env, corsHeaders, generateSamplesMatch[1]);
+    }
+    const samplesMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/samples$/);
+    if (samplesMatch && request.method === 'GET') {
+      return handleGetSamples(request, env, corsHeaders, samplesMatch[1]);
+    }
     // DELETE /api/places/:id — 플레이스 + 연관 데이터 cascade 삭제
     // 주의: 정확히 /api/places/{id} 로 끝나는 것만 매칭(하위 경로 없음)
     const deletePlaceMatch = url.pathname.match(/^\/api\/places\/([^/]+)$/);
@@ -2267,6 +2286,103 @@ async function handleToggleAutoCollect(request, env, corsHeaders, placeRowId) {
 }
 
 /**
+ * [공통] 정량 지표 SQL 집계.
+ * handleGetPlaceStats 와 handleGenerateReport 양쪽에서 재사용.
+ * 반환: { stored_count, total_server, reply_count, reply_rate, photo_count, photo_rate,
+ *          monthly, top_keywords, snapshots }
+ * total_server 는 placeRow.total_reviews 를 받아서 채운다.
+ */
+async function computePlaceQuantitative(env, placeRowId, totalServer) {
+  // 1) 기본 카운트 집계 (stored_count, reply_count, photo_count)
+  const countRow = await env.DB.prepare(`
+    SELECT
+      COUNT(*)                                       AS stored_count,
+      SUM(CASE WHEN owner_reply IS NOT NULL THEN 1 ELSE 0 END) AS reply_count,
+      SUM(CASE WHEN has_photo = 1 THEN 1 ELSE 0 END)           AS photo_count
+    FROM place_reviews
+    WHERE place_row_id = ?
+  `).bind(placeRowId).first();
+
+  const storedCount  = countRow?.stored_count  ?? 0;
+  const replyCount   = countRow?.reply_count   ?? 0;
+  const photoCount   = countRow?.photo_count   ?? 0;
+  const replyRate    = storedCount > 0 ? replyCount / storedCount : 0;
+  const photoRate    = storedCount > 0 ? photoCount / storedCount : 0;
+
+  // 2) 월별 분포 (최근 12개월, review_date ISO 기준)
+  const { results: monthlyRows } = await env.DB.prepare(`
+    SELECT substr(review_date, 1, 7) AS month, COUNT(*) AS count
+    FROM place_reviews
+    WHERE place_row_id = ?
+      AND review_date IS NOT NULL
+      AND review_date >= date('now', '-12 months')
+    GROUP BY month
+    ORDER BY month ASC
+  `).bind(placeRowId).all();
+
+  // 3) 리뷰 본문 수집 (최근 collected_at 기준 LIMIT 1000)
+  const { results: bodyRows } = await env.DB.prepare(`
+    SELECT body FROM place_reviews
+    WHERE place_row_id = ? AND body IS NOT NULL AND body != ''
+    ORDER BY collected_at DESC
+    LIMIT 1000
+  `).bind(placeRowId).all();
+
+  // MVP 단순 빈도 — 정밀 분석은 Phase 4 AI 예정
+  const STOPWORDS = new Set([
+    '너무','정말','진짜','그리고','하지만','에서','으로','합니다','했어요','같아요','있어요',
+    '너무너무','조금','약간','매우','아주','그냥','근데','그래서','이런','저런','여기','거기',
+    '이곳','저곳','이거','저거','이게','저게','것도','것은','것이','것을','것만','것같아요',
+    '같은','같이','처럼','부터','까지','이나','또는','그냥','뭔가','어서','이라','에도',
+    '하고','않고','않아요','없어요','없는','있는','이번','다음','가장','때문','때문에',
+    '하나','하는','하는데','해서','해요','해도','했는데','했어','이렇게','저렇게','어떻게',
+    '너무나','좀더','더욱','매번','항상','자주','가끔','이미','벌써','항상','절대','역시',
+  ]);
+
+  const wordFreq = new Map();
+  for (const row of bodyRows) {
+    if (!row.body) continue;
+    // 공백·문장부호 기준 토큰화
+    const tokens = row.body.split(/[\s.,!?;:·""''()\[\]{}<>/\\|@#$%^&*+=~`\-—–…]+/u);
+    for (const token of tokens) {
+      const word = token.trim();
+      // 2글자 이상, 숫자·한 글자 제거, 불용어 제거
+      if (word.length < 2) continue;
+      if (/^\d+$/.test(word)) continue;
+      if (STOPWORDS.has(word)) continue;
+      wordFreq.set(word, (wordFreq.get(word) ?? 0) + 1);
+    }
+  }
+
+  // 상위 15개 내림차순
+  const topKeywords = Array.from(wordFreq.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 15)
+    .map(([word, count]) => ({ word, count }));
+
+  // 4) 스냅샷 추이 (최근 60개)
+  const { results: snapshots } = await env.DB.prepare(`
+    SELECT captured_at, total_reviews, stored_count
+    FROM place_review_snapshots
+    WHERE place_row_id = ?
+    ORDER BY captured_at ASC
+    LIMIT 60
+  `).bind(placeRowId).all();
+
+  return {
+    stored_count:  storedCount,
+    total_server:  totalServer ?? null,
+    reply_count:   replyCount,
+    reply_rate:    replyRate,
+    photo_count:   photoCount,
+    photo_rate:    photoRate,
+    monthly:       monthlyRows ?? [],
+    top_keywords:  topKeywords,
+    snapshots:     snapshots ?? [],
+  };
+}
+
+/**
  * GET /api/places/:id/stats
  * 지점별 미니 통계 대시보드 집계.
  * 응답: stored_count, total_server, reply_count, reply_rate, photo_count, photo_rate,
@@ -2298,94 +2414,8 @@ async function handleGetPlaceStats(request, env, corsHeaders, placeRowId) {
   }
 
   try {
-    // 1) 기본 카운트 집계 (stored_count, reply_count, photo_count)
-    const countRow = await env.DB.prepare(`
-      SELECT
-        COUNT(*)                                       AS stored_count,
-        SUM(CASE WHEN owner_reply IS NOT NULL THEN 1 ELSE 0 END) AS reply_count,
-        SUM(CASE WHEN has_photo = 1 THEN 1 ELSE 0 END)           AS photo_count
-      FROM place_reviews
-      WHERE place_row_id = ?
-    `).bind(placeRowId).first();
-
-    const storedCount  = countRow?.stored_count  ?? 0;
-    const replyCount   = countRow?.reply_count   ?? 0;
-    const photoCount   = countRow?.photo_count   ?? 0;
-    const replyRate    = storedCount > 0 ? replyCount / storedCount : 0;
-    const photoRate    = storedCount > 0 ? photoCount / storedCount : 0;
-
-    // 2) 월별 분포 (최근 12개월, review_date ISO 기준)
-    const { results: monthlyRows } = await env.DB.prepare(`
-      SELECT substr(review_date, 1, 7) AS month, COUNT(*) AS count
-      FROM place_reviews
-      WHERE place_row_id = ?
-        AND review_date IS NOT NULL
-        AND review_date >= date('now', '-12 months')
-      GROUP BY month
-      ORDER BY month ASC
-    `).bind(placeRowId).all();
-
-    // 3) 리뷰 본문 수집 (최근 collected_at 기준 LIMIT 1000)
-    const { results: bodyRows } = await env.DB.prepare(`
-      SELECT body FROM place_reviews
-      WHERE place_row_id = ? AND body IS NOT NULL AND body != ''
-      ORDER BY collected_at DESC
-      LIMIT 1000
-    `).bind(placeRowId).all();
-
-    // MVP 단순 빈도 — 정밀 분석은 Phase 4 AI 예정
-    const STOPWORDS = new Set([
-      '너무','정말','진짜','그리고','하지만','에서','으로','합니다','했어요','같아요','있어요',
-      '너무너무','조금','약간','매우','아주','그냥','근데','그래서','이런','저런','여기','거기',
-      '이곳','저곳','이거','저거','이게','저게','것도','것은','것이','것을','것만','것같아요',
-      '같은','같이','처럼','부터','까지','이나','또는','그냥','뭔가','어서','이라','에도',
-      '하고','않고','않아요','없어요','없는','있는','이번','다음','가장','때문','때문에',
-      '하나','하는','하는데','해서','해요','해도','했는데','했어','이렇게','저렇게','어떻게',
-      '너무나','좀더','더욱','매번','항상','자주','가끔','이미','벌써','항상','절대','역시',
-    ]);
-
-    const wordFreq = new Map();
-    for (const row of bodyRows) {
-      if (!row.body) continue;
-      // 공백·문장부호 기준 토큰화
-      const tokens = row.body.split(/[\s.,!?;:·""''()\[\]{}<>/\\|@#$%^&*+=~`\-—–…]+/u);
-      for (const token of tokens) {
-        const word = token.trim();
-        // 2글자 이상, 숫자·한 글자 제거, 불용어 제거
-        if (word.length < 2) continue;
-        if (/^\d+$/.test(word)) continue;
-        if (STOPWORDS.has(word)) continue;
-        wordFreq.set(word, (wordFreq.get(word) ?? 0) + 1);
-      }
-    }
-
-    // 상위 15개 내림차순
-    const topKeywords = Array.from(wordFreq.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 15)
-      .map(([word, count]) => ({ word, count }));
-
-    // 4) 스냅샷 추이 (최근 60개)
-    const { results: snapshots } = await env.DB.prepare(`
-      SELECT captured_at, total_reviews, stored_count
-      FROM place_review_snapshots
-      WHERE place_row_id = ?
-      ORDER BY captured_at ASC
-      LIMIT 60
-    `).bind(placeRowId).all();
-
-    return jsonResponse({
-      stored_count:  storedCount,
-      total_server:  placeRow.total_reviews ?? null,
-      reply_count:   replyCount,
-      reply_rate:    replyRate,
-      photo_count:   photoCount,
-      photo_rate:    photoRate,
-      monthly:       monthlyRows ?? [],
-      top_keywords:  topKeywords,
-      snapshots:     snapshots ?? [],
-    }, 200, cors);
-
+    const quant = await computePlaceQuantitative(env, placeRowId, placeRow.total_reviews);
+    return jsonResponse(quant, 200, cors);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
@@ -2428,6 +2458,8 @@ async function handleDeletePlace(request, env, corsHeaders, placeRowId) {
       env.DB.prepare('DELETE FROM place_reviews WHERE place_row_id = ?').bind(placeRowId),
       env.DB.prepare('DELETE FROM place_collection_events WHERE place_row_id = ?').bind(placeRowId),
       env.DB.prepare('DELETE FROM place_review_snapshots WHERE place_row_id = ?').bind(placeRowId),
+      env.DB.prepare('DELETE FROM place_insights WHERE place_row_id = ?').bind(placeRowId),
+      env.DB.prepare('DELETE FROM place_generated_samples WHERE place_row_id = ?').bind(placeRowId),
       // user_id 조건 이중 방어 (소유 확인을 이미 했지만 파괴적 작업이므로 한 번 더)
       env.DB.prepare('DELETE FROM review_places WHERE id = ? AND user_id = ?').bind(placeRowId, authResult.user.id),
     ]);
@@ -2678,6 +2710,665 @@ async function verifyJwt(token, secret) {
   if (payload.exp < now) throw new Error('JWT 만료');
 
   return payload;
+}
+
+// --- Phase 4-3: 리뷰 예시 생성 (연구용·관리자 전용) ---
+
+/** 스타일 축 정의 */
+const SAMPLE_LENGTHS = ['short', 'medium', 'long'];
+const SAMPLE_TONES   = ['friendly', 'polite', 'emotional', 'plain'];
+const SAMPLE_FOCUSES = ['taste', 'service', 'mood', 'price', 'revisit'];
+
+/** few-shot 표본 최대 건수 */
+const SAMPLE_FEW_SHOT_SIZE = 25;
+
+/** fact pool 상위 키워드 수 */
+const SAMPLE_FACT_POOL_SIZE = 25;
+
+/**
+ * count 개의 스타일 조합을 골고루 분산 생성.
+ * 세 축을 독립 순환(라운드로빈)하면서 최대 다양성을 유지.
+ * @param {number} count
+ * @returns {{ length: string, tone: string, focus: string }[]}
+ */
+function buildStyleAssignments(count) {
+  const assignments = [];
+  // 각 축을 개별 순환 인덱스로 돌려 중복 최소화
+  for (let i = 0; i < count; i++) {
+    assignments.push({
+      length: SAMPLE_LENGTHS[i % SAMPLE_LENGTHS.length],
+      tone:   SAMPLE_TONES[i   % SAMPLE_TONES.length],
+      focus:  SAMPLE_FOCUSES[i % SAMPLE_FOCUSES.length],
+    });
+  }
+  // 피셔-예이츠 셔플로 예측 가능한 순서 탈피
+  for (let i = assignments.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [assignments[i], assignments[j]] = [assignments[j], assignments[i]];
+  }
+  return assignments;
+}
+
+/**
+ * fact pool(허용 소재 키워드 목록) 추출.
+ * computePlaceQuantitative 의 STOPWORDS + 토큰화 로직을 재사용해 상위 N개 반환.
+ * @param {object} env
+ * @param {string} placeRowId
+ * @param {number} topN
+ * @returns {Promise<string[]>} 단어 배열 (빈도 내림차순)
+ */
+async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
+  const { results: bodyRows } = await env.DB.prepare(`
+    SELECT body FROM place_reviews
+    WHERE place_row_id = ? AND body IS NOT NULL AND body != ''
+    ORDER BY collected_at DESC
+    LIMIT 1000
+  `).bind(placeRowId).all();
+
+  const STOPWORDS = new Set([
+    '너무','정말','진짜','그리고','하지만','에서','으로','합니다','했어요','같아요','있어요',
+    '너무너무','조금','약간','매우','아주','그냥','근데','그래서','이런','저런','여기','거기',
+    '이곳','저곳','이거','저거','이게','저게','것도','것은','것이','것을','것만','것같아요',
+    '같은','같이','처럼','부터','까지','이나','또는','그냥','뭔가','어서','이라','에도',
+    '하고','않고','않아요','없어요','없는','있는','이번','다음','가장','때문','때문에',
+    '하나','하는','하는데','해서','해요','해도','했는데','했어','이렇게','저렇게','어떻게',
+    '너무나','좀더','더욱','매번','항상','자주','가끔','이미','벌써','항상','절대','역시',
+  ]);
+
+  const wordFreq = new Map();
+  for (const row of bodyRows) {
+    if (!row.body) continue;
+    const tokens = row.body.split(/[\s.,!?;:·""''()\[\]{}<>/\\|@#$%^&*+=~`\-—–…]+/u);
+    for (const token of tokens) {
+      const word = token.trim();
+      if (word.length < 2) continue;
+      if (/^\d+$/.test(word)) continue;
+      if (STOPWORDS.has(word)) continue;
+      wordFreq.set(word, (wordFreq.get(word) ?? 0) + 1);
+    }
+  }
+
+  return Array.from(wordFreq.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN)
+    .map(([word]) => word);
+}
+
+/**
+ * GPT gpt-5.4-mini 호출 — 리뷰 예시 대량 생성 (환각방지 프롬프트).
+ * structured output: response_format {type:"json_object"}.
+ * 파싱 실패 1회 재시도.
+ * @param {object} env
+ * @param {{ placeName, businessType, factPool: string[], fewShotReviews: string[], styles: {length,tone,focus}[] }} params
+ * @returns {Promise<{index:number, body:string}[]>}
+ */
+async function callOpenAIForSamples(env, { placeName, businessType, factPool, fewShotReviews, styles }) {
+  const styleLine = (s, i) =>
+    `${i + 1}번: length=${s.length} / tone=${s.tone} / focus=${s.focus}`;
+
+  const systemPrompt = `너는 그 업체 실제 리뷰를 근거로, 그 업체에 실제로 존재하는 정보만 담은 자연스러운 한국어 리뷰 예시를 생성한다. 연구용 합성 데이터이며 관리자 전용이다.
+
+규칙:
+1. fact pool(허용 소재) 목록에 없는 메뉴·상품·서비스·장소를 지어내지 말 것. 불확실하면 "음식이 맛있어요" 같은 일반적 표현 사용.
+2. 업종(business_type)·업체명 맥락을 지킬 것. 고깃집에 사과 후기 같은 소재 혼입 금지.
+3. 실제 이용자가 쓴 것처럼 자연스럽게. 과장·광고체 금지.
+4. 각 항목을 지정된 length/tone/focus에 맞게 작성:
+   - length: short=2~3문장, medium=4~6문장, long=7~10문장
+   - tone: friendly=친근·구어체, polite=존댓말·정중, emotional=감성적·여운, plain=담담·사실 위주
+   - focus: taste=맛·메뉴, service=서비스·직원, mood=분위기·인테리어, price=가격·가성비, revisit=재방문·추천
+5. 출력은 반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }
+6. 표본 리뷰와 완전히 동일한 문장 복사 금지. 소재·톤·맥락은 참고해도 됨.`;
+
+  const factPoolText = factPool.length > 0
+    ? `허용 소재(fact pool): ${factPool.join(', ')}`
+    : '허용 소재: (리뷰 본문 없음 — 업종 일반 상식만 사용)';
+
+  const fewShotText = fewShotReviews.length > 0
+    ? `--- 실제 리뷰 표본 (톤·소재 참고용) ---\n${fewShotReviews.map((r, i) => `[${i + 1}] ${r}`).join('\n')}`
+    : '(표본 리뷰 없음)';
+
+  const stylesText = styles.map(styleLine).join('\n');
+
+  const userPrompt = `업체명: ${placeName}
+업종: ${businessType || '미분류'}
+
+${factPoolText}
+
+${fewShotText}
+
+--- 생성할 리뷰 목록 (각 스타일에 맞게 작성) ---
+${stylesText}
+
+위 ${styles.length}개 리뷰를 생성해서 JSON으로 응답하시오.`;
+
+  // count가 많아지면 토큰을 넉넉하게
+  const maxTokens = Math.max(2000, styles.length * 250);
+
+  const body = {
+    model: 'gpt-5.4-mini',
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userPrompt },
+    ],
+    temperature: 0.7,
+    max_completion_tokens: maxTokens,
+  };
+
+  async function fetchOnce() {
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`OpenAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+    }
+
+    const data = await resp.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) throw new Error('OpenAI 응답에 content가 없습니다');
+
+    const parsed = JSON.parse(content);
+    if (!Array.isArray(parsed?.samples)) throw new Error('GPT 응답 구조 오류: samples 배열 없음');
+    return parsed.samples;
+  }
+
+  // 1차 시도
+  try {
+    return await fetchOnce();
+  } catch (firstErr) {
+    if (firstErr instanceof SyntaxError) {
+      return await fetchOnce();
+    }
+    throw firstErr;
+  }
+}
+
+/**
+ * POST /api/places/:id/generate-samples  (관리자 전용)
+ * fact pool 추출 → few-shot 표본 선정 → 스타일 조합 → GPT 생성 → DB 저장 → 반환.
+ */
+async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  if (!env.OPENAI_API_KEY) {
+    return jsonResponse(
+      { error: 'no_openai_key', message: 'OpenAI API 키가 설정되지 않았습니다' },
+      503,
+      cors
+    );
+  }
+
+  // 관리자 전용
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 요청 body 파싱
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  // count 파싱 (기본 10, clamp 1~30)
+  let count = body?.count ?? 10;
+  if (typeof count !== 'number' || !Number.isFinite(count)) count = 10;
+  count = Math.max(1, Math.min(30, Math.floor(count)));
+
+  // 플레이스 소유 확인 (관리자이므로 user_id 비교 없이 존재만 확인)
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id, name, business_type FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  // fact pool 추출
+  let factPool;
+  try {
+    factPool = await extractFactPool(env, placeRowId, SAMPLE_FACT_POOL_SIZE);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  // few-shot 표본 선정: length >= 30, review_date DESC
+  let fewShotReviews;
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT body
+      FROM place_reviews
+      WHERE place_row_id = ?
+        AND body IS NOT NULL
+        AND length(body) >= 30
+      ORDER BY review_date DESC
+      LIMIT ?
+    `).bind(placeRowId, SAMPLE_FEW_SHOT_SIZE).all();
+    fewShotReviews = results ?? [];
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (fewShotReviews.length === 0) {
+    return jsonResponse(
+      { error: 'no_sample', message: '분석할 30자 이상 리뷰가 없습니다' },
+      400,
+      cors
+    );
+  }
+
+  // 스타일 조합 생성
+  const styleAssignments = buildStyleAssignments(count);
+
+  // GPT 호출
+  let gptSamples;
+  try {
+    gptSamples = await callOpenAIForSamples(env, {
+      placeName:    placeRow.name ?? '',
+      businessType: placeRow.business_type ?? '',
+      factPool,
+      fewShotReviews: fewShotReviews.map(r => r.body),
+      styles: styleAssignments,
+    });
+  } catch (err) {
+    return jsonResponse({ error: 'openai_error', message: err.message }, 502, cors);
+  }
+
+  const model = 'gpt-5.4-mini';
+  const generatedAt = new Date().toISOString();
+
+  // DB 저장 + 응답 샘플 조립
+  const samples = [];
+  const insertStmts = [];
+
+  for (let i = 0; i < styleAssignments.length; i++) {
+    const style = styleAssignments[i];
+    // GPT 응답에서 index 매칭 (1-based). 없으면 순서대로 사용.
+    const gptItem = gptSamples.find(s => s.index === i + 1) ?? gptSamples[i];
+    if (!gptItem?.body) continue;
+
+    const sampleId = crypto.randomUUID();
+    samples.push({
+      id:     sampleId,
+      body:   gptItem.body,
+      length: style.length,
+      tone:   style.tone,
+      focus:  style.focus,
+    });
+    insertStmts.push(
+      env.DB.prepare(`
+        INSERT INTO place_generated_samples
+          (id, place_row_id, body, style_length, style_tone, style_focus, model, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(sampleId, placeRowId, gptItem.body, style.length, style.tone, style.focus, model, generatedAt)
+    );
+  }
+
+  if (insertStmts.length > 0) {
+    try {
+      await env.DB.batch(insertStmts);
+    } catch (err) {
+      return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+    }
+  }
+
+  return jsonResponse({
+    place_name:   placeRow.name ?? '',
+    model,
+    generated_at: generatedAt,
+    samples,
+  }, 200, cors);
+}
+
+/**
+ * GET /api/places/:id/samples  (관리자 전용)
+ * 저장된 생성 예시 최근순 반환.
+ */
+async function handleGetSamples(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  // 관리자 전용
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 존재 확인
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  let results;
+  try {
+    const res = await env.DB.prepare(`
+      SELECT id, body, style_length AS length, style_tone AS tone,
+             style_focus AS focus, model, created_at
+      FROM place_generated_samples
+      WHERE place_row_id = ?
+      ORDER BY created_at DESC
+    `).bind(placeRowId).all();
+    results = res.results ?? [];
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ samples: results }, 200, cors);
+}
+
+// --- Phase 4-1: 업체 피드백 리포트 ---
+
+/** 표본 선정: body 길이 30자 이상인 최신 리뷰 최대 150건 */
+const REPORT_SAMPLE_SIZE = 150;
+
+/**
+ * POST /api/places/:id/report
+ * 소유 확인 → 표본 선정 → 정량 SQL(computePlaceQuantitative) + GPT 호출
+ * → report_json 조립 → place_insights UPSERT → 결과 반환.
+ */
+async function handleGenerateReport(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  // OpenAI 키 사전 확인 (키 없으면 GPT 호출 불가 — 미리 에러 반환)
+  if (!env.OPENAI_API_KEY) {
+    return jsonResponse(
+      { error: 'no_openai_key', message: 'OpenAI API 키가 설정되지 않았습니다' },
+      503,
+      cors
+    );
+  }
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id, name, business_type, total_reviews FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  // 표본 선정: length(body) >= 30, review_date DESC 기준 최대 REPORT_SAMPLE_SIZE 건
+  let sampleReviews;
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT body
+      FROM place_reviews
+      WHERE place_row_id = ?
+        AND body IS NOT NULL
+        AND length(body) >= 30
+      ORDER BY review_date DESC
+      LIMIT ?
+    `).bind(placeRowId, REPORT_SAMPLE_SIZE).all();
+    sampleReviews = results ?? [];
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  const sampleSize = sampleReviews.length;
+
+  // 표본 0건이면 GPT 호출 무의미(비용·무내용) — 조기 반환
+  if (sampleSize === 0) {
+    return jsonResponse(
+      { error: 'no_sample', message: '분석할 30자 이상 리뷰가 없습니다' },
+      400,
+      cors
+    );
+  }
+
+  // 정량 지표 (SQL, 재사용)
+  let quantitative;
+  try {
+    quantitative = await computePlaceQuantitative(env, placeRowId, placeRow.total_reviews);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  // GPT 호출로 정성 인사이트 생성
+  let qualitative;
+  try {
+    qualitative = await callOpenAIForInsights(env, {
+      placeName:    placeRow.name ?? '',
+      businessType: placeRow.business_type ?? '',
+      replyRate:    quantitative.reply_rate,
+      totalReviews: quantitative.stored_count,
+      reviews:      sampleReviews.map(r => r.body),
+    });
+  } catch (err) {
+    return jsonResponse(
+      { error: 'openai_error', message: err.message },
+      502,
+      cors
+    );
+  }
+
+  const generatedAt = new Date().toISOString();
+  const model = 'gpt-5.4-mini';
+
+  const reportJson = {
+    meta: {
+      place_name:   placeRow.name ?? '',
+      sample_size:  sampleSize,
+      model,
+      generated_at: generatedAt,
+    },
+    quantitative: {
+      stored_count: quantitative.stored_count,
+      total_server: quantitative.total_server,
+      reply_rate:   quantitative.reply_rate,
+      photo_rate:   quantitative.photo_rate,
+      monthly:      quantitative.monthly,
+      snapshots:    quantitative.snapshots,
+    },
+    qualitative,
+  };
+
+  const reportJsonStr = JSON.stringify(reportJson);
+
+  // place_insights UPSERT (기존 레코드 있으면 갱신)
+  try {
+    await env.DB.prepare(`
+      INSERT INTO place_insights (place_row_id, report_json, sample_size, model, generated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(place_row_id) DO UPDATE SET
+        report_json  = excluded.report_json,
+        sample_size  = excluded.sample_size,
+        model        = excluded.model,
+        generated_at = excluded.generated_at
+    `).bind(placeRowId, reportJsonStr, sampleSize, model, generatedAt).run();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse(reportJson, 200, cors);
+}
+
+/**
+ * GET /api/places/:id/report
+ * 소유 확인 → place_insights 캐시 조회.
+ * 없으면 { exists: false } 404.
+ */
+async function handleGetReport(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+  if (placeRow.user_id !== authResult.user.id) {
+    return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+  }
+
+  let insight;
+  try {
+    insight = await env.DB.prepare(
+      'SELECT report_json, sample_size, model, generated_at FROM place_insights WHERE place_row_id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!insight) {
+    return jsonResponse({ exists: false, message: '아직 생성된 리포트가 없습니다. POST /report 로 생성하세요' }, 404, cors);
+  }
+
+  let reportJson;
+  try {
+    reportJson = JSON.parse(insight.report_json);
+  } catch {
+    return jsonResponse({ error: 'parse_error', message: '저장된 리포트 파싱 실패' }, 500, cors);
+  }
+
+  // POST와 동일하게 report_json을 직접 반환(계약 일치). meta에 sample_size·model·generated_at 포함.
+  return jsonResponse(reportJson, 200, cors);
+}
+
+// --- OpenAI GPT 호출 (정성 인사이트) ---
+
+/**
+ * GPT gpt-5.4-mini 호출로 정성 인사이트(qualitative) 생성.
+ * structured output: response_format {type:"json_object"} + 스키마 지시 in system prompt.
+ * 파싱 실패 시 1회 재시도.
+ * @param {object} env - Worker env (env.OPENAI_API_KEY 필요)
+ * @param {{ placeName, businessType, replyRate, totalReviews, reviews: string[] }} params
+ * @returns {Promise<object>} qualitative JSON
+ */
+async function callOpenAIForInsights(env, { placeName, businessType, replyRate, totalReviews, reviews }) {
+  const systemPrompt = `당신은 네이버 플레이스 리뷰를 분석하는 전문가입니다.
+주어진 리뷰 표본을 근거로 업체의 강점·개선점·감성 비율·테마 키워드·대표 리뷰를 도출합니다.
+
+반드시 다음 JSON 구조로만 응답하세요 (다른 텍스트 없이 순수 JSON):
+{
+  "summary": "지점 한 줄 총평 (100자 이내)",
+  "strengths": [
+    {"point": "강점 설명", "evidence": "근거가 되는 실제 리뷰 인용문"}
+  ],
+  "improvements": [
+    {"point": "개선점 설명", "evidence": "근거가 되는 실제 리뷰 인용문"}
+  ],
+  "sentiment": {"positive": 0, "neutral": 0, "negative": 0},
+  "themes": [
+    {"keyword": "정제된 키워드 (조사 제거·의미 단위)", "sentiment": "positive|neutral|negative", "mentions": 0}
+  ],
+  "representative_reviews": {
+    "positive": ["긍정 대표 리뷰 인용 1", "긍정 대표 리뷰 인용 2"],
+    "negative": ["부정 대표 리뷰 인용 1"]
+  }
+}
+
+규칙:
+- strengths는 최소 1개, 최대 5개. 반드시 evidence 포함.
+- improvements: 표본에 부정 신호가 없으면 빈 배열([])도 허용. 있으면 실제 근거 리뷰 인용 필수.
+- sentiment의 positive+neutral+negative 합은 반드시 100.
+- themes는 3~8개. 조사(이/가/은/는/을/를 등) 제거한 의미 단위 키워드.
+- representative_reviews.positive는 2~3개, negative는 0~2개.
+- 표본에 없는 내용 추측 금지. 근거 없는 칭찬·비판 금지.`;
+
+  const reviewsText = reviews
+    .map((r, i) => `[${i + 1}] ${r}`)
+    .join('\n');
+
+  const userPrompt = `업체명: ${placeName}
+업종: ${businessType || '미분류'}
+DB 저장 리뷰 수: ${totalReviews}건
+사장님 답글률: ${(replyRate * 100).toFixed(1)}%
+표본 리뷰 수: ${reviews.length}건
+
+--- 표본 리뷰 목록 ---
+${reviewsText}`;
+
+  const body = {
+    model: 'gpt-5.4-mini',
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userPrompt },
+    ],
+    temperature: 0.3,
+    max_completion_tokens: 2000,
+  };
+
+  async function fetchOnce() {
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`OpenAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+    }
+
+    const data = await resp.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error('OpenAI 응답에 content가 없습니다');
+    }
+    return JSON.parse(content);
+  }
+
+  // 1차 시도
+  try {
+    return await fetchOnce();
+  } catch (firstErr) {
+    // 파싱 실패(JSON.parse 오류)인 경우에만 1회 재시도
+    if (firstErr instanceof SyntaxError) {
+      return await fetchOnce();
+    }
+    throw firstErr;
+  }
 }
 
 // --- 시그니처 ---
