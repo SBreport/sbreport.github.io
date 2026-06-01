@@ -167,9 +167,6 @@ const csvProgress = ref<{ current: number; total: number } | null>(null)
 const multiCsvLoading = ref(false)
 const multiCsvProgress = ref<{ placeIndex: number; placeTotal: number; rowCount: number } | null>(null)
 
-// 수집 이력 패널 토글
-const showHistory = ref(false)
-
 // 삭제
 const deleteConfirmOpen = ref(false)
 const deleteLoading = ref(false)
@@ -241,6 +238,7 @@ interface ReviewSample {
   length: 'short' | 'medium' | 'long'
   tone: 'friendly' | 'polite' | 'emotional' | 'plain'
   focus: 'outcome' | 'service' | 'space' | 'price' | 'revisit' | string  // string: 구 데이터(taste/mood) 호환
+  status?: 'active' | 'kept' | 'archived'
   model?: string
   created_at?: string
 }
@@ -260,9 +258,17 @@ const samplesError = ref<string | null>(null)
 const samplesErrorCode = ref<string | null>(null)
 const samplesGenerating = ref(false)
 
+// 예시 관리 상태
+type SampleFilter = 'all' | 'kept' | 'active'
+const sampleFilter = ref<SampleFilter>('all')
+const showArchived = ref(false)
+const checkedSampleIds = ref<Set<string>>(new Set())
+const sampleStatusUpdating = ref<Set<string>>(new Set())
+const sampleDeleteLoading = ref(false)
+
 // ─── 탭 상태 ─────────────────────────────────────────────────────────────────
 
-type DetailTab = 'reviews' | 'stats' | 'samples'
+type DetailTab = 'reviews' | 'stats' | 'collections' | 'samples'
 const activeTab = ref<DetailTab>('reviews')
 
 // ─── usage(비용) 상태 ────────────────────────────────────────────────────────
@@ -648,6 +654,92 @@ async function generateSamples(placeId: number) {
   }
 }
 
+// ─── 예시 관리 API ────────────────────────────────────────────────────────────
+
+async function updateSampleStatus(sampleId: string, status: 'active' | 'kept' | 'archived') {
+  if (!selectedPlace.value) return
+  if (sampleStatusUpdating.value.has(sampleId)) return
+
+  // 낙관적 업데이트
+  const updating = new Set(sampleStatusUpdating.value)
+  updating.add(sampleId)
+  sampleStatusUpdating.value = updating
+
+  const sample = samples.value.find(s => s.id === sampleId)
+  const prevStatus = sample?.status ?? 'active'
+  if (sample) sample.status = status
+
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/${selectedPlace.value.id}/samples/${sampleId}/status`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ status }),
+    })
+    if (!res.ok) {
+      // 롤백
+      if (sample) sample.status = prevStatus
+      const body = await res.json().catch(() => ({})) as { message?: string }
+      collectToast.value = { type: 'error', message: body.message ?? `상태 변경 실패 (${res.status})` }
+    }
+  } catch (e: unknown) {
+    if (sample) sample.status = prevStatus
+    collectToast.value = { type: 'error', message: e instanceof Error ? e.message : '상태 변경 중 오류' }
+  } finally {
+    const ids = new Set(sampleStatusUpdating.value)
+    ids.delete(sampleId)
+    sampleStatusUpdating.value = ids
+  }
+}
+
+async function deleteCheckedSamples() {
+  if (!selectedPlace.value || checkedSampleIds.value.size === 0) return
+  if (sampleDeleteLoading.value) return
+
+  const ids = [...checkedSampleIds.value]
+  if (!confirm(`선택한 ${ids.length}개 예시를 삭제할까요? 되돌릴 수 없습니다.`)) return
+
+  sampleDeleteLoading.value = true
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/${selectedPlace.value.id}/samples/delete`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ ids }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { message?: string }
+      collectToast.value = { type: 'error', message: body.message ?? `삭제 실패 (${res.status})` }
+      return
+    }
+    // 목록에서 제거
+    samples.value = samples.value.filter(s => !ids.includes(s.id))
+    checkedSampleIds.value = new Set()
+    if (samples.value.length === 0) samplesStatus.value = 'empty'
+    collectToast.value = { type: 'success', message: `${ids.length}개 예시 삭제됨` }
+  } catch (e: unknown) {
+    collectToast.value = { type: 'error', message: e instanceof Error ? e.message : '삭제 중 오류' }
+  } finally {
+    sampleDeleteLoading.value = false
+  }
+}
+
+// 필터된 samples computed
+const filteredSamples = computed(() => {
+  return samples.value.filter(s => {
+    const status = s.status ?? 'active'
+    if (status === 'archived' && !showArchived.value) return false
+    if (sampleFilter.value === 'kept') return status === 'kept'
+    if (sampleFilter.value === 'active') return status === 'active'
+    return true
+  })
+})
+
+function toggleSampleCheck(id: string) {
+  const next = new Set(checkedSampleIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  checkedSampleIds.value = next
+}
+
 function copySampleBody(body: string) {
   navigator.clipboard.writeText(body).catch(() => { /* 무시 */ })
 }
@@ -739,7 +831,6 @@ function selectPlace(place: Place) {
   selectedPlace.value = place
   currentPage.value = 1
   collectToast.value = null
-  showHistory.value = false
   placeStats.value = null
   statsStatus.value = 'idle'
   statsError.value = null
@@ -757,6 +848,10 @@ function selectPlace(place: Place) {
   reportUsage.value = null
   placeUsage.value = null
   placeUsageStatus.value = 'idle'
+  sampleFilter.value = 'all'
+  showArchived.value = false
+  checkedSampleIds.value = new Set()
+  sampleDeleteLoading.value = false
   activeTab.value = 'reviews'
   fetchReviews(place.id)
   fetchCollections(place.id)
@@ -764,10 +859,6 @@ function selectPlace(place: Place) {
   fetchPlaceReport(place.id)
   fetchPlaceUsage(place.id)
   if (authStore.isAdmin) fetchSamples(place.id)
-}
-
-function toggleHistory() {
-  showHistory.value = !showHistory.value
 }
 
 function stopBackfill() {
@@ -1613,7 +1704,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- 헤더 행 2: 갱신 시각 + 수집이력 토글 + 자동 갱신 안내 -->
+          <!-- 헤더 행 2: 갱신 시각 + 자동 갱신 안내 -->
           <div class="flex items-center justify-between px-3 pb-1.5 gap-3">
             <div class="flex items-center gap-1.5 min-w-0">
               <template v-if="selectedPlace">
@@ -1621,17 +1712,6 @@ onUnmounted(() => {
                   갱신:
                   <span class="tabular-nums">{{ selectedPlace.last_collected_at ? formatDateTime(selectedPlace.last_collected_at) : '갱신 전' }}</span>
                 </span>
-                <span class="text-gray-300 text-xs">·</span>
-                <button
-                  class="text-xs text-primary-600 hover:text-primary-800 transition-colors flex items-center gap-0.5 whitespace-nowrap"
-                  @click="toggleHistory"
-                >
-                  수집 이력
-                  <UIcon
-                    :name="showHistory ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-right'"
-                    class="w-3 h-3"
-                  />
-                </button>
               </template>
             </div>
             <div class="flex items-center gap-1 shrink-0 text-gray-400">
@@ -1701,78 +1781,6 @@ onUnmounted(() => {
             </template>
           </div>
 
-          <!-- 수집 이력 패널 (인라인 토글) -->
-          <div
-            v-if="selectedPlace && showHistory"
-            class="border-t border-gray-200 flex flex-col"
-            style="max-height: 200px"
-          >
-            <div class="shrink-0 flex items-center justify-between px-3 py-1.5 bg-white border-b border-gray-100">
-              <span class="text-xs font-medium text-gray-600">수집 이력</span>
-              <div class="flex items-center gap-1">
-                <UButton
-                  icon="i-heroicons-arrow-path"
-                  size="xs"
-                  color="neutral"
-                  variant="ghost"
-                  :loading="collectionsStatus === 'loading'"
-                  aria-label="이력 새로고침"
-                  @click="selectedPlace && fetchCollections(selectedPlace.id)"
-                />
-                <UButton
-                  icon="i-heroicons-chevron-up"
-                  size="xs"
-                  color="neutral"
-                  variant="ghost"
-                  aria-label="이력 접기"
-                  @click="showHistory = false"
-                />
-              </div>
-            </div>
-            <div v-if="collectionsStatus === 'loading'" class="flex items-center justify-center py-3">
-              <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 text-gray-400 animate-spin" />
-            </div>
-            <div v-else-if="collectionsStatus === 'error'" class="flex items-center justify-center py-3">
-              <p class="text-xs text-red-500">{{ collectionsError }}</p>
-            </div>
-            <div v-else-if="collectionsStatus === 'done' && collectionEvents.length === 0" class="flex items-center justify-center py-3">
-              <p class="text-xs text-gray-400">아직 수집 이력이 없습니다</p>
-            </div>
-            <div v-else class="overflow-y-auto">
-              <table class="w-full text-xs border-collapse">
-                <thead class="sticky top-0 z-10 bg-gray-50">
-                  <tr>
-                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-36">수집 시각</th>
-                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-16">구분</th>
-                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">신규</th>
-                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">스킵</th>
-                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 border-b border-gray-200">비고</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="ev in collectionEvents"
-                    :key="ev.id"
-                    class="border-b border-gray-100 last:border-0 hover:bg-gray-50"
-                    :class="ev.blocked ? 'bg-red-50' : ''"
-                  >
-                    <td class="px-3 py-1.5 whitespace-nowrap text-gray-500 tabular-nums">{{ formatDateTime(ev.collected_at) }}</td>
-                    <td class="px-3 py-1.5 whitespace-nowrap">
-                      <span
-                        class="inline-block px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap"
-                        :class="ev.source === 'cron' ? 'bg-gray-100 text-gray-600' : ev.source === 'backfill' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-600'"
-                      >{{ ev.source === 'cron' ? '자동' : ev.source === 'backfill' ? '전체' : '수동' }}</span>
-                    </td>
-                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">{{ ev.inserted }}</td>
-                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-400">{{ ev.skipped }}</td>
-                    <td class="px-3 py-1.5">
-                      <span v-if="ev.blocked" class="text-red-500 font-medium" :title="ev.error ?? ''">차단/오류</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
         </div>
         <!-- ── /공통 헤더 ────────────────────────────────────────── -->
 
@@ -1803,6 +1811,15 @@ onUnmounted(() => {
               @click="activeTab = 'stats'"
             >
               통계 · AI 인사이트
+            </button>
+            <button
+              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+              :class="activeTab === 'collections'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'"
+              @click="activeTab = 'collections'"
+            >
+              수집 이력
             </button>
             <button
               v-if="authStore.isAdmin"
@@ -2214,7 +2231,78 @@ onUnmounted(() => {
           </div>
           <!-- ══ /탭 2: 통계 · AI 인사이트 ════════════════════════════ -->
 
-          <!-- ══ 탭 3: 예시 생성 (관리자 전용) ════════════════════════ -->
+          <!-- ══ 탭 3: 수집 이력 ══════════════════════════════════════ -->
+          <div v-show="activeTab === 'collections'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
+
+            <!-- 탭 헤더 (shrink-0) -->
+            <div class="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-100 bg-gray-50">
+              <span class="text-xs font-medium text-gray-600">수집 이력 (최근 30건)</span>
+              <UButton
+                icon="i-heroicons-arrow-path"
+                size="xs"
+                color="neutral"
+                variant="ghost"
+                :loading="collectionsStatus === 'loading'"
+                aria-label="이력 새로고침"
+                @click="selectedPlace && fetchCollections(selectedPlace.id)"
+              />
+            </div>
+
+            <!-- 본문 스크롤 -->
+            <div class="flex-1 min-h-0 overflow-y-auto">
+              <!-- Loading -->
+              <div v-if="collectionsStatus === 'loading'" class="flex items-center justify-center py-6">
+                <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 animate-spin" />
+              </div>
+              <!-- Error -->
+              <div v-else-if="collectionsStatus === 'error'" class="flex items-center justify-center gap-2 py-6">
+                <UIcon name="i-heroicons-exclamation-circle" class="w-4 h-4 text-red-400 shrink-0" />
+                <span class="text-xs text-red-500">{{ collectionsError }}</span>
+                <button class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1" @click="selectedPlace && fetchCollections(selectedPlace.id)">재시도</button>
+              </div>
+              <!-- Empty -->
+              <div v-else-if="collectionsStatus === 'done' && collectionEvents.length === 0" class="flex items-center justify-center py-6">
+                <p class="text-xs text-gray-400">아직 수집 이력이 없습니다</p>
+              </div>
+              <!-- Success -->
+              <table v-else class="w-full text-xs border-collapse">
+                <thead class="sticky top-0 z-10 bg-gray-50">
+                  <tr>
+                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-36">수집 시각</th>
+                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-16">구분</th>
+                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">신규</th>
+                    <th class="px-3 py-1.5 text-right font-medium text-gray-500 whitespace-nowrap border-b border-gray-200 w-14">스킵</th>
+                    <th class="px-3 py-1.5 text-left font-medium text-gray-500 border-b border-gray-200">비고</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="ev in collectionEvents"
+                    :key="ev.id"
+                    class="border-b border-gray-100 last:border-0 hover:bg-gray-50"
+                    :class="ev.blocked ? 'bg-red-50' : ''"
+                  >
+                    <td class="px-3 py-1.5 whitespace-nowrap text-gray-500 tabular-nums">{{ formatDateTime(ev.collected_at) }}</td>
+                    <td class="px-3 py-1.5 whitespace-nowrap">
+                      <span
+                        class="inline-block px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap"
+                        :class="ev.source === 'cron' ? 'bg-gray-100 text-gray-600' : ev.source === 'backfill' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-600'"
+                      >{{ ev.source === 'cron' ? '자동' : ev.source === 'backfill' ? '전체' : '수동' }}</span>
+                    </td>
+                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">{{ ev.inserted }}</td>
+                    <td class="px-3 py-1.5 text-right tabular-nums text-gray-400">{{ ev.skipped }}</td>
+                    <td class="px-3 py-1.5">
+                      <span v-if="ev.blocked" class="text-red-500 font-medium" :title="ev.error ?? ''">차단/오류</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+          </div>
+          <!-- ══ /탭 3: 수집 이력 ══════════════════════════════════════ -->
+
+          <!-- ══ 탭 4: 예시 생성 (관리자 전용) ════════════════════════ -->
           <div v-if="authStore.isAdmin" v-show="activeTab === 'samples'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
 
             <!-- 탭 상단 고정 영역 (shrink-0) -->
@@ -2236,6 +2324,41 @@ onUnmounted(() => {
                   icon="i-heroicons-arrow-down-tray"
                   @click="exportSamplesCsv"
                 />
+              </div>
+              <!-- 필터 + 선택삭제 (결과 있을 때) -->
+              <div v-if="samples.length > 0" class="flex items-center gap-2 px-3 py-1.5 flex-wrap">
+                <div class="flex items-center gap-1">
+                  <button
+                    v-for="opt in ([{ value: 'all', label: '전체' }, { value: 'kept', label: '좋음' }, { value: 'active', label: '미분류' }] as const)"
+                    :key="opt.value"
+                    class="px-2 py-0.5 rounded text-xs font-medium transition-colors whitespace-nowrap"
+                    :class="sampleFilter === opt.value
+                      ? 'bg-primary-100 text-primary-700'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
+                    @click="sampleFilter = opt.value"
+                  >{{ opt.label }}</button>
+                </div>
+                <button
+                  class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors whitespace-nowrap"
+                  :class="showArchived ? 'bg-gray-200 text-gray-600' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'"
+                  @click="showArchived = !showArchived"
+                >
+                  <UIcon name="i-heroicons-eye-slash" class="w-3 h-3" />
+                  숨김 보기
+                </button>
+                <template v-if="checkedSampleIds.size > 0">
+                  <span class="text-gray-300 text-xs">·</span>
+                  <UButton
+                    :label="`선택 삭제 (${checkedSampleIds.size})`"
+                    size="xs"
+                    color="error"
+                    variant="outline"
+                    icon="i-heroicons-trash"
+                    :loading="sampleDeleteLoading"
+                    :disabled="sampleDeleteLoading"
+                    @click="deleteCheckedSamples"
+                  />
+                </template>
               </div>
               <!-- 비용 표시 (옵셔널) -->
               <div v-if="samplesUsage || placeUsage" class="flex items-center gap-3 px-3 py-1.5 flex-wrap">
@@ -2323,18 +2446,61 @@ onUnmounted(() => {
                     @click="selectedPlace && generateSamples(selectedPlace.id)"
                   />
                 </div>
+                <!-- 필터 결과 없음 안내 -->
+                <div v-if="filteredSamples.length === 0" class="flex items-center justify-center py-6">
+                  <p class="text-xs text-gray-400">해당 필터에 맞는 예시가 없습니다</p>
+                </div>
                 <!-- 카드 리스트 (max-width로 사시모드 해소) -->
-                <div class="flex flex-col divide-y divide-gray-100 max-w-2xl mx-auto w-full">
+                <div v-else class="flex flex-col divide-y divide-gray-100 max-w-2xl mx-auto w-full">
                   <div
-                    v-for="sample in samples"
+                    v-for="sample in filteredSamples"
                     :key="sample.id"
-                    class="flex items-start gap-2 px-3 py-2.5 hover:bg-gray-50 transition-colors group"
+                    class="flex items-start gap-2 px-3 py-2.5 transition-colors group"
+                    :class="{
+                      'opacity-40': (sample.status ?? 'active') === 'archived',
+                      'border-l-2 border-emerald-400': (sample.status ?? 'active') === 'kept',
+                      'hover:bg-gray-50': (sample.status ?? 'active') !== 'archived',
+                    }"
                   >
+                    <!-- 체크박스 -->
+                    <input
+                      type="checkbox"
+                      class="mt-0.5 w-3.5 h-3.5 shrink-0 cursor-pointer accent-primary-600"
+                      :checked="checkedSampleIds.has(sample.id)"
+                      @change="toggleSampleCheck(sample.id)"
+                    />
                     <p class="flex-1 min-w-0 text-xs text-gray-800 leading-relaxed">{{ sample.body }}</p>
                     <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
                       <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600 whitespace-nowrap">{{ lengthLabel[sample.length] ?? sample.length }}</span>
                       <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700 whitespace-nowrap">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
                       <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700 whitespace-nowrap">{{ focusLabel[sample.focus] ?? sample.focus }}</span>
+                      <!-- 좋음/별로 토글 (hover 노출) -->
+                      <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-0.5">
+                        <button
+                          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+                          :class="(sample.status ?? 'active') === 'kept'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-gray-100 text-gray-500 hover:bg-emerald-50 hover:text-emerald-600'"
+                          :disabled="sampleStatusUpdating.has(sample.id)"
+                          :title="(sample.status ?? 'active') === 'kept' ? '좋음 해제' : '좋음으로 표시'"
+                          @click="updateSampleStatus(sample.id, (sample.status ?? 'active') === 'kept' ? 'active' : 'kept')"
+                        >
+                          <UIcon name="i-heroicons-star" class="w-3 h-3" />
+                          좋음
+                        </button>
+                        <button
+                          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+                          :class="(sample.status ?? 'active') === 'archived'
+                            ? 'bg-gray-200 text-gray-600'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
+                          :disabled="sampleStatusUpdating.has(sample.id)"
+                          :title="(sample.status ?? 'active') === 'archived' ? '별로 해제' : '별로로 표시 (숨김)'"
+                          @click="updateSampleStatus(sample.id, (sample.status ?? 'active') === 'archived' ? 'active' : 'archived')"
+                        >
+                          <UIcon name="i-heroicons-eye-slash" class="w-3 h-3" />
+                          별로
+                        </button>
+                      </div>
                       <button
                         class="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 p-0.5 rounded text-gray-400 hover:text-gray-700"
                         title="본문 복사"
@@ -2349,7 +2515,7 @@ onUnmounted(() => {
 
             </div>
           </div>
-          <!-- ══ /탭 3: 예시 생성 ════════════════════════════════════ -->
+          <!-- ══ /탭 4: 예시 생성 ════════════════════════════════════ -->
 
         </template>
         <!-- /플레이스 선택 시 탭 구조 -->

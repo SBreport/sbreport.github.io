@@ -138,9 +138,20 @@ export default {
     }
     // POST /api/places/:id/generate-samples — 리뷰 예시 생성 (관리자 전용)
     // GET  /api/places/:id/samples         — 저장된 생성 예시 조회 (관리자 전용)
+    // POST /api/places/:id/samples/:sampleId/status — 샘플 평가 라벨 변경 (관리자 전용)
+    // POST /api/places/:id/samples/delete  — 샘플 다중 삭제 (관리자 전용)
+    // 주의: 구체적인 경로(:sampleId/status, delete)를 /samples$ 보다 먼저 매칭
     const generateSamplesMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/generate-samples$/);
     if (generateSamplesMatch && request.method === 'POST') {
       return handleGenerateSamples(request, env, corsHeaders, generateSamplesMatch[1]);
+    }
+    const sampleStatusMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/samples\/([^/]+)\/status$/);
+    if (sampleStatusMatch && request.method === 'POST') {
+      return handleUpdateSampleStatus(request, env, corsHeaders, sampleStatusMatch[1], sampleStatusMatch[2]);
+    }
+    const samplesDeleteMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/samples\/delete$/);
+    if (samplesDeleteMatch && request.method === 'POST') {
+      return handleDeleteSamples(request, env, corsHeaders, samplesDeleteMatch[1]);
     }
     const samplesMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/samples$/);
     if (samplesMatch && request.method === 'GET') {
@@ -3049,12 +3060,13 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
       length: style.length,
       tone:   style.tone,
       focus:  style.focus,
+      status: 'active',
     });
     insertStmts.push(
       env.DB.prepare(`
         INSERT INTO place_generated_samples
-          (id, place_row_id, body, style_length, style_tone, style_focus, model, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          (id, place_row_id, body, style_length, style_tone, style_focus, model, created_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
       `).bind(sampleId, placeRowId, gptItem.body, style.length, style.tone, style.focus, model, generatedAt)
     );
   }
@@ -3114,21 +3126,130 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
   }
 
+  // ?status= 필터 (없으면 전체 반환)
+  const urlObj = new URL(request.url);
+  const statusFilter = urlObj.searchParams.get('status');
+  const VALID_STATUSES = ['active', 'kept', 'archived'];
+  if (statusFilter && !VALID_STATUSES.includes(statusFilter)) {
+    return jsonResponse({ error: 'invalid_status', message: 'status는 active | kept | archived 중 하나여야 합니다' }, 400, cors);
+  }
+
   let results;
   try {
-    const res = await env.DB.prepare(`
-      SELECT id, body, style_length AS length, style_tone AS tone,
-             style_focus AS focus, model, created_at
-      FROM place_generated_samples
-      WHERE place_row_id = ?
-      ORDER BY created_at DESC
-    `).bind(placeRowId).all();
+    const sql = statusFilter
+      ? `SELECT id, body, style_length AS length, style_tone AS tone,
+                style_focus AS focus, status, model, created_at
+         FROM place_generated_samples
+         WHERE place_row_id = ? AND status = ?
+         ORDER BY created_at DESC`
+      : `SELECT id, body, style_length AS length, style_tone AS tone,
+                style_focus AS focus, status, model, created_at
+         FROM place_generated_samples
+         WHERE place_row_id = ?
+         ORDER BY created_at DESC`;
+    const stmt = statusFilter
+      ? env.DB.prepare(sql).bind(placeRowId, statusFilter)
+      : env.DB.prepare(sql).bind(placeRowId);
+    const res = await stmt.all();
     results = res.results ?? [];
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
   return jsonResponse({ samples: results }, 200, cors);
+}
+
+/**
+ * POST /api/places/:id/samples/:sampleId/status  (관리자 전용)
+ * 생성 예시 평가 라벨 변경: active | kept | archived
+ */
+async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, sampleId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: '요청 바디가 올바른 JSON이 아닙니다' }, 400, cors);
+  }
+
+  const VALID_STATUSES = ['active', 'kept', 'archived'];
+  const newStatus = body?.status;
+  if (!newStatus || !VALID_STATUSES.includes(newStatus)) {
+    return jsonResponse({ error: 'invalid_status', message: 'status는 active | kept | archived 중 하나여야 합니다' }, 400, cors);
+  }
+
+  // 해당 sample이 이 place 소속인지 확인
+  let sample;
+  try {
+    sample = await env.DB.prepare(
+      'SELECT id FROM place_generated_samples WHERE id = ? AND place_row_id = ?'
+    ).bind(sampleId, placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!sample) {
+    return jsonResponse({ error: 'not_found', message: '해당 샘플을 찾을 수 없습니다' }, 404, cors);
+  }
+
+  try {
+    await env.DB.prepare(
+      'UPDATE place_generated_samples SET status = ? WHERE id = ? AND place_row_id = ?'
+    ).bind(newStatus, sampleId, placeRowId).run();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ ok: true, id: sampleId, status: newStatus }, 200, cors);
+}
+
+/**
+ * POST /api/places/:id/samples/delete  (관리자 전용)
+ * 생성 예시 다중 삭제. body: { "ids": ["uuid1", ...] }
+ */
+async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: '요청 바디가 올바른 JSON이 아닙니다' }, 400, cors);
+  }
+
+  const ids = body?.ids;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return jsonResponse({ error: 'invalid_ids', message: 'ids는 1개 이상의 배열이어야 합니다' }, 400, cors);
+  }
+
+  // 최대 100개 제한 (안전 장치)
+  if (ids.length > 100) {
+    return jsonResponse({ error: 'too_many_ids', message: '한 번에 최대 100개까지 삭제 가능합니다' }, 400, cors);
+  }
+
+  const placeholders = ids.map(() => '?').join(', ');
+  let deleted = 0;
+  try {
+    const result = await env.DB.prepare(
+      `DELETE FROM place_generated_samples WHERE id IN (${placeholders}) AND place_row_id = ?`
+    ).bind(...ids, placeRowId).run();
+    deleted = result.meta?.changes ?? 0;
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ ok: true, deleted }, 200, cors);
 }
 
 /**
