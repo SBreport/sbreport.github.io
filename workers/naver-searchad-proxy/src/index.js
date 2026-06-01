@@ -2985,22 +2985,57 @@ const SAMPLE_FEW_SHOT_SIZE = 25;
 const SAMPLE_FACT_POOL_SIZE = 25;
 
 /**
- * count 개의 스타일 조합을 골고루 분산 생성.
- * 세 축을 독립 순환(라운드로빈)하면서 최대 다양성을 유지.
+ * count 개의 스타일 조합을 실측 길이 분포 가중치로 분산 생성.
+ * length 축: 실제 리뷰 분포(short 35% · medium 45% · long 20%)를 반영한 가중 분배.
+ *   - short  = 1문장, ~30자 (실제 29% 반올림 + 마진)
+ *   - medium = 1~2문장, 30~70자 (실제 44%)
+ *   - long   = 2~4문장, 80~150자 (실제 23%. 5문장+ 장황 금지)
+ * tone / focus 축은 기존 라운드로빈 유지.
  * @param {number} count
  * @returns {{ length: string, tone: string, focus: string }[]}
  */
 function buildStyleAssignments(count) {
+  // 실측 분포 기반 가중치: short 35%, medium 45%, long 20%
+  const LENGTH_WEIGHTS = [
+    { value: 'short',  weight: 35 },
+    { value: 'medium', weight: 45 },
+    { value: 'long',   weight: 20 },
+  ];
+  const totalWeight = LENGTH_WEIGHTS.reduce((s, w) => s + w.weight, 0); // 100
+
+  // 가중치 비례로 각 length 배정 개수 계산 (정수 나눔 + 나머지 보정)
+  const lengthCounts = LENGTH_WEIGHTS.map(w => Math.floor(count * w.weight / totalWeight));
+  let remaining = count - lengthCounts.reduce((s, n) => s + n, 0);
+  // 나머지는 가중치가 높은 순(medium)부터 배정
+  for (let i = 0; remaining > 0; i = (i + 1) % LENGTH_WEIGHTS.length) {
+    lengthCounts[i]++;
+    remaining--;
+  }
+
+  // length 배열 구성 (short * nShort, medium * nMedium, ...)
+  const lengths = [];
+  for (let wi = 0; wi < LENGTH_WEIGHTS.length; wi++) {
+    for (let k = 0; k < lengthCounts[wi]; k++) {
+      lengths.push(LENGTH_WEIGHTS[wi].value);
+    }
+  }
+
+  // 피셔-예이츠 셔플로 length 순서 무작위화
+  for (let i = lengths.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [lengths[i], lengths[j]] = [lengths[j], lengths[i]];
+  }
+
+  // tone / focus는 기존 라운드로빈 (다양성 유지)
   const assignments = [];
-  // 각 축을 개별 순환 인덱스로 돌려 중복 최소화
   for (let i = 0; i < count; i++) {
     assignments.push({
-      length: SAMPLE_LENGTHS[i % SAMPLE_LENGTHS.length],
+      length: lengths[i],
       tone:   SAMPLE_TONES[i   % SAMPLE_TONES.length],
       focus:  SAMPLE_FOCUSES[i % SAMPLE_FOCUSES.length],
     });
   }
-  // 피셔-예이츠 셔플로 예측 가능한 순서 탈피
+  // 전체 순서도 셔플 (예측 가능한 패턴 탈피)
   for (let i = assignments.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [assignments[i], assignments[j]] = [assignments[j], assignments[i]];
@@ -3446,12 +3481,14 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     const otherHalf = SAMPLE_FEW_SHOT_SIZE - halfSize;
 
     // 절반: 최신순 (기존 방식 유지)
+    // length >= 12: 짧고 자연스러운 실제 리뷰(실측 29%)가 few-shot에 포함되도록 완화
+    // ("굿", "좋아요" 같은 2~11자 극초단문은 여전히 제외)
     const { results: recentRows } = await env.DB.prepare(`
       SELECT body
       FROM place_reviews
       WHERE place_row_id = ?
         AND body IS NOT NULL
-        AND length(body) >= 30
+        AND length(body) >= 12
       ORDER BY review_date DESC
       LIMIT ?
     `).bind(placeRowId, halfSize).all();
@@ -3463,7 +3500,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
       FROM place_reviews
       WHERE place_row_id = ?
         AND body IS NOT NULL
-        AND length(body) >= 30
+        AND length(body) >= 12
       ORDER BY RANDOM()
       LIMIT ?
     `).bind(placeRowId, otherHalf).all();
@@ -3479,7 +3516,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 
   if (fewShotReviews.length === 0) {
     return jsonResponse(
-      { error: 'no_sample', message: '분석할 30자 이상 리뷰가 없습니다' },
+      { error: 'no_sample', message: '분석할 12자 이상 리뷰가 없습니다' },
       400,
       cors
     );
@@ -3503,6 +3540,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 - 장점을 줄줄이 나열하지 마라. "깔끔하고 넓고 친절하고 청결하고 만족스러웠어요" 식 장점 열거 절대 금지. 한두 가지 경험이나 한 장면에 집중해서 풀어써라. 실제 사람은 인상 깊었던 한두 가지를 말하지, 모든 걸 평가하지 않는다.
 - "전체적으로 만족", "추천합니다", "또 가고 싶어요" 같은 정리·총평 문장으로 끝맺지 마라. 실제 리뷰는 결론 없이 끝나기도 한다.
 - "정말", "너무", "완벽", "최고" 같은 과장 형용사와 "~해서 좋았어요"의 반복 패턴을 피하라.
+- 딱딱한 격식체(~습니다, ~였습니다) 금지. 실제 모바일 리뷰는 격식체를 거의 안 쓴다.
 
 [감정 다양성 — 호평 일색 금지]
 생성하는 묶음 전체를 호평으로만 채우지 마라. 일부는 중립적이거나 사소한 아쉬움(예: "대기가 조금 있었다", "주차가 애매하다" 등)을 자연스럽게 담아라. 단, fact pool이나 실제 리뷰 표본에 근거가 있을 때만 아쉬움을 넣을 것 — 근거 없는 가짜 불만은 금지. 전부 칭찬 일색이면 광고처럼 보여 실패다.
@@ -3510,17 +3548,24 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 [구체성 필수]
 fact pool(허용 소재)에 있는 구체 항목(시술명, 메뉴명, 직원 호칭, 특징어 등)을 1~2개 자연스럽게 녹여라. fact pool에 없는 메뉴·상품·시술명을 지어내지 말 것.
 
-[실제 말투 모사]
+[실제 말투 모사 — 핵심]
 아래 제공되는 실제 리뷰 예시들의 어투·문장 호흡·구어체를 모사하라. 실제 사람은:
 - 한두 가지에 집중하고 나머지는 생략한다
-- 구어체를 쓴다 ("~했어요", "~더라구요", "~인 것 같아요", "~거 같음")
+- 해요체·구어체를 쓴다 ("~했어요", "~좋아요", "~더라구요", "~인 것 같아요", "~거 같음", "~해주세요")
 - 가끔 짧게 끊거나 말이 완결되지 않기도 한다
 - 문장이 너무 매끄럽지 않고 날것이다
+- 맞춤법·띄어쓰기에 완벽하지 않아도 된다 — 모바일 리뷰는 가볍게 흘려 쓴다 (단, 읽기 어려울 정도의 심한 비문은 금지)
+
+[이모지·기호 — 자연스럽게 가끔]
+일부 리뷰(전체의 30~40%)에는 ^^, ~~, ㅋ, ㅎㅎ, 😊, 👍 같은 기호/이모지를 가끔 자연스럽게 섞어라. 모든 리뷰에 달지 말 것 — 과하면 오히려 어색하다. 물결(~)이나 느낌표(!)도 실제 리뷰처럼 자연스럽게 사용 가능.
 
 [길이 엄수]
-- short: 1문장(40자 내외). 딱 한 마디.
-- medium: 2~3문장. 핵심 + 간단한 부연.
-- long: 5문장 이상. 여러 측면을 자연스럽게 풀어냄.
+- short: 1문장, ~30자. 딱 한 마디. 더 길게 쓰지 마라.
+- medium: 1~2문장, 30~70자 정도. 핵심 + 짧은 부연 (끝을 정리 안 해도 됨).
+- long: 2~4문장, 80~150자. 여러 장면을 자연스럽게 풀어냄. 5문장+ 장황 금지.
+
+[불완전성 허용]
+끝을 정리하지 않고 끝나도 된다. 모든 문장이 완결될 필요 없다. 실제 리뷰는 결론 없이 뚝 끊기기도 한다.
 
 [focus 정의 — 지정된 focus 측면을 중심으로 작성]
 - outcome: 핵심 경험·결과. 식당=음식 맛, 병원=시술 결과·효과, 카페=음료·디저트
