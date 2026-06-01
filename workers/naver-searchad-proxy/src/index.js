@@ -151,6 +151,11 @@ export default {
     if (aiReviewsMatch && request.method === 'GET') {
       return handleGetAiReviews(request, env, corsHeaders, aiReviewsMatch[1]);
     }
+    // POST /api/places/:id/reviews/:reviewId/label — 사람 검수 라벨 저장/해제 (researcher 이상)
+    const reviewLabelMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/reviews\/([^/]+)\/label$/);
+    if (reviewLabelMatch && request.method === 'POST') {
+      return handleSetReviewLabel(request, env, corsHeaders, reviewLabelMatch[1], reviewLabelMatch[2]);
+    }
     // POST /api/places/:id/generate-samples — 리뷰 예시 생성 (researcher 이상)
     // GET  /api/places/:id/samples         — 저장된 생성 예시 조회 (researcher 이상)
     // POST /api/places/:id/samples/:sampleId/status — 샘플 평가 라벨 변경 (researcher 이상)
@@ -4115,6 +4120,9 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
   if (!Number.isFinite(suspectThreshold)) suspectThreshold = 60;
   suspectThreshold = Math.max(0, Math.min(100, suspectThreshold));
 
+  // humanCorrection 파라미터 (bool) — true 면 사람 라벨로 suspect 분류 덮어쓰기
+  const humanCorrection = urlObj.searchParams.get('humanCorrection') === 'true';
+
   try {
     // 1) 지점 전체 리뷰 수
     const totalReviewsRow = await env.DB.prepare(
@@ -4122,7 +4130,7 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
     ).bind(placeRowId).first();
     const total_reviews = totalReviewsRow?.cnt ?? 0;
 
-    // 2) 분석 행 전체 로드 (JS 집계 — effectiveSuspect 적용, 지점당 최대 수천 행이므로 허용)
+    // 2) 분석 행 전체 로드 + 사람 라벨 LEFT JOIN
     const { results: analysisRows } = await env.DB.prepare(`
       SELECT
         pra.ai_suspect,
@@ -4133,15 +4141,18 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         pra.review_id,
         pr.body,
         pr.review_date,
-        length(pr.body) AS body_len
+        length(pr.body) AS body_len,
+        prl.human_label,
+        prl.human_note
       FROM place_review_analysis pra
       LEFT JOIN place_reviews pr ON pr.id = pra.review_id
+      LEFT JOIN place_review_labels prl ON prl.review_id = pra.review_id
       WHERE pra.place_row_id = ?
     `).bind(placeRowId).all();
 
     const allRows = analysisRows ?? [];
 
-    // JS 집계 — 유효 의심점수(effectiveSuspect) 기준
+    // JS 집계 — 유효 의심점수(effectiveSuspect) 기준 (+ humanCorrection 선택 적용)
     let total_analyzed = 0;
     let low_quality    = 0;
     let presumed_human = 0;
@@ -4153,6 +4164,14 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
     const distribution = Object.fromEntries(buckets.map(b => [b, 0]));
     const flag_breakdown = {};
 
+    // 사람 검수 집계용
+    const human_counts = { human: 0, ad: 0, unsure: 0 };
+    // AI 일치율 집계 (unsure 제외한 human/ad 라벨만)
+    let agree_count = 0;
+    let compared_count = 0;
+    let false_positive = 0;  // AI=suspect, 사람=human
+    let false_negative = 0;  // AI=not-suspect, 사람=ad
+
     // GPT 판정 행만 따로 수집 (sample_suspect 용)
     const gptJudgedItems = [];
 
@@ -4160,6 +4179,11 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       total_analyzed++;
       let flags_parsed = [];
       try { flags_parsed = JSON.parse(row.flags ?? '[]'); } catch { /* ignore */ }
+
+      // 사람 라벨 집계 (분류 여부 무관)
+      if (row.human_label === 'human') human_counts.human++;
+      else if (row.human_label === 'ad') human_counts.ad++;
+      else if (row.human_label === 'unsure') human_counts.unsure++;
 
       if (row.rule_low_quality === 1) {
         low_quality++;
@@ -4175,7 +4199,35 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       gpt_judged++;
       const eff = effectiveSuspect(row.ai_suspect, row.body_len ?? 0, flags_parsed);
 
-      // 점수대 분포
+      // humanCorrection 적용: 사람 라벨로 suspect 덮어쓰기
+      let isSuspect;
+      if (humanCorrection) {
+        if (row.human_label === 'ad') {
+          isSuspect = true;
+        } else if (row.human_label === 'human') {
+          isSuspect = false;
+        } else {
+          isSuspect = eff >= suspectThreshold;
+        }
+      } else {
+        isSuspect = eff >= suspectThreshold;
+      }
+
+      // AI 일치율 집계 (기준: effectiveSuspect, 보정 모드 무관하게 항상 순수 AI 기준)
+      const aiIsSuspect = eff >= suspectThreshold;
+      if (row.human_label === 'human' || row.human_label === 'ad') {
+        compared_count++;
+        const humanIsSuspect = row.human_label === 'ad';
+        if (aiIsSuspect === humanIsSuspect) {
+          agree_count++;
+        } else if (aiIsSuspect && !humanIsSuspect) {
+          false_positive++;
+        } else {
+          false_negative++;
+        }
+      }
+
+      // 점수대 분포 (항상 effectiveSuspect 기준)
       for (let i = 0; i < bucketRanges.length; i++) {
         const [lo, hi] = bucketRanges[i];
         if (eff >= lo && eff <= hi) {
@@ -4184,8 +4236,8 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         }
       }
 
-      // 의심 판정 (유효점수 기준)
-      if (eff >= suspectThreshold) {
+      // 의심 판정
+      if (isSuspect) {
         suspect++;
         // 플래그 집계 (의심 행만)
         for (const f of flags_parsed) {
@@ -4205,15 +4257,18 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         reason:        row.reason ?? null,
         review_date:   row.review_date ?? null,
         body_len:      row.body_len ?? 0,
+        human_label:   row.human_label ?? null,
+        human_note:    row.human_note ?? null,
+        is_suspect:    isSuspect,
       });
     }
 
     const denominator  = total_analyzed - low_quality;
     const suspect_rate = denominator > 0 ? suspect / denominator : 0;
 
-    // 5) 의심 리뷰 상위 30건 (유효점수 내림차순)
+    // 의심 리뷰 상위 30건 (유효점수 내림차순)
     const sample_suspect = gptJudgedItems
-      .filter(r => r.ai_suspect >= suspectThreshold)
+      .filter(r => r.is_suspect)
       .sort((a, b) => b.ai_suspect - a.ai_suspect)
       .slice(0, 30)
       .map(r => ({
@@ -4225,15 +4280,27 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         sentiment:     r.sentiment,
         reason:        r.reason,
         review_date:   r.review_date,
+        human_label:   r.human_label,
+        human_note:    r.human_note,
       }));
 
     // pending_all = GPT 미판정 비저품질 건수 (사람추정 + 미분석)
     const unanalyzed = Math.max(0, total_reviews - total_analyzed);
     const pending_all = presumed_human + unanalyzed;
 
+    // agreement 계산 (unsure 제외, human/ad 라벨이 있는 GPT 판정 행만)
+    const agreement = {
+      compared: compared_count,
+      agree:    agree_count,
+      rate:     compared_count > 0 ? agree_count / compared_count : null,
+      false_positive,
+      false_negative,
+    };
+
     return jsonResponse({
       place_name:        placeRow.name ?? '',
       suspect_threshold: suspectThreshold,
+      human_correction:  humanCorrection,
       total_reviews,
       total_analyzed,
       low_quality,
@@ -4246,6 +4313,8 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       distribution,
       flag_breakdown,
       sample_suspect,
+      human_counts,
+      agreement,
     }, 200, cors);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
@@ -4414,6 +4483,20 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
   if (!Number.isFinite(size) || size < 1) size = 30;
   size = Math.min(100, size);
 
+  // 사람 라벨 필터 (human|ad|unsure)
+  const VALID_HUMAN_LABELS = ['human', 'ad', 'unsure'];
+  const humanLabelFilter = urlObj.searchParams.get('humanLabel') ?? null;
+  if (humanLabelFilter !== null && !VALID_HUMAN_LABELS.includes(humanLabelFilter)) {
+    return jsonResponse(
+      { error: 'invalid_humanLabel', message: `humanLabel은 ${VALID_HUMAN_LABELS.join(' | ')} 중 하나여야 합니다` },
+      400,
+      cors
+    );
+  }
+
+  // humanCorrection — suspect 분류 시 사람 라벨 덮어쓰기
+  const humanCorrection = urlObj.searchParams.get('humanCorrection') === 'true';
+
   if (!VALID_BUCKETS.includes(bucket)) {
     return jsonResponse(
       { error: 'invalid_bucket', message: `bucket는 ${VALID_BUCKETS.join(' | ')} 중 하나여야 합니다` },
@@ -4422,10 +4505,9 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
     );
   }
 
-  // effectiveSuspect 가 필요한 버킷: suspect, judged, scoreFilter
-  // presumed_human, low_quality, all(bucket) → SQL 직접 처리 (effectiveSuspect 영향 없음)
+  // effectiveSuspect 가 필요한 버킷: suspect, judged, scoreFilter, humanCorrection
   const hasScoreFilter = scoreMin !== null || scoreMax !== null;
-  const needsEffective = hasScoreFilter || bucket === 'suspect' || bucket === 'judged';
+  const needsEffective = hasScoreFilter || bucket === 'suspect' || bucket === 'judged' || humanLabelFilter !== null || humanCorrection;
 
   const offset = (page - 1) * size;
 
@@ -4443,9 +4525,12 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
           pr.review_date,
           pra.rule_low_quality,
           pra.heuristic_score,
-          length(pr.body) AS body_len
+          length(pr.body) AS body_len,
+          prl.human_label,
+          prl.human_note
         FROM place_review_analysis pra
         LEFT JOIN place_reviews pr ON pr.id = pra.review_id
+        LEFT JOIN place_review_labels prl ON prl.review_id = pra.review_id
         WHERE pra.place_row_id = ? AND pra.ai_suspect IS NOT NULL
       `).bind(placeRowId).all();
 
@@ -4454,17 +4539,29 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         let flags_parsed = [];
         try { flags_parsed = JSON.parse(r.flags ?? '[]'); } catch { /* ignore */ }
         const eff = effectiveSuspect(r.raw_ai_suspect, r.body_len ?? 0, flags_parsed);
-        return { ...r, flags_parsed, eff };
+        // humanCorrection 적용
+        let isSuspect;
+        if (humanCorrection) {
+          if (r.human_label === 'ad') isSuspect = true;
+          else if (r.human_label === 'human') isSuspect = false;
+          else isSuspect = eff >= suspectThreshold;
+        } else {
+          isSuspect = eff >= suspectThreshold;
+        }
+        return { ...r, flags_parsed, eff, isSuspect };
       });
 
       let filtered;
-      if (hasScoreFilter) {
+      if (humanLabelFilter !== null) {
+        // humanLabel 필터: 해당 라벨인 것만
+        filtered = processed.filter(r => r.human_label === humanLabelFilter);
+      } else if (hasScoreFilter) {
         filtered = processed.filter(r =>
           (scoreMin === null || r.eff >= scoreMin) &&
           (scoreMax === null || r.eff <= scoreMax)
         );
       } else if (bucket === 'suspect') {
-        filtered = processed.filter(r => r.eff >= suspectThreshold);
+        filtered = processed.filter(r => r.isSuspect);
       } else {
         // judged: 전부
         filtered = processed;
@@ -4487,6 +4584,8 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         review_date:     r.review_date ?? null,
         rule_low_quality: r.rule_low_quality === 1,
         heuristic_score: r.heuristic_score ?? null,
+        human_label:     r.human_label ?? null,
+        human_note:      r.human_note ?? null,
       }));
 
       return jsonResponse({ total, page, size, items }, 200, cors);
@@ -4508,7 +4607,7 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
     const orderClause = 'pr.review_date DESC NULLS LAST';
 
     const countRow = await env.DB.prepare(
-      `SELECT COUNT(*) AS cnt FROM place_review_analysis pra LEFT JOIN place_reviews pr ON pr.id = pra.review_id WHERE ${whereClause}`
+      `SELECT COUNT(*) AS cnt FROM place_review_analysis pra LEFT JOIN place_reviews pr ON pr.id = pra.review_id LEFT JOIN place_review_labels prl ON prl.review_id = pra.review_id WHERE ${whereClause}`
     ).bind(...binds).first();
     const total = countRow?.cnt ?? 0;
 
@@ -4523,9 +4622,12 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         pr.review_date,
         pra.rule_low_quality,
         pra.heuristic_score,
-        length(pr.body) AS body_len
+        length(pr.body) AS body_len,
+        prl.human_label,
+        prl.human_note
       FROM place_review_analysis pra
       LEFT JOIN place_reviews pr ON pr.id = pra.review_id
+      LEFT JOIN place_review_labels prl ON prl.review_id = pra.review_id
       WHERE ${whereClause}
       ORDER BY ${orderClause}
       LIMIT ? OFFSET ?
@@ -4549,10 +4651,109 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         review_date:     r.review_date ?? null,
         rule_low_quality: r.rule_low_quality === 1,
         heuristic_score: r.heuristic_score ?? null,
+        human_label:     r.human_label ?? null,
+        human_note:      r.human_note ?? null,
       };
     });
 
     return jsonResponse({ total, page, size, items }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+/**
+ * POST /api/places/:id/reviews/:reviewId/label  (researcher 이상)
+ * 사람 검수 라벨 저장(UPSERT) 또는 해제(DELETE).
+ * body: { label: 'human'|'ad'|'unsure'|null, note?: string }
+ */
+async function handleSetReviewLabel(request, env, corsHeaders, placeRowId, reviewId) {
+  const cors = corsHeaders || {};
+
+  // researcher 이상 (admin 포함)
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 존재 + 소유 확인
+  let placeRow;
+  try {
+    placeRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  {
+    const isAdmin = authResult.user.role === 'admin';
+    if (!isAdmin && placeRow.user_id !== authResult.user.id) {
+      return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+    }
+  }
+
+  // body 파싱
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  const VALID_LABELS = ['human', 'ad', 'unsure'];
+  const label = body?.label ?? null;
+  const note = typeof body?.note === 'string' ? body.note.trim().slice(0, 500) : null;
+
+  if (label !== null && !VALID_LABELS.includes(label)) {
+    return jsonResponse(
+      { error: 'invalid_label', message: `label은 ${VALID_LABELS.join(' | ')} 또는 null 이어야 합니다` },
+      400,
+      cors
+    );
+  }
+
+  // 리뷰가 해당 지점 소속인지 확인
+  let reviewRow;
+  try {
+    reviewRow = await env.DB.prepare(
+      'SELECT id FROM place_reviews WHERE id = ? AND place_row_id = ?'
+    ).bind(reviewId, placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!reviewRow) {
+    return jsonResponse({ error: 'review_not_found', message: '해당 리뷰를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  try {
+    if (label === null) {
+      // 라벨 해제 — 행 삭제
+      await env.DB.prepare(
+        'DELETE FROM place_review_labels WHERE review_id = ?'
+      ).bind(reviewId).run();
+
+      return jsonResponse({ ok: true, review_id: reviewId, human_label: null, human_note: null }, 200, cors);
+    }
+
+    // UPSERT
+    const now = new Date().toISOString();
+    await env.DB.prepare(`
+      INSERT INTO place_review_labels (review_id, place_row_id, human_label, human_note, labeled_by, labeled_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(review_id) DO UPDATE SET
+        human_label = excluded.human_label,
+        human_note  = excluded.human_note,
+        labeled_by  = excluded.labeled_by,
+        labeled_at  = excluded.labeled_at
+    `).bind(reviewId, placeRowId, label, note, authResult.user.id, now).run();
+
+    return jsonResponse({ ok: true, review_id: reviewId, human_label: label, human_note: note }, 200, cors);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }

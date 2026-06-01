@@ -323,6 +323,8 @@ function toggleExpandSample(id: string) {
 
 // ─── AI 진단 (Phase 4-2) 타입 ────────────────────────────────────────────────
 
+type HumanLabel = 'human' | 'ad' | 'unsure' | null
+
 interface AiDiagnosisSuspectReview {
   review_id: string
   body: string
@@ -332,11 +334,22 @@ interface AiDiagnosisSuspectReview {
   sentiment: string | null
   reason: string | null
   review_date: string | null
+  human_label?: HumanLabel
+  human_note?: string | null
+}
+
+interface AiDiagnosisAgreement {
+  compared: number
+  agree: number
+  rate: number | null
+  false_positive: number
+  false_negative: number
 }
 
 interface AiDiagnosisResult {
   place_name: string
   suspect_threshold: number
+  human_correction: boolean
   total_reviews: number
   total_analyzed: number
   low_quality: number
@@ -349,6 +362,8 @@ interface AiDiagnosisResult {
   distribution: Record<string, number>
   flag_breakdown: Record<string, number>
   sample_suspect: AiDiagnosisSuspectReview[]
+  human_counts: { human: number; ad: number; unsure: number }
+  agreement: AiDiagnosisAgreement
 }
 
 interface AiReviewItem {
@@ -362,6 +377,8 @@ interface AiReviewItem {
   review_date: string | null
   rule_low_quality: boolean
   heuristic_score: number | null
+  human_label: HumanLabel
+  human_note: string | null
 }
 
 // AI 진단 상태
@@ -398,6 +415,16 @@ const aiReviewsLoadingMore = ref(false)
 const activeBucket = ref<AiBucket>('suspect')
 const activeScoreMin = ref<number | null>(null)
 const activeScoreMax = ref<number | null>(null)
+// 사람 라벨 필터 (null=없음, 'human'|'ad'|'unsure')
+const activeHumanLabel = ref<HumanLabel>(null)
+// 인간 보정 토글
+const humanCorrectionEnabled = ref(false)
+// 라벨 저장 중 (review_id 세트)
+const labelSavingIds = ref<Set<string>>(new Set())
+// 라벨 메모 펼침 (review_id 세트)
+const labelNoteOpenIds = ref<Set<string>>(new Set())
+// 메모 임시 입력값 (review_id → 문자열)
+const labelNoteInputs = ref<Record<string, string>>({})
 
 // 리뷰 본문 펼침 상태
 const expandedDiagnosisIds = ref<Set<string>>(new Set())
@@ -446,6 +473,10 @@ const aiSuspectLevelClass: Record<string, string> = {
 
 // 현재 필터 라벨 (우측 헤더용)
 const aiReviewsFilterLabel = computed(() => {
+  if (activeHumanLabel.value !== null) {
+    const humanLabelMap: Record<string, string> = { human: '사람 라벨', ad: '광고·AI 라벨', unsure: '애매 라벨' }
+    return humanLabelMap[activeHumanLabel.value] ?? activeHumanLabel.value
+  }
   if (activeScoreMin.value !== null || activeScoreMax.value !== null) {
     const lo = activeScoreMin.value ?? 0
     const hi = activeScoreMax.value ?? 100
@@ -782,6 +813,7 @@ async function fetchAiDiagnosis(placeId: number) {
   aiDiagnosis.value = null
   try {
     const params = new URLSearchParams({ suspectThreshold: String(aiDiagnosisThreshold.value) })
+    if (humanCorrectionEnabled.value) params.set('humanCorrection', 'true')
     const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/ai-diagnosis?${params}`, {
       headers: authHeaders(),
     })
@@ -821,7 +853,10 @@ async function fetchAiReviews(placeId: number, { reset = true } = {}) {
       page: String(reset ? 1 : aiReviewsPage.value),
       size: '30',
     })
-    if (activeScoreMin.value !== null || activeScoreMax.value !== null) {
+    if (humanCorrectionEnabled.value) params.set('humanCorrection', 'true')
+    if (activeHumanLabel.value !== null) {
+      params.set('humanLabel', activeHumanLabel.value)
+    } else if (activeScoreMin.value !== null || activeScoreMax.value !== null) {
       if (activeScoreMin.value !== null) params.set('scoreMin', String(activeScoreMin.value))
       if (activeScoreMax.value !== null) params.set('scoreMax', String(activeScoreMax.value))
     } else {
@@ -864,13 +899,103 @@ function setAiBucket(bucket: AiBucket) {
   activeBucket.value = bucket
   activeScoreMin.value = null
   activeScoreMax.value = null
+  activeHumanLabel.value = null
   if (selectedPlace.value) fetchAiReviews(selectedPlace.value.id)
 }
 
 function setAiScoreRange(min: number, max: number) {
   activeScoreMin.value = min
   activeScoreMax.value = max
+  activeHumanLabel.value = null
   if (selectedPlace.value) fetchAiReviews(selectedPlace.value.id)
+}
+
+function setHumanLabelFilter(label: HumanLabel) {
+  // 같은 라벨 다시 클릭 시 해제
+  if (activeHumanLabel.value === label) {
+    activeHumanLabel.value = null
+  } else {
+    activeHumanLabel.value = label
+    activeScoreMin.value = null
+    activeScoreMax.value = null
+  }
+  if (selectedPlace.value) fetchAiReviews(selectedPlace.value.id)
+}
+
+async function toggleHumanCorrection() {
+  humanCorrectionEnabled.value = !humanCorrectionEnabled.value
+  if (selectedPlace.value) {
+    await Promise.all([
+      fetchAiDiagnosis(selectedPlace.value.id),
+      fetchAiReviews(selectedPlace.value.id),
+    ])
+  }
+}
+
+async function saveReviewLabel(reviewId: string, label: HumanLabel, note?: string) {
+  if (!selectedPlace.value) return
+  const saving = new Set(labelSavingIds.value)
+  saving.add(reviewId)
+  labelSavingIds.value = saving
+  try {
+    const res = await fetch(
+      `${WORKER_BASE}/api/places/${selectedPlace.value.id}/reviews/${reviewId}/label`,
+      {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ label, note: note ?? null }),
+      }
+    )
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { message?: string }
+      collectToast.value = { type: 'error', message: body.message ?? `라벨 저장 실패 (${res.status})` }
+      return
+    }
+    const data = await res.json() as { ok: boolean; review_id: string; human_label: HumanLabel; human_note: string | null }
+    // 로컬 즉시 반영
+    const item = aiReviewsItems.value.find(it => it.review_id === reviewId)
+    if (item) {
+      item.human_label = data.human_label
+      item.human_note = data.human_note
+    }
+    // 닫기
+    if (label === null) {
+      const next = new Set(labelNoteOpenIds.value)
+      next.delete(reviewId)
+      labelNoteOpenIds.value = next
+    }
+  } catch (e: unknown) {
+    collectToast.value = { type: 'error', message: e instanceof Error ? e.message : '라벨 저장 중 오류' }
+  } finally {
+    const s = new Set(labelSavingIds.value)
+    s.delete(reviewId)
+    labelSavingIds.value = s
+  }
+}
+
+function toggleLabelNote(reviewId: string) {
+  const next = new Set(labelNoteOpenIds.value)
+  if (next.has(reviewId)) {
+    next.delete(reviewId)
+  } else {
+    next.add(reviewId)
+    // 메모 입력값 초기화 (현재 저장된 값으로)
+    const item = aiReviewsItems.value.find(it => it.review_id === reviewId)
+    if (item && !(reviewId in labelNoteInputs.value)) {
+      labelNoteInputs.value = { ...labelNoteInputs.value, [reviewId]: item.human_note ?? '' }
+    }
+  }
+  labelNoteOpenIds.value = next
+}
+
+function commitLabelNote(reviewId: string) {
+  const item = aiReviewsItems.value.find(it => it.review_id === reviewId)
+  if (!item || item.human_label === null) return
+  const note = labelNoteInputs.value[reviewId] ?? ''
+  saveReviewLabel(reviewId, item.human_label, note)
+  const next = new Set(labelNoteOpenIds.value)
+  next.delete(reviewId)
+  labelNoteOpenIds.value = next
 }
 
 async function loadMoreAiReviews() {
@@ -1286,6 +1411,11 @@ function selectPlace(place: Place) {
   activeBucket.value = 'suspect'
   activeScoreMin.value = null
   activeScoreMax.value = null
+  activeHumanLabel.value = null
+  humanCorrectionEnabled.value = false
+  labelSavingIds.value = new Set()
+  labelNoteOpenIds.value = new Set()
+  labelNoteInputs.value = {}
   expandedDiagnosisIds.value = new Set()
   activeTab.value = 'reviews'
   fetchReviews(place.id)
@@ -3143,6 +3273,7 @@ onUnmounted(() => {
                     <div class="flex items-baseline gap-1.5 shrink-0">
                       <span class="text-2xl font-bold tabular-nums text-gray-900 dark:text-slate-50">{{ Math.round(aiDiagnosis.suspect_rate * 100) }}<span class="text-sm font-normal text-gray-500 dark:text-slate-400">%</span></span>
                       <span class="text-xs font-semibold" :class="aiSuspectLevelClass[aiSuspectLevel]">{{ aiSuspectLevelLabel[aiSuspectLevel] }}</span>
+                      <span v-if="humanCorrectionEnabled" class="text-[10px] text-primary-600 dark:text-primary-400 font-medium">(사람 보정)</span>
                     </div>
                     <p class="text-[11px] text-gray-500 dark:text-slate-400 tabular-nums leading-snug min-w-0">
                       정밀 {{ aiDiagnosis.gpt_judged }}건 중 {{ aiDiagnosis.suspect }}건<br>
@@ -3247,7 +3378,64 @@ onUnmounted(() => {
                     </div>
                   </div>
 
-                  <!-- 5: GPT 분석 버튼 (관리자 전용, 컴팩트) -->
+                  <!-- 5: 사람 검수 섹션 -->
+                  <div class="rounded border border-gray-100 dark:border-slate-700 px-3 py-2 flex flex-col gap-1.5 bg-white dark:bg-slate-800">
+                    <div class="flex items-center justify-between gap-2">
+                      <p class="text-[11px] font-medium text-gray-500 dark:text-slate-400">사람 검수</p>
+                      <!-- 인간 보정 반영 토글 -->
+                      <button
+                        class="flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded transition-colors"
+                        :class="humanCorrectionEnabled
+                          ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 font-medium'
+                          : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-gray-200 dark:hover:bg-slate-600'"
+                        :title="humanCorrectionEnabled ? '인간 보정 적용 중 — 클릭하여 순수 AI로 전환' : '사람 라벨을 suspect 분류에 반영 (클릭)'"
+                        @click="toggleHumanCorrection"
+                      >
+                        <span>인간 보정 반영</span>
+                        <span class="font-bold">{{ humanCorrectionEnabled ? 'ON' : 'OFF' }}</span>
+                      </button>
+                    </div>
+                    <!-- 검수 현황 카운터 (클릭→필터) -->
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <button
+                        class="flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded transition-colors"
+                        :class="activeHumanLabel === 'human'
+                          ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-medium'
+                          : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'"
+                        :title="`사람으로 라벨된 리뷰 ${aiDiagnosis.human_counts.human}건 보기`"
+                        @click="setHumanLabelFilter('human')"
+                      >사람 {{ aiDiagnosis.human_counts.human }}</button>
+                      <button
+                        class="flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded transition-colors"
+                        :class="activeHumanLabel === 'ad'
+                          ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium'
+                          : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'"
+                        :title="`광고·AI로 라벨된 리뷰 ${aiDiagnosis.human_counts.ad}건 보기`"
+                        @click="setHumanLabelFilter('ad')"
+                      >광고·AI {{ aiDiagnosis.human_counts.ad }}</button>
+                      <button
+                        class="flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded transition-colors"
+                        :class="activeHumanLabel === 'unsure'
+                          ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium'
+                          : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'"
+                        :title="`애매로 라벨된 리뷰 ${aiDiagnosis.human_counts.unsure}건 보기`"
+                        @click="setHumanLabelFilter('unsure')"
+                      >애매 {{ aiDiagnosis.human_counts.unsure }}</button>
+                    </div>
+                    <!-- AI 일치율 -->
+                    <div v-if="aiDiagnosis.agreement.compared > 0" class="flex flex-col gap-0.5">
+                      <p class="text-[11px] text-gray-500 dark:text-slate-400 tabular-nums">
+                        검수 {{ aiDiagnosis.agreement.compared }}건 · AI 일치
+                        <span class="font-semibold text-gray-700 dark:text-slate-200">{{ aiDiagnosis.agreement.rate !== null ? Math.round(aiDiagnosis.agreement.rate * 100) : '—' }}%</span>
+                      </p>
+                      <p class="text-[10px] text-gray-400 dark:text-slate-500 tabular-nums">
+                        오탐(사람→광고) {{ aiDiagnosis.agreement.false_positive }} · 누락(광고→놓침) {{ aiDiagnosis.agreement.false_negative }}
+                      </p>
+                    </div>
+                    <p v-else class="text-[11px] text-gray-400 dark:text-slate-500">아직 검수 라벨 없음</p>
+                  </div>
+
+                  <!-- 6: GPT 분석 버튼 (관리자 전용, 컴팩트) -->
                   <div v-if="authStore.isAdmin" class="rounded border border-gray-100 dark:border-slate-700 px-3 py-2 flex flex-col gap-1.5 bg-white dark:bg-slate-800">
                     <p class="text-[11px] font-medium text-gray-500 dark:text-slate-400">GPT 분석 <span class="font-normal text-gray-400 dark:text-slate-500">— 관리자 전용</span></p>
                     <div class="flex flex-wrap gap-1.5">
@@ -3359,6 +3547,7 @@ onUnmounted(() => {
                       v-for="item in aiReviewsItems"
                       :key="item.review_id"
                       class="border border-gray-100 dark:border-slate-700 rounded p-2.5 flex flex-col gap-1.5 bg-white dark:bg-slate-800"
+                      :class="item.human_label === 'human' ? 'border-l-2 border-l-emerald-400' : item.human_label === 'ad' ? 'border-l-2 border-l-red-400' : item.human_label === 'unsure' ? 'border-l-2 border-l-amber-400' : ''"
                     >
                       <!-- 헤더: 점수 배지 + 플래그 + 날짜 -->
                       <div class="flex items-center gap-1.5 flex-wrap">
@@ -3384,6 +3573,12 @@ onUnmounted(() => {
                           class="text-[10px] text-gray-400 dark:text-slate-500 shrink-0"
                           :title="`GPT 원점수 ${item.raw_ai_suspect} → 짧은 리뷰 보정 ${item.ai_suspect}`"
                         >원 {{ item.raw_ai_suspect }}→보정 {{ item.ai_suspect }} (짧은 리뷰)</span>
+                        <!-- 사람 라벨 배지 -->
+                        <span
+                          v-if="item.human_label"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0"
+                          :class="item.human_label === 'human' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : item.human_label === 'ad' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300' : 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300'"
+                        >{{ item.human_label === 'human' ? '사람' : item.human_label === 'ad' ? '광고·AI' : '애매' }}</span>
                         <!-- 감성 -->
                         <span v-if="item.sentiment" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300">
                           {{ item.sentiment === 'positive' ? '긍정' : item.sentiment === 'negative' ? '부정' : '중립' }}
@@ -3406,6 +3601,66 @@ onUnmounted(() => {
                         :class="expandedDiagnosisIds.has(item.review_id) ? '' : 'line-clamp-3'"
                         @click="toggleExpandDiagnosis(item.review_id)"
                       >{{ item.body || '(본문 없음)' }}</p>
+
+                      <!-- 라벨 컨트롤 (researcher 이상) -->
+                      <div class="flex items-center gap-1 flex-wrap pt-0.5 border-t border-gray-50 dark:border-slate-700/60">
+                        <!-- 3개 버튼 -->
+                        <button
+                          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-50"
+                          :class="item.human_label === 'human'
+                            ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-medium'
+                            : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:text-emerald-700 dark:hover:text-emerald-300'"
+                          :disabled="labelSavingIds.has(item.review_id)"
+                          :title="item.human_label === 'human' ? '클릭하면 라벨 해제' : '사람이 작성한 진성 리뷰'"
+                          @click="saveReviewLabel(item.review_id, item.human_label === 'human' ? null : 'human')"
+                        >사람</button>
+                        <button
+                          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-50"
+                          :class="item.human_label === 'ad'
+                            ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium'
+                            : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-700 dark:hover:text-red-300'"
+                          :disabled="labelSavingIds.has(item.review_id)"
+                          :title="item.human_label === 'ad' ? '클릭하면 라벨 해제' : '광고·AI 작성 리뷰'"
+                          @click="saveReviewLabel(item.review_id, item.human_label === 'ad' ? null : 'ad')"
+                        >광고·AI</button>
+                        <button
+                          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-50"
+                          :class="item.human_label === 'unsure'
+                            ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium'
+                            : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 hover:text-amber-700 dark:hover:text-amber-300'"
+                          :disabled="labelSavingIds.has(item.review_id)"
+                          :title="item.human_label === 'unsure' ? '클릭하면 라벨 해제' : '판단하기 애매한 리뷰'"
+                          @click="saveReviewLabel(item.review_id, item.human_label === 'unsure' ? null : 'unsure')"
+                        >애매</button>
+                        <!-- 메모 토글 -->
+                        <button
+                          class="ml-1 flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 transition-colors"
+                          :class="labelNoteOpenIds.has(item.review_id) ? 'text-gray-600 dark:text-slate-300' : ''"
+                          :title="item.human_note ? `메모: ${item.human_note}` : '메모 추가'"
+                          @click="toggleLabelNote(item.review_id)"
+                        >
+                          <UIcon name="i-heroicons-pencil-square" class="w-3 h-3" />
+                          <span v-if="item.human_note && !labelNoteOpenIds.has(item.review_id)" class="max-w-[80px] truncate">{{ item.human_note }}</span>
+                        </button>
+                        <!-- 저장 중 스피너 -->
+                        <UIcon v-if="labelSavingIds.has(item.review_id)" name="i-heroicons-arrow-path" class="w-3 h-3 text-gray-400 dark:text-slate-500 animate-spin ml-auto shrink-0" />
+                      </div>
+                      <!-- 메모 입력 (펼침 시) -->
+                      <div v-if="labelNoteOpenIds.has(item.review_id)" class="flex items-center gap-1">
+                        <input
+                          v-model="labelNoteInputs[item.review_id]"
+                          type="text"
+                          placeholder="메모 (선택)"
+                          maxlength="200"
+                          class="flex-1 min-w-0 text-[11px] px-2 py-1 rounded border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-gray-700 dark:text-slate-300 placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-primary-400"
+                          @keydown.enter="commitLabelNote(item.review_id)"
+                          @keydown.escape="toggleLabelNote(item.review_id)"
+                        />
+                        <button
+                          class="text-[10px] px-1.5 py-1 rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50 transition-colors"
+                          @click="commitLabelNote(item.review_id)"
+                        >저장</button>
+                      </div>
                     </div>
 
                     <!-- 더 보기 -->
