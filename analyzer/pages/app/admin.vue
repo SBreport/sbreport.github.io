@@ -546,62 +546,62 @@ onMounted(() => {
       <!-- Success: 통합 표 -->
       <template v-else>
         <div class="flex-1 min-h-0 overflow-auto">
-          <table class="w-full text-sm border-collapse">
+          <table class="w-full text-xs border-collapse">
             <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-slate-900">
-              <tr class="h-9">
-                <!-- 사용자 -->
-                <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700">
+              <tr class="h-8">
+                <!-- 사용자: 남은 공간 차지 -->
+                <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 min-w-0">
                   <button class="flex items-center gap-1 hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('name')">
                     사용자
                     <UIcon :name="sortIcon('name')" class="w-3 h-3" />
                   </button>
                 </th>
                 <!-- 상태 -->
-                <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-20">
+                <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">
                   <button class="flex items-center gap-1 hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('status')">
                     상태
                     <UIcon :name="sortIcon('status')" class="w-3 h-3" />
                   </button>
                 </th>
-                <!-- 역할 -->
-                <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-44">
+                <!-- 역할 (select로 변경, 정렬 버튼 유지) -->
+                <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-24">
                   <button class="flex items-center gap-1 hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('role')">
                     역할
                     <UIcon :name="sortIcon('role')" class="w-3 h-3" />
                   </button>
                 </th>
                 <!-- 수집 -->
-                <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-16">
+                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">
                   <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('collect_count')">
                     수집
                     <UIcon :name="sortIcon('collect_count')" class="w-3 h-3" />
                   </button>
                 </th>
-                <!-- 예시 생성 -->
-                <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-16">
+                <!-- 예시 -->
+                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">
                   <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('sample_count')">
                     예시
                     <UIcon :name="sortIcon('sample_count')" class="w-3 h-3" />
                   </button>
                 </th>
                 <!-- 리포트 -->
-                <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-16">
+                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">
                   <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('report_count')">
                     리포트
                     <UIcon :name="sortIcon('report_count')" class="w-3 h-3" />
                   </button>
                 </th>
                 <!-- API 비용 -->
-                <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-24">
+                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-20">
                   <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('total_cost_usd')">
-                    API 비용
+                    API비용
                     <UIcon :name="sortIcon('total_cost_usd')" class="w-3 h-3" />
                   </button>
                 </th>
                 <!-- 메모 -->
-                <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-40">메모</th>
+                <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-32">메모</th>
                 <!-- 작업 -->
-                <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-24">작업</th>
+                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">작업</th>
               </tr>
             </thead>
             <tbody>
@@ -612,8 +612,8 @@ onMounted(() => {
                 :class="isHighCost(row) ? 'bg-orange-50/40 dark:bg-orange-950/20' : ''"
               >
                 <!-- 사용자: picture + name + email -->
-                <td class="px-3 py-2 align-middle">
-                  <div class="flex items-center gap-2">
+                <td class="px-2 py-1.5 align-middle max-w-0">
+                  <div class="flex items-center gap-1.5">
                     <img
                       v-if="row.picture"
                       :src="row.picture"
@@ -621,7 +621,7 @@ onMounted(() => {
                       class="w-6 h-6 rounded-full shrink-0 object-cover bg-gray-100 dark:bg-slate-700"
                     />
                     <span v-else class="w-6 h-6 rounded-full shrink-0 bg-gray-200 dark:bg-slate-700 flex items-center justify-center">
-                      <UIcon name="i-heroicons-user" class="w-3.5 h-3.5 text-gray-400 dark:text-slate-500" />
+                      <UIcon name="i-heroicons-user" class="w-3 h-3 text-gray-400 dark:text-slate-500" />
                     </span>
                     <div class="flex flex-col leading-snug min-w-0">
                       <span class="text-xs font-medium text-gray-900 dark:text-slate-100 truncate">{{ row.name || '—' }}</span>
@@ -631,58 +631,55 @@ onMounted(() => {
                 </td>
 
                 <!-- 상태 뱃지 -->
-                <td class="px-3 py-2 align-middle whitespace-nowrap">
+                <td class="px-2 py-1.5 align-middle whitespace-nowrap">
                   <UBadge v-if="row.status === 'approved'" label="승인" color="success" variant="subtle" size="sm" />
                   <UBadge v-else-if="row.status === 'pending'" label="대기" color="warning" variant="subtle" size="sm" />
                   <UBadge v-else-if="row.status === 'suspended'" label="정지" color="error" variant="subtle" size="sm" />
                 </td>
 
-                <!-- 역할 버튼 그룹 -->
-                <td class="px-3 py-2 align-middle whitespace-nowrap">
-                  <!-- 본인(admin) 행: 강등 비활성 -->
-                  <div v-if="row.id === authStore.user?.id" class="flex items-center gap-1">
-                    <span class="text-[10px] text-gray-400 dark:text-slate-500">(본인)</span>
-                    <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950 text-[10px] text-amber-700 dark:text-amber-400 font-medium">관리자</span>
-                  </div>
-                  <!-- 다른 사용자: 역할 버튼 그룹 -->
-                  <div v-else class="flex items-center gap-1">
-                    <button
-                      v-for="[val, lbl, lightCls, darkCls] in [
-                        ['user', '일반', 'bg-gray-100 text-gray-600 border-gray-300', 'dark:bg-slate-700 dark:text-slate-300 dark:border-slate-500'],
-                        ['researcher', '연구원', 'bg-blue-50 text-blue-700 border-blue-300', 'dark:bg-blue-950 dark:text-blue-400 dark:border-blue-700'],
-                        ['admin', '관리자', 'bg-amber-50 text-amber-700 border-amber-300', 'dark:bg-amber-950 dark:text-amber-400 dark:border-amber-700'],
-                      ] as const"
-                      :key="val"
-                      class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors whitespace-nowrap border"
-                      :class="row.role === val
-                        ? [lightCls, darkCls]
-                        : 'bg-white dark:bg-slate-800 text-gray-400 dark:text-slate-500 border-gray-200 dark:border-slate-600 hover:border-gray-400 dark:hover:border-slate-400 hover:text-gray-600 dark:hover:text-slate-300'"
+                <!-- 역할: select 드롭다운 -->
+                <td class="px-2 py-1.5 align-middle">
+                  <!-- 본인(admin) 행: 변경 불가 표시 -->
+                  <span v-if="row.id === authStore.user?.id" class="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400">
+                    <span>관리자</span><span class="text-gray-300 dark:text-slate-600">(본인)</span>
+                  </span>
+                  <!-- 다른 사용자: select -->
+                  <div v-else class="relative">
+                    <select
+                      :value="row.role"
                       :disabled="roleLoading[row.id]"
-                      @click="changeRole(row, val)"
+                      class="h-7 w-full rounded border text-[11px] px-1.5 pr-5 appearance-none cursor-pointer bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-slate-300 hover:border-gray-400 dark:hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                      @change="(e) => changeRole(row, (e.target as HTMLSelectElement).value as 'user' | 'researcher' | 'admin')"
                     >
-                      <UIcon v-if="roleLoading[row.id] && row.role !== val" name="i-heroicons-arrow-path" class="w-2.5 h-2.5 animate-spin inline" />
-                      {{ lbl }}
-                    </button>
+                      <option value="user">일반</option>
+                      <option value="researcher">연구원</option>
+                      <option value="admin">관리자</option>
+                    </select>
+                    <UIcon
+                      v-if="roleLoading[row.id]"
+                      name="i-heroicons-arrow-path"
+                      class="w-3 h-3 animate-spin absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
+                    />
                   </div>
                 </td>
 
                 <!-- 수집 -->
-                <td class="px-3 py-2 align-middle text-right text-xs tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
+                <td class="px-2 py-1.5 align-middle text-right tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
                   {{ row.has_activity ? row.collect_count.toLocaleString() : '—' }}
                 </td>
 
                 <!-- 예시 생성 -->
-                <td class="px-3 py-2 align-middle text-right text-xs tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
+                <td class="px-2 py-1.5 align-middle text-right tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
                   {{ row.has_activity ? row.sample_count.toLocaleString() : '—' }}
                 </td>
 
                 <!-- 리포트 -->
-                <td class="px-3 py-2 align-middle text-right text-xs tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
+                <td class="px-2 py-1.5 align-middle text-right tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
                   {{ row.has_activity ? row.report_count.toLocaleString() : '—' }}
                 </td>
 
                 <!-- API 비용 -->
-                <td class="px-3 py-2 align-middle text-right text-xs tabular-nums font-mono whitespace-nowrap"
+                <td class="px-2 py-1.5 align-middle text-right tabular-nums font-mono whitespace-nowrap"
                   :class="isHighCost(row)
                     ? 'text-orange-600 dark:text-orange-400 font-semibold'
                     : row.has_activity
@@ -701,13 +698,13 @@ onMounted(() => {
                 </td>
 
                 <!-- 메모 셀 -->
-                <td class="px-3 py-1.5 align-middle min-w-36 max-w-48">
+                <td class="px-2 py-1.5 align-middle w-32 max-w-32">
                   <!-- 편집 모드 -->
                   <div v-if="getMemo(row.id).editing" class="flex items-center gap-1">
                     <UInput
                       :model-value="getMemo(row.id).draft"
                       size="xs"
-                      placeholder="메모 입력..."
+                      placeholder="메모..."
                       class="flex-1 min-w-0"
                       :disabled="getMemo(row.id).saving"
                       @update:model-value="val => memoState[row.id] = { ...getMemo(row.id), draft: String(val) }"
@@ -718,13 +715,13 @@ onMounted(() => {
                   </div>
                   <!-- 표시 모드 -->
                   <button v-else class="w-full text-left group" @click="startEditMemo(row)">
-                    <span v-if="row.admin_memo" class="text-[10px] text-gray-600 dark:text-slate-400 group-hover:text-gray-900 dark:group-hover:text-slate-100 line-clamp-2">{{ row.admin_memo }}</span>
+                    <span v-if="row.admin_memo" class="text-[10px] text-gray-600 dark:text-slate-400 group-hover:text-gray-900 dark:group-hover:text-slate-100 truncate block">{{ row.admin_memo }}</span>
                     <span v-else class="text-[10px] text-gray-300 dark:text-slate-600 group-hover:text-gray-400 dark:group-hover:text-slate-500">메모 추가</span>
                   </button>
                 </td>
 
                 <!-- 작업 버튼 -->
-                <td class="px-3 py-2 align-middle text-right whitespace-nowrap">
+                <td class="px-2 py-1.5 align-middle text-right whitespace-nowrap">
                   <UBadge v-if="row.role === 'admin'" label="관리자" color="neutral" variant="outline" size="sm" />
                   <UButton
                     v-else-if="row.status === 'pending'"
