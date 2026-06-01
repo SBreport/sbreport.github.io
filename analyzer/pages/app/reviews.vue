@@ -240,7 +240,7 @@ interface ReviewSample {
   body: string
   length: 'short' | 'medium' | 'long'
   tone: 'friendly' | 'polite' | 'emotional' | 'plain'
-  focus: 'taste' | 'service' | 'mood' | 'price' | 'revisit'
+  focus: 'outcome' | 'service' | 'space' | 'price' | 'revisit' | string  // string: 구 데이터(taste/mood) 호환
   model?: string
   created_at?: string
 }
@@ -290,7 +290,7 @@ const placeUsageStatus = ref<LoadStatus>('idle')
 // enum → 한글 매핑
 const lengthLabel: Record<string, string> = { short: '한줄', medium: '중간', long: '장문' }
 const toneLabel: Record<string, string> = { friendly: '친근', polite: '정중', emotional: '감성', plain: '담백' }
-const focusLabel: Record<string, string> = { taste: '맛·품질', service: '서비스', mood: '분위기', price: '가격', revisit: '재방문' }
+const focusLabel: Record<string, string> = { outcome: '결과·효과', service: '응대·서비스', space: '시설·분위기', price: '가격·혜택', revisit: '재방문·추천', taste: '맛·품질', mood: '분위기' }
 
 // ─── 신규 리뷰 판별 (cron 자동 수집으로 처음 적재된 리뷰만 신규로 표시) ─────
 
@@ -1820,23 +1820,23 @@ onUnmounted(() => {
           <!-- ══ 탭 1: 리뷰 ══════════════════════════════════════════ -->
           <div v-show="activeTab === 'reviews'" class="flex-1 min-h-0 flex flex-col">
 
-            <!-- KPI 4카드 compact (shrink-0) -->
+            <!-- KPI 4카드 (shrink-0) — [통계·AI] 탭과 동일 규격 -->
             <div v-if="statsStatus === 'done' && placeStats" class="shrink-0 flex items-stretch divide-x divide-gray-100 border-b border-gray-100">
-              <div class="flex items-center gap-2 px-3 py-1.5 min-w-0 flex-1">
-                <span class="text-xs text-gray-400 whitespace-nowrap">저장</span>
-                <span class="text-sm font-semibold tabular-nums text-gray-800">{{ placeStats.stored_count.toLocaleString('ko-KR') }}</span>
+              <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                <span class="text-xs text-gray-400 whitespace-nowrap">저장 리뷰</span>
+                <span class="text-base font-semibold tabular-nums text-gray-800">{{ placeStats.stored_count.toLocaleString('ko-KR') }}</span>
               </div>
-              <div class="flex items-center gap-2 px-3 py-1.5 min-w-0 flex-1">
+              <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
                 <span class="text-xs text-gray-400 whitespace-nowrap">답글률</span>
-                <span class="text-sm font-semibold tabular-nums text-gray-800">{{ (placeStats.reply_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
+                <span class="text-base font-semibold tabular-nums text-gray-800">{{ (placeStats.reply_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
               </div>
-              <div class="flex items-center gap-2 px-3 py-1.5 min-w-0 flex-1">
-                <span class="text-xs text-gray-400 whitespace-nowrap">사진율</span>
-                <span class="text-sm font-semibold tabular-nums text-gray-800">{{ (placeStats.photo_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
+              <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                <span class="text-xs text-gray-400 whitespace-nowrap">사진첨부율</span>
+                <span class="text-base font-semibold tabular-nums text-gray-800">{{ (placeStats.photo_rate * 100).toFixed(1) }}<span class="text-xs font-normal text-gray-400">%</span></span>
               </div>
-              <div class="flex items-center gap-2 px-3 py-1.5 min-w-0 flex-1">
-                <span class="text-xs text-gray-400 whitespace-nowrap">서버 총</span>
-                <span class="text-sm font-semibold tabular-nums text-gray-800">{{ placeStats.total_server != null ? placeStats.total_server.toLocaleString('ko-KR') : '—' }}</span>
+              <div class="flex flex-col items-center justify-center px-4 py-2 min-w-0 flex-1 gap-0.5">
+                <span class="text-xs text-gray-400 whitespace-nowrap">서버 총 리뷰</span>
+                <span class="text-base font-semibold tabular-nums text-gray-800">{{ placeStats.total_server != null ? placeStats.total_server.toLocaleString('ko-KR') : '—' }}</span>
               </div>
             </div>
             <div v-else-if="statsStatus === 'loading'" class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 border-b border-gray-100">
@@ -2042,16 +2042,17 @@ onUnmounted(() => {
                 <span class="text-xs text-gray-400">{{ reportGenerating ? 'AI 리포트 생성 중 (수 초 소요)...' : 'AI 인사이트 불러오는 중...' }}</span>
               </div>
               <!-- Empty -->
-              <div v-else-if="reportStatus === 'empty'" class="flex items-center justify-between px-3 py-2.5">
-                <div class="flex items-center gap-1.5 min-w-0">
-                  <UIcon name="i-heroicons-sparkles" class="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                  <span class="text-xs text-gray-400">AI 인사이트 리포트가 없습니다.</span>
+              <div v-else-if="reportStatus === 'empty'" class="flex flex-col items-center justify-center gap-3 px-4 py-8">
+                <UIcon name="i-heroicons-sparkles" class="w-8 h-8 text-gray-300" />
+                <div class="flex flex-col items-center gap-1">
+                  <span class="text-sm font-medium text-gray-500">AI 인사이트 리포트가 없습니다</span>
+                  <span class="text-xs text-gray-400">수집된 리뷰를 바탕으로 AI가 강점·개선점을 분석합니다</span>
                 </div>
                 <UButton
                   label="리포트 생성"
-                  size="xs"
+                  size="sm"
                   color="primary"
-                  variant="soft"
+                  variant="solid"
                   icon="i-heroicons-sparkles"
                   :disabled="reportGenerating"
                   @click="selectedPlace && generateReport(selectedPlace.id)"
@@ -2214,48 +2215,28 @@ onUnmounted(() => {
           <!-- ══ /탭 2: 통계 · AI 인사이트 ════════════════════════════ -->
 
           <!-- ══ 탭 3: 예시 생성 (관리자 전용) ════════════════════════ -->
-          <div v-if="authStore.isAdmin" v-show="activeTab === 'samples'" class="flex-1 min-h-0 overflow-y-auto">
-            <div class="flex flex-col divide-y divide-gray-100">
+          <div v-if="authStore.isAdmin" v-show="activeTab === 'samples'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
 
-              <!-- 생성 컨트롤 헤더 -->
-              <div class="flex items-center justify-between px-3 py-2 bg-gray-50">
+            <!-- 탭 상단 고정 영역 (shrink-0) -->
+            <div class="shrink-0 flex flex-col divide-y divide-gray-100 border-b border-gray-100 bg-gray-50">
+              <!-- 타이틀 행 -->
+              <div class="flex items-center justify-between px-3 py-2">
                 <div class="flex items-center gap-1.5">
                   <UIcon name="i-heroicons-beaker" class="w-3.5 h-3.5 text-gray-500 shrink-0" />
                   <span class="text-xs font-medium text-gray-700">리뷰 예시 생성</span>
                   <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap">AI 합성·연구용</span>
                 </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <span class="text-xs text-gray-400">개수</span>
-                  <input
-                    v-model.number="sampleCount"
-                    type="number"
-                    min="1"
-                    max="30"
-                    class="w-12 px-1.5 py-0.5 text-xs border border-gray-200 rounded text-center tabular-nums focus:outline-none focus:border-primary-400"
-                    :disabled="samplesGenerating"
-                  />
-                  <UButton
-                    label="예시 생성"
-                    size="xs"
-                    color="primary"
-                    variant="soft"
-                    icon="i-heroicons-sparkles"
-                    :loading="samplesGenerating"
-                    :disabled="samplesGenerating"
-                    @click="selectedPlace && generateSamples(selectedPlace.id)"
-                  />
-                  <UButton
-                    v-if="samples.length > 0"
-                    label="CSV"
-                    size="xs"
-                    color="neutral"
-                    variant="outline"
-                    icon="i-heroicons-arrow-down-tray"
-                    @click="exportSamplesCsv"
-                  />
-                </div>
+                <!-- 결과 있을 때만 CSV 노출 -->
+                <UButton
+                  v-if="samples.length > 0"
+                  label="CSV"
+                  size="xs"
+                  color="neutral"
+                  variant="outline"
+                  icon="i-heroicons-arrow-down-tray"
+                  @click="exportSamplesCsv"
+                />
               </div>
-
               <!-- 비용 표시 (옵셔널) -->
               <div v-if="samplesUsage || placeUsage" class="flex items-center gap-3 px-3 py-1.5 flex-wrap">
                 <span v-if="samplesUsage" class="text-[10px] text-gray-400 tabular-nums">
@@ -2268,6 +2249,10 @@ onUnmounted(() => {
                   </template>
                 </span>
               </div>
+            </div>
+
+            <!-- 본문 스크롤 영역 (flex-1 min-h-0) -->
+            <div class="flex-1 min-h-0 overflow-y-auto">
 
               <!-- 생성 중 -->
               <div v-if="samplesStatus === 'generating' || samplesGenerating" class="flex items-center gap-1.5 px-3 py-2.5">
@@ -2285,30 +2270,79 @@ onUnmounted(() => {
                 <span class="text-xs text-red-500">{{ samplesError }}</span>
                 <button class="text-xs text-primary-600 hover:text-primary-800 transition-colors ml-1" @click="selectedPlace && fetchSamples(selectedPlace.id)">재시도</button>
               </div>
-              <!-- Empty -->
-              <div v-else-if="samplesStatus === 'empty' || samplesStatus === 'idle'" class="flex items-center gap-1.5 px-3 py-2.5">
-                <UIcon name="i-heroicons-document-text" class="w-3.5 h-3.5 text-gray-300 shrink-0" />
-                <span class="text-xs text-gray-400">아직 생성된 예시가 없습니다. 위 "예시 생성" 버튼을 누르세요.</span>
+              <!-- Empty: 중앙 유도 UI (생성 컨트롤 포함) -->
+              <div v-else-if="samplesStatus === 'empty' || samplesStatus === 'idle'" class="flex flex-col items-center justify-center gap-4 px-4 py-10">
+                <UIcon name="i-heroicons-document-text" class="w-8 h-8 text-gray-300" />
+                <div class="flex flex-col items-center gap-1">
+                  <span class="text-sm font-medium text-gray-500">아직 생성된 예시가 없습니다</span>
+                  <span class="text-xs text-gray-400">이 지점의 실제 리뷰를 분석해 자연스러운 예시를 생성합니다</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-gray-500">개수</span>
+                  <input
+                    v-model.number="sampleCount"
+                    type="number"
+                    min="1"
+                    max="30"
+                    class="w-14 px-2 py-1 text-sm border border-gray-200 rounded text-center tabular-nums focus:outline-none focus:border-primary-400"
+                    :disabled="samplesGenerating"
+                  />
+                  <UButton
+                    label="예시 생성"
+                    size="sm"
+                    color="primary"
+                    variant="solid"
+                    icon="i-heroicons-sparkles"
+                    :loading="samplesGenerating"
+                    :disabled="samplesGenerating"
+                    @click="selectedPlace && generateSamples(selectedPlace.id)"
+                  />
+                </div>
               </div>
-              <!-- Success: 카드 리스트 -->
+              <!-- Success: 카드 리스트 + 하단 생성 컨트롤 -->
               <template v-else-if="samplesStatus === 'done' && samples.length > 0">
-                <div
-                  v-for="sample in samples"
-                  :key="sample.id"
-                  class="flex items-start gap-2 px-3 py-2 hover:bg-gray-50 transition-colors group"
-                >
-                  <p class="flex-1 min-w-0 text-xs text-gray-800 leading-relaxed">{{ sample.body }}</p>
-                  <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-                    <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600 whitespace-nowrap">{{ lengthLabel[sample.length] ?? sample.length }}</span>
-                    <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700 whitespace-nowrap">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
-                    <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700 whitespace-nowrap">{{ focusLabel[sample.focus] ?? sample.focus }}</span>
-                    <button
-                      class="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 p-0.5 rounded text-gray-400 hover:text-gray-700"
-                      title="본문 복사"
-                      @click="copySampleBody(sample.body)"
-                    >
-                      <UIcon name="i-heroicons-clipboard-document" class="w-3.5 h-3.5" />
-                    </button>
+                <!-- 추가 생성 컨트롤 (결과 상단) -->
+                <div class="flex items-center justify-center gap-2 px-3 py-2 border-b border-gray-100 bg-white">
+                  <span class="text-xs text-gray-500">개수</span>
+                  <input
+                    v-model.number="sampleCount"
+                    type="number"
+                    min="1"
+                    max="30"
+                    class="w-14 px-2 py-1 text-sm border border-gray-200 rounded text-center tabular-nums focus:outline-none focus:border-primary-400"
+                    :disabled="samplesGenerating"
+                  />
+                  <UButton
+                    label="예시 생성"
+                    size="sm"
+                    color="primary"
+                    variant="solid"
+                    icon="i-heroicons-sparkles"
+                    :loading="samplesGenerating"
+                    :disabled="samplesGenerating"
+                    @click="selectedPlace && generateSamples(selectedPlace.id)"
+                  />
+                </div>
+                <!-- 카드 리스트 (max-width로 사시모드 해소) -->
+                <div class="flex flex-col divide-y divide-gray-100 max-w-2xl mx-auto w-full">
+                  <div
+                    v-for="sample in samples"
+                    :key="sample.id"
+                    class="flex items-start gap-2 px-3 py-2.5 hover:bg-gray-50 transition-colors group"
+                  >
+                    <p class="flex-1 min-w-0 text-xs text-gray-800 leading-relaxed">{{ sample.body }}</p>
+                    <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-[10px] text-gray-600 whitespace-nowrap">{{ lengthLabel[sample.length] ?? sample.length }}</span>
+                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-[10px] text-blue-700 whitespace-nowrap">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
+                      <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] text-emerald-700 whitespace-nowrap">{{ focusLabel[sample.focus] ?? sample.focus }}</span>
+                      <button
+                        class="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 p-0.5 rounded text-gray-400 hover:text-gray-700"
+                        title="본문 복사"
+                        @click="copySampleBody(sample.body)"
+                      >
+                        <UIcon name="i-heroicons-clipboard-document" class="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </template>

@@ -2723,7 +2723,7 @@ async function verifyJwt(token, secret) {
 /** 스타일 축 정의 */
 const SAMPLE_LENGTHS = ['short', 'medium', 'long'];
 const SAMPLE_TONES   = ['friendly', 'polite', 'emotional', 'plain'];
-const SAMPLE_FOCUSES = ['taste', 'service', 'mood', 'price', 'revisit'];
+const SAMPLE_FOCUSES = ['outcome', 'service', 'space', 'price', 'revisit'];
 
 /** few-shot 표본 최대 건수 */
 const SAMPLE_FEW_SHOT_SIZE = 25;
@@ -2812,37 +2812,63 @@ async function callOpenAIForSamples(env, { placeName, businessType, factPool, fe
   const styleLine = (s, i) =>
     `${i + 1}번: length=${s.length} / tone=${s.tone} / focus=${s.focus}`;
 
-  const systemPrompt = `너는 그 업체 실제 리뷰를 근거로, 그 업체에 실제로 존재하는 정보만 담은 자연스러운 한국어 리뷰 예시를 생성한다. 연구용 합성 데이터이며 관리자 전용이다.
+  const systemPrompt = `너는 실제 방문자가 직접 쓴 것 같은 한국어 리뷰를 생성한다. 광고스럽거나 AI가 쓴 티가 나면 실패다. 연구용 합성 데이터이며 관리자 전용이다.
 
-규칙:
-1. fact pool(허용 소재) 목록에 없는 메뉴·상품·서비스·장소를 지어내지 말 것. 불확실하면 "음식이 맛있어요" 같은 일반적 표현 사용.
-2. 업종(business_type)·업체명 맥락을 지킬 것. 고깃집에 사과 후기 같은 소재 혼입 금지.
-3. 실제 이용자가 쓴 것처럼 자연스럽게. 과장·광고체 금지.
-4. 각 항목을 지정된 length/tone/focus에 맞게 작성:
-   - length: short=2~3문장, medium=4~6문장, long=7~10문장
-   - tone: friendly=친근·구어체, polite=존댓말·정중, emotional=감성적·여운, plain=담담·사실 위주
-   - focus: taste=맛·메뉴, service=서비스·직원, mood=분위기·인테리어, price=가격·가성비, revisit=재방문·추천
-5. 출력은 반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }
-6. 표본 리뷰와 완전히 동일한 문장 복사 금지. 소재·톤·맥락은 참고해도 됨.`;
+[절대 금지]
+- 본문에 업체 이름·지점명을 절대 쓰지 마라. 실제 방문자는 자기 리뷰에 가게 풀네임을 안 쓴다. 지칭이 필요하면 "여기", "이곳", "이 병원", "이 집" 정도만 사용.
+- "친절했습니다", "꼼꼼하게", "안심이 됐습니다", "만족스러웠습니다" 같은 추상 칭찬만 나열 금지. 반드시 아래 fact pool의 구체 항목 1~2개를 자연스럽게 녹여라.
+- 광고체·홍보체 문장("강력 추천!", "최고의 선택!") 금지.
+- 별점·평점 언급 금지(네이버 별점 폐지됨).
+- 모든 예시가 동일한 구조나 문장 패턴으로 시작/끝나지 않게 다양하게.
+
+[구체성 필수]
+fact pool(허용 소재)에 있는 구체 항목(시술명, 메뉴명, 직원 호칭, 특징어 등)을 1~2개 자연스럽게 녹여라. fact pool에 없는 메뉴·상품·시술명을 지어내지 말 것.
+
+[실제 말투 모사]
+아래 제공되는 실제 리뷰 예시들의 어투·문장 호흡·구어체를 모사하라. 실제 사람은:
+- 한두 가지에 집중하고 나머지는 생략한다
+- 구어체를 쓴다 ("~했어요", "~더라구요", "~인 것 같아요", "~거 같음")
+- 가끔 짧게 끊거나 말이 완결되지 않기도 한다
+- 문장이 너무 매끄럽지 않고 날것이다
+
+[길이 엄수]
+- short: 1문장(40자 내외). 딱 한 마디.
+- medium: 2~3문장. 핵심 + 간단한 부연.
+- long: 5문장 이상. 여러 측면을 자연스럽게 풀어냄.
+
+[focus 정의 — 지정된 focus 측면을 중심으로 작성]
+- outcome: 핵심 경험·결과. 식당=음식 맛, 병원=시술 결과·효과, 카페=음료·디저트
+- service: 직원 응대·상담·친절
+- space: 시설·청결·분위기·인테리어
+- price: 가격·가성비·이벤트·혜택
+- revisit: 재방문 의사·주변 추천
+
+[업종 맥락 유지]
+업종(business_type) 맥락을 지킬 것. 병원 리뷰에 음식 맛 언급, 식당 리뷰에 시술 언급 같은 소재 혼입 금지.
+
+[출력 형식]
+반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }
+표본 리뷰와 완전히 동일한 문장 복사 금지. 소재·톤·맥락은 참고 가능.`;
 
   const factPoolText = factPool.length > 0
-    ? `허용 소재(fact pool): ${factPool.join(', ')}`
-    : '허용 소재: (리뷰 본문 없음 — 업종 일반 상식만 사용)';
+    ? `[허용 소재(fact pool) — 본문에 자연스럽게 녹일 수 있는 실제 소재 목록]\n${factPool.join(', ')}`
+    : '[허용 소재(fact pool)]\n(리뷰 본문 없음 — 업종 일반 상식 범위 내에서만 작성)';
 
   const fewShotText = fewShotReviews.length > 0
-    ? `--- 실제 리뷰 표본 (톤·소재 참고용) ---\n${fewShotReviews.map((r, i) => `[${i + 1}] ${r}`).join('\n')}`
-    : '(표본 리뷰 없음)';
+    ? `[실제 리뷰 예시 — 어투·문장 호흡·구어체 참고용. 문장 그대로 복사 금지]\n${fewShotReviews.map((r, i) => `(${i + 1}) ${r}`).join('\n')}`
+    : '[실제 리뷰 예시: 없음]';
 
   const stylesText = styles.map(styleLine).join('\n');
 
-  const userPrompt = `업체명: ${placeName}
+  const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 직접 쓰지 말 것]
+업체명: ${placeName}
 업종: ${businessType || '미분류'}
 
 ${factPoolText}
 
 ${fewShotText}
 
---- 생성할 리뷰 목록 (각 스타일에 맞게 작성) ---
+[생성할 리뷰 목록]
 ${stylesText}
 
 위 ${styles.length}개 리뷰를 생성해서 JSON으로 응답하시오.`;
@@ -2857,7 +2883,7 @@ ${stylesText}
       { role: 'system', content: systemPrompt },
       { role: 'user',   content: userPrompt },
     ],
-    temperature: 0.7,
+    temperature: 0.9,
     max_completion_tokens: maxTokens,
   };
 
