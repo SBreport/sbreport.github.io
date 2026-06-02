@@ -2379,17 +2379,7 @@ onUnmounted(() => {
                 : 'border-transparent text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
               @click="activeTab = 'stats'"
             >
-              통계 · AI 인사이트
-            </button>
-            <button
-              v-if="authStore.isResearcher"
-              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
-              :class="activeTab === 'samples'
-                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                : 'border-transparent text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
-              @click="activeTab = 'samples'"
-            >
-              예시 생성
+              통계
             </button>
             <button
               v-if="authStore.isResearcher"
@@ -2400,6 +2390,16 @@ onUnmounted(() => {
               @click="activeTab = 'ai-diagnosis'"
             >
               AI 진단
+            </button>
+            <button
+              v-if="authStore.isResearcher"
+              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+              :class="activeTab === 'samples'
+                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                : 'border-transparent text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
+              @click="activeTab = 'samples'"
+            >
+              예시 생성
             </button>
             <button
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
