@@ -4144,11 +4144,13 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
     const allRows = analysisRows ?? [];
 
     // JS 집계 — 유효 의심점수(effectiveSuspect) 기준 (+ humanCorrection 선택 적용)
-    let total_analyzed = 0;
-    let low_quality    = 0;
-    let presumed_human = 0;
-    let gpt_judged     = 0;
-    let suspect        = 0;
+    let total_analyzed    = 0;
+    let low_quality       = 0;
+    let presumed_human    = 0;
+    let gpt_judged        = 0;  // 진짜 GPT 판정 건수 (heuristic_only 제외)
+    let heuristic_suspect = 0;  // 휴리스틱 추정 건수 (ai_suspect 있으나 heuristic_only 마커 있음)
+    let suspect           = 0;
+    let suspect_pending   = 0;  // 휴리스틱 의심 중 GPT 미판정 건수 (suspect 버튼 대상)
 
     const buckets = ['0-19', '20-39', '40-59', '60-79', '80-100'];
     const bucketRanges = [[0, 19], [20, 39], [40, 59], [60, 79], [80, 100]];
@@ -4186,9 +4188,16 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         continue;
       }
 
-      // GPT 판정 행
-      gpt_judged++;
+      // heuristic_only 마커 여부로 휴리스틱 추정 vs 진짜 GPT 분리
+      const isHeuristicOnly = flags_parsed.includes('heuristic_only');
       const eff = effectiveSuspect(row.ai_suspect, row.body_len ?? 0, flags_parsed);
+
+      if (isHeuristicOnly) {
+        heuristic_suspect++;
+      } else {
+        // 진짜 GPT 판정 행
+        gpt_judged++;
+      }
 
       // humanCorrection 적용: 사람 라벨로 suspect 덮어쓰기
       let isSuspect;
@@ -4204,9 +4213,9 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         isSuspect = eff >= suspectThreshold;
       }
 
-      // AI 일치율 집계 (기준: effectiveSuspect, 보정 모드 무관하게 항상 순수 AI 기준)
+      // AI 일치율 집계 (GPT 판정 행만 — 휴리스틱 추정 제외, 보정 모드 무관 순수 AI 기준)
       const aiIsSuspect = eff >= suspectThreshold;
-      if (row.human_label === 'human' || row.human_label === 'ad') {
+      if (!isHeuristicOnly && (row.human_label === 'human' || row.human_label === 'ad')) {
         compared_count++;
         const humanIsSuspect = row.human_label === 'ad';
         if (aiIsSuspect === humanIsSuspect) {
@@ -4227,7 +4236,7 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         }
       }
 
-      // 의심 판정
+      // 의심 판정 (heuristic_only 포함 모두 effectiveSuspect 기준)
       if (isSuspect) {
         suspect++;
         // 플래그 집계 (의심 행만)
@@ -4237,6 +4246,14 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
           }
         }
       }
+
+      // suspect_pending: 휴리스틱 의심 중 GPT 미판정 건수 ("의심만" 버튼 대상)
+      if (isHeuristicOnly && eff >= suspectThreshold) {
+        suspect_pending++;
+      }
+
+      // sample_suspect는 GPT 판정 행(진짜 GPT)에서만 수집
+      if (isHeuristicOnly) continue;
 
       gptJudgedItems.push({
         review_id:     row.review_id,
@@ -4275,9 +4292,10 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         human_note:    r.human_note,
       }));
 
-    // pending_all = GPT 미판정 비저품질 건수 (사람추정 + 미분석)
+    // pending_all = GPT 미판정 전체 건수 (사람추정 + 미분석 + 휴리스틱 추정)
+    // heuristic_only도 아직 GPT 판정이 안 된 상태이므로 전체 대상에 포함
     const unanalyzed = Math.max(0, total_reviews - total_analyzed);
-    const pending_all = presumed_human + unanalyzed;
+    const pending_all = presumed_human + unanalyzed + heuristic_suspect;
 
     // agreement 계산 (unsure 제외, human/ad 라벨이 있는 GPT 판정 행만)
     const agreement = {
@@ -4296,8 +4314,10 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       total_analyzed,
       low_quality,
       presumed_human,
+      heuristic_suspect,
       gpt_judged,
       suspect,
+      suspect_pending,
       denominator,
       suspect_rate,
       pending_all,
