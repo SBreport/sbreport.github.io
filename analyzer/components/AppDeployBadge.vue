@@ -28,7 +28,8 @@ function relativeTime(iso: string | null): string {
 </script>
 
 <template>
-  <footer class="h-7 px-6 flex items-center justify-end gap-2 border-t border-gray-100 dark:border-slate-700 text-xs text-gray-400 dark:text-slate-500 bg-white dark:bg-slate-800">
+  <!-- 사이드바 푸터용 콤팩트 배지 (좁은 폭에서 줄바꿈) -->
+  <div class="px-1 flex items-center flex-wrap gap-x-1.5 gap-y-0.5 text-xs text-gray-400 dark:text-slate-500">
     <span class="font-mono">worker {{ shortId(version?.id ?? null) }}</span>
     <span v-if="version?.timestamp" class="text-gray-300 dark:text-slate-600">·</span>
     <span v-if="version?.timestamp">{{ relativeTime(version.timestamp) }}</span>
@@ -39,8 +40,7 @@ function relativeTime(iso: string | null): string {
       variant="ghost"
       :title="'다시 불러오기'"
       aria-label="다시 불러오기"
-      class="-mr-1"
       @click="fetchWorkerVersion()"
     />
-  </footer>
+  </div>
 </template>

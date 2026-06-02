@@ -182,8 +182,11 @@ onMounted(() => {
       </li>
     </ul>
 
-    <!-- ③ 푸터: 색상모드 + 유저카드 -->
+    <!-- ③ 푸터: 배포배지 + 색상모드 + 유저카드 -->
     <div class="shrink-0 border-t border-gray-200 dark:border-slate-700 p-2 flex flex-col gap-1">
+
+      <!-- 배포 배지 (admin 전용, 펼침 시에만) -->
+      <AppDeployBadge v-if="authStore.isAdmin && uiStore.sidebarOpen" />
 
       <!-- 색상모드 토글 -->
       <ClientOnly>
