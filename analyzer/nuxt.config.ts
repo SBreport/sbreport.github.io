@@ -1,8 +1,21 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
+import { execSync } from 'node:child_process'
+
+function getBuildCommit(): string {
+  try { return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim() }
+  catch { return 'unknown' }
+}
+
 export default defineNuxtConfig({
   compatibilityDate: '2024-11-01',
 
   devtools: { enabled: true },
+
+  // 빌드 시 git commit hash & 빌드 시각 주입 → server/api/version.get.ts에서 사용
+  runtimeConfig: {
+    buildCommit: getBuildCommit(),
+    buildTime: new Date().toISOString(),
+  },
 
   modules: [
     '@nuxt/ui',
