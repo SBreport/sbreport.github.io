@@ -1013,7 +1013,7 @@ async function runAiAnalyze(placeId: number, scope: 'suspect' | 'all' | 'heurist
   if (scope === 'all') {
     const pendingAll = aiDiagnosis.value?.pending_all ?? 0
     if (pendingAll > 300) {
-      const ok = confirm(`약 ${pendingAll.toLocaleString('ko-KR')}건 GPT 분석, 비용 발생. 진행하시겠습니까?`)
+      const ok = confirm(`약 ${pendingAll.toLocaleString('ko-KR')}건 정밀 분석 시 AI API 비용 소액 발생. 진행하시겠습니까?`)
       if (!ok) return
     }
   }
@@ -1058,7 +1058,7 @@ async function runAiAnalyze(placeId: number, scope: 'suspect' | 'all' | 'heurist
 async function runAiRejudge(placeId: number) {
   if (aiRejudgeRunning.value) return
   const gptJudged = aiDiagnosis.value?.gpt_judged ?? 0
-  const ok = confirm(`이미 분석된 ${gptJudged.toLocaleString('ko-KR')}건을 GPT로 재판정합니다. 비용이 발생합니다. 진행하시겠습니까?`)
+  const ok = confirm(`이미 분석된 ${gptJudged.toLocaleString('ko-KR')}건을 정밀 다시 분석합니다. AI API 비용 소액 발생. 진행하시겠습니까?`)
   if (!ok) return
   aiRejudgeRunning.value = true
   aiRejudgeError.value = null
@@ -3277,11 +3277,11 @@ onUnmounted(() => {
                     <UIcon name="i-heroicons-beaker" class="w-8 h-8 text-gray-300 dark:text-slate-600" />
                     <p class="text-xs font-medium text-gray-600 dark:text-slate-300">아직 진단을 실행하지 않았습니다</p>
                     <p class="text-[11px] text-gray-400 dark:text-slate-500 leading-snug">
-                      무료 휴리스틱 진단으로 1차 분류를 시작하세요.<br>GPT 비용이 들지 않습니다.
+                      무료 진단으로 1차 분류를 시작하세요.<br>비용이 들지 않습니다.
                     </p>
                     <UButton
                       v-if="authStore.isAdmin"
-                      label="휴리스틱 진단 시작"
+                      label="무료 진단 시작"
                       size="sm"
                       color="primary"
                       variant="outline"
@@ -3326,7 +3326,7 @@ onUnmounted(() => {
                         class="h-full transition-opacity hover:opacity-80"
                         :style="{ width: `${Math.round((aiDiagnosis.gpt_judged - aiDiagnosis.suspect) / aiDiagnosis.total_analyzed * 100)}%`, minWidth: '4px', background: '#60a5fa' }"
                         :class="activeBucket === 'judged' && activeScoreMin === null ? 'ring-2 ring-inset ring-white' : ''"
-                        :title="`정밀(GPT) 비의심 ${aiDiagnosis.gpt_judged - aiDiagnosis.suspect}건`"
+                        :title="`정밀 비의심 ${aiDiagnosis.gpt_judged - aiDiagnosis.suspect}건`"
                         @click="setAiBucket('judged')"
                       />
                       <button
@@ -3350,7 +3350,7 @@ onUnmounted(() => {
                         <span class="inline-block w-1.5 h-1.5 rounded-sm" style="background:#a78bfa"></span>휴리스틱추정 {{ aiDiagnosis.heuristic_suspect ?? 0 }}
                       </span>
                       <button class="flex items-center gap-1 text-[11px] text-blue-500 dark:text-blue-400 hover:opacity-80" @click="setAiBucket('judged')">
-                        <span class="inline-block w-1.5 h-1.5 rounded-sm" style="background:#60a5fa"></span>정밀(GPT) {{ aiDiagnosis.gpt_judged }}
+                        <span class="inline-block w-1.5 h-1.5 rounded-sm" style="background:#60a5fa"></span>정밀 {{ aiDiagnosis.gpt_judged }}
                       </button>
                       <button class="flex items-center gap-1 text-[11px] text-red-500 dark:text-red-400 font-medium hover:opacity-80" @click="setAiBucket('suspect')">
                         <span class="inline-block w-1.5 h-1.5 rounded-sm" style="background:#f87171"></span>의심 {{ aiDiagnosis.suspect }}
@@ -3463,13 +3463,13 @@ onUnmounted(() => {
                         class="flex-1"
                         :loading="aiAnalyzeRunning"
                         :disabled="aiAnalyzeRunning || aiRejudgeRunning"
-                        :title="'미분석 리뷰를 규칙+점수로 분류 · GPT 비용 없음'"
+                        :title="'미분석 리뷰를 규칙+점수로 분류 · 비용 없음'"
                         @click="selectedPlace && runAiAnalyze(selectedPlace.id, 'heuristic')"
                       />
                     </div>
-                    <!-- 2차 GPT -->
+                    <!-- 2차 정밀 -->
                     <div class="flex items-center gap-2">
-                      <span class="text-[10px] font-medium text-amber-500 dark:text-amber-400 shrink-0 w-14">2차 GPT</span>
+                      <span class="text-[10px] font-medium text-amber-500 dark:text-amber-400 shrink-0 w-14">2차 정밀</span>
                       <div class="flex gap-1 flex-1 min-w-0">
                         <UButton
                           :label="`의심만 · ${(aiDiagnosis.suspect_pending ?? 0).toLocaleString('ko-KR')}`"
@@ -3480,7 +3480,7 @@ onUnmounted(() => {
                           class="flex-1"
                           :loading="aiAnalyzeRunning"
                           :disabled="aiAnalyzeRunning || aiRejudgeRunning"
-                          :title="`휴리스틱 의심 ${(aiDiagnosis.suspect_pending ?? 0).toLocaleString('ko-KR')}건을 GPT 정밀 판정 (비용 적음)`"
+                          :title="`휴리스틱 의심 ${(aiDiagnosis.suspect_pending ?? 0).toLocaleString('ko-KR')}건을 정밀 분석 (비용 적음)`"
                           @click="selectedPlace && runAiAnalyze(selectedPlace.id, 'suspect')"
                         />
                         <UButton
@@ -3492,12 +3492,12 @@ onUnmounted(() => {
                           class="flex-1"
                           :loading="aiAnalyzeRunning"
                           :disabled="aiAnalyzeRunning || aiRejudgeRunning"
-                          :title="`GPT 미판정 전체 ${(aiDiagnosis.pending_all ?? 0).toLocaleString('ko-KR')}건 판정 (비용 발생)`"
+                          :title="`미판정 전체 ${(aiDiagnosis.pending_all ?? 0).toLocaleString('ko-KR')}건 정밀 분석 (AI API 비용 발생)`"
                           @click="selectedPlace && runAiAnalyze(selectedPlace.id, 'all')"
                         />
                       </div>
                     </div>
-                    <!-- GPT 재판정 링크 (진짜 GPT 판정분 있을 때만 노출) -->
+                    <!-- 정밀 다시 분석 링크 (정밀 판정분 있을 때만 노출) -->
                     <button
                       v-if="aiDiagnosis.gpt_judged > 0"
                       class="text-left text-[11px] text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 disabled:opacity-50 disabled:pointer-events-none"
@@ -3505,7 +3505,7 @@ onUnmounted(() => {
                       @click="selectedPlace && runAiRejudge(selectedPlace.id)"
                     >
                       <span v-if="aiRejudgeRunning"><UIcon name="i-heroicons-arrow-path" class="w-3 h-3 inline animate-spin mr-0.5" />재판정 중...</span>
-                      <span v-else>GPT 판정분 재실행 · {{ aiDiagnosis.gpt_judged.toLocaleString('ko-KR') }}건 (비용 발생)</span>
+                      <span v-else>정밀 다시 분석 · {{ aiDiagnosis.gpt_judged.toLocaleString('ko-KR') }}건 (AI API 비용 소액 발생)</span>
                     </button>
                     <!-- 결과 피드백 -->
                     <div v-if="aiAnalyzeSummary" class="flex items-center gap-1 text-[11px] text-gray-500 dark:text-slate-400">
@@ -3608,7 +3608,7 @@ onUnmounted(() => {
                         <span
                           v-if="item.raw_ai_suspect !== undefined && item.ai_suspect !== null"
                           class="text-[10px] text-gray-400 dark:text-slate-500 shrink-0"
-                          :title="`GPT 원점수 ${item.raw_ai_suspect} → 짧은 리뷰 보정 ${item.ai_suspect}`"
+                          :title="`AI 원점수 ${item.raw_ai_suspect} → 짧은 리뷰 보정 ${item.ai_suspect}`"
                         >원 {{ item.raw_ai_suspect }}→보정 {{ item.ai_suspect }} (짧은 리뷰)</span>
                         <!-- 사람 라벨 배지 -->
                         <span
@@ -3624,7 +3624,7 @@ onUnmounted(() => {
                         <span
                           v-if="item.flags.includes('heuristic_only')"
                           class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-sky-50 dark:bg-sky-900/20 text-sky-600 dark:text-sky-300 shrink-0"
-                          title="휴리스틱 추정 — GPT 정밀 분석 전"
+                          title="휴리스틱 추정 — 정밀 분석 전"
                         >휴리스틱 추정</span>
                         <!-- 플래그 칩 -->
                         <span
