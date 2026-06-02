@@ -131,25 +131,25 @@ function circledNumber(n: number): string {
 /** 섹션 type → Tailwind 색상 클래스 */
 function sectionColorClass(type: string): string {
   const map: Record<string, string> = {
-    powerlink:     'bg-amber-100 text-amber-700',
-    place:         'bg-red-100 text-red-700',
-    blog:          'bg-blue-100 text-blue-700',
-    kin:           'bg-green-100 text-green-700',
-    cafe:          'bg-orange-100 text-orange-700',
-    influencer:    'bg-violet-100 text-violet-700',
-    powercontents: 'bg-purple-100 text-purple-700',
-    video:         'bg-teal-100 text-teal-700',
-    clip:          'bg-fuchsia-100 text-fuchsia-700',
-    ai_briefing:   'bg-indigo-100 text-indigo-700',
-    popular_article: 'bg-yellow-100 text-yellow-700',
-    ugc:           'bg-lime-100 text-lime-700',
-    ugc_snippet:   'bg-lime-100 text-lime-700',
-    shortents:     'bg-rose-100 text-rose-700',
-    news:          'bg-gray-100 text-gray-600',
-    web:           'bg-gray-100 text-gray-600',
-    qra:           'bg-cyan-100 text-cyan-700',
+    powerlink:     'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+    place:         'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+    blog:          'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+    kin:           'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+    cafe:          'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
+    influencer:    'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400',
+    powercontents: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+    video:         'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
+    clip:          'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400',
+    ai_briefing:   'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400',
+    popular_article: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
+    ugc:           'bg-lime-100 text-lime-700 dark:bg-lime-900/30 dark:text-lime-400',
+    ugc_snippet:   'bg-lime-100 text-lime-700 dark:bg-lime-900/30 dark:text-lime-400',
+    shortents:     'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
+    news:          'bg-gray-100 text-gray-600 dark:bg-slate-700 dark:text-slate-300',
+    web:           'bg-gray-100 text-gray-600 dark:bg-slate-700 dark:text-slate-300',
+    qra:           'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
   }
-  return map[type] ?? 'bg-gray-100 text-gray-500'
+  return map[type] ?? 'bg-gray-100 text-gray-500 dark:bg-slate-700 dark:text-slate-400'
 }
 
 // ─── 분석 실행 ───────────────────────────────────────────────────────────────
@@ -513,12 +513,12 @@ onMounted(async () => {
             class="w-full text-sm"
             :disabled="isAnalyzing"
           />
-          <p class="text-xs text-gray-500">
+          <p class="text-xs text-gray-500 dark:text-slate-400">
             <template v-if="optExpand">
-              한 줄에 하나씩 · 옵션이 켜져 있어 <span class="font-medium text-gray-700">시드 최대 3개 권장</span> · 시드당 풀이 자동 확장됩니다 (자동완성 5 / 연관 10)
+              한 줄에 하나씩 · 옵션이 켜져 있어 <span class="font-medium text-gray-700 dark:text-slate-300">시드 최대 3개 권장</span> · 시드당 풀이 자동 확장됩니다 (자동완성 5 / 연관 10)
             </template>
             <template v-else>
-              한 줄에 하나씩 · 한 번에 <span class="font-medium text-gray-700">최대 5개 권장</span> · 결과는 아래에 누적됩니다
+              한 줄에 하나씩 · 한 번에 <span class="font-medium text-gray-700 dark:text-slate-300">최대 5개 권장</span> · 결과는 아래에 누적됩니다
             </template>
           </p>
           <p v-if="overLimit" class="text-xs text-amber-600">
@@ -543,24 +543,24 @@ onMounted(async () => {
         v-if="!hasResults"
         class="flex-1 flex items-center justify-center"
       >
-        <p class="text-sm text-gray-400">키워드를 입력하고 분석하기를 누르세요.</p>
+        <p class="text-sm text-gray-400 dark:text-slate-500">키워드를 입력하고 분석하기를 누르세요.</p>
       </div>
 
       <!-- 결과 표 -->
       <template v-else>
         <!-- 표 상단 액션 바 -->
         <div class="shrink-0 flex items-center justify-between mb-2">
-          <p class="text-xs text-gray-500">{{ rows.length }}개 키워드 분석</p>
+          <p class="text-xs text-gray-500 dark:text-slate-400">{{ rows.length }}개 키워드 분석</p>
           <div class="flex items-center gap-2">
             <!-- 표시 모드 토글 -->
-            <div class="inline-flex items-center rounded border border-gray-200 overflow-hidden text-xs">
+            <div class="inline-flex items-center rounded border border-gray-200 dark:border-slate-700 overflow-hidden text-xs">
               <button
                 v-for="opt in VIEW_MODE_OPTIONS"
                 :key="opt.value"
                 class="px-2 py-1 leading-none transition-colors"
                 :class="viewMode === opt.value
-                  ? 'bg-gray-800 text-white font-medium'
-                  : 'bg-white text-gray-500 hover:bg-gray-50'"
+                  ? 'bg-gray-800 text-white font-medium dark:bg-slate-600'
+                  : 'bg-white text-gray-500 hover:bg-gray-50 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700/50'"
                 @click="viewMode = opt.value"
               >
                 {{ opt.label }}
@@ -587,44 +587,44 @@ onMounted(async () => {
         </div>
 
         <!-- 표 래퍼: x-overflow 대비 + 내부 스크롤 -->
-        <div class="flex-1 min-h-0 overflow-auto border border-gray-200 rounded-lg">
+        <div class="flex-1 min-h-0 overflow-auto border border-gray-200 dark:border-slate-700 rounded-lg">
           <table class="w-full text-sm border-collapse">
-            <thead class="sticky top-0 z-10 bg-gray-50">
+            <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-slate-700/50">
               <tr class="h-11">
                 <th
-                  class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-32 cursor-pointer hover:bg-gray-100 select-none"
+                  class="px-3 text-left font-medium text-gray-600 dark:text-slate-300 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-32 cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-700 select-none"
                   @click="handleSort('keyword')"
                 >
                   <span class="inline-flex items-center gap-1">
                     키워드
                     <UIcon v-if="sortKey === 'keyword'" :name="sortDir === 'desc' ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-up'" class="w-3 h-3" />
-                    <UIcon v-else name="i-heroicons-chevron-up-down" class="w-3 h-3 text-gray-300" />
+                    <UIcon v-else name="i-heroicons-chevron-up-down" class="w-3 h-3 text-gray-300 dark:text-slate-600" />
                   </span>
                 </th>
                 <th
-                  class="px-3 text-right font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-40 cursor-pointer hover:bg-gray-100 select-none"
+                  class="px-3 text-right font-medium text-gray-600 dark:text-slate-300 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-40 cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-700 select-none"
                   @click="handleSort('total')"
                 >
                   <span class="inline-flex items-center gap-1 justify-end w-full">
                     검색량
                     <UIcon v-if="sortKey === 'total'" :name="sortDir === 'desc' ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-up'" class="w-3 h-3" />
-                    <UIcon v-else name="i-heroicons-chevron-up-down" class="w-3 h-3 text-gray-300" />
+                    <UIcon v-else name="i-heroicons-chevron-up-down" class="w-3 h-3 text-gray-300 dark:text-slate-600" />
                   </span>
                 </th>
-                <th class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200">
+                <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-300 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700">
                   구좌 구성
                 </th>
                 <th
-                  class="px-3 text-left font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-28 cursor-pointer hover:bg-gray-100 select-none"
+                  class="px-3 text-left font-medium text-gray-600 dark:text-slate-300 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-28 cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-700 select-none"
                   @click="handleSort('competition')"
                 >
                   <span class="inline-flex items-center gap-1">
                     경쟁도 / 유형
                     <UIcon v-if="sortKey === 'competition'" :name="sortDir === 'desc' ? 'i-heroicons-chevron-down' : 'i-heroicons-chevron-up'" class="w-3 h-3" />
-                    <UIcon v-else name="i-heroicons-chevron-up-down" class="w-3 h-3 text-gray-300" />
+                    <UIcon v-else name="i-heroicons-chevron-up-down" class="w-3 h-3 text-gray-300 dark:text-slate-600" />
                   </span>
                 </th>
-                <th class="px-3 text-right font-medium text-gray-600 text-xs whitespace-nowrap border-b border-gray-200 w-12">
+                <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-300 text-xs whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">
                   상세
                 </th>
               </tr>
@@ -633,13 +633,13 @@ onMounted(async () => {
               <tr
                 v-for="(row, idx) in sortedRows"
                 :key="row.keyword + idx"
-                class="border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors"
+                class="border-b border-gray-100 dark:border-slate-700 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors"
                 :class="{ 'cursor-pointer': row.status === 'done' }"
                 @click="openPanel(row)"
               >
                 <!-- 키워드 -->
                 <td class="px-3 py-2.5 align-top whitespace-nowrap">
-                  <span class="font-medium text-gray-900">{{ row.keyword }}</span>
+                  <span class="font-medium text-gray-900 dark:text-slate-100">{{ row.keyword }}</span>
                   <span
                     v-if="row.source === 'autocomplete'"
                     class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-600"
@@ -660,10 +660,10 @@ onMounted(async () => {
                   </template>
                   <template v-else-if="row.status === 'done' && row.result">
                     <div class="flex flex-col items-end gap-0.5">
-                      <span class="tabular-nums text-base font-semibold text-gray-900">
+                      <span class="tabular-nums text-base font-semibold text-gray-900 dark:text-slate-100">
                         {{ formatNumber(row.result.total ?? ((row.result.pc_volume ?? 0) + (row.result.mobile_volume ?? 0))) }}
                       </span>
-                      <span class="tabular-nums text-xs text-gray-400">
+                      <span class="tabular-nums text-xs text-gray-400 dark:text-slate-500">
                         PC {{ formatNumber(row.result.pc_volume) }} · M {{ formatNumber(row.result.mobile_volume) }}
                       </span>
                     </div>
@@ -697,8 +697,8 @@ onMounted(async () => {
                       <!-- both: 모바일 + PC 두 줄 -->
                       <template v-if="viewMode === 'both'">
                         <div class="flex items-start gap-1.5">
-                          <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400">모바일</span>
-                          <div v-if="row.result.sections.length === 0" class="text-xs text-gray-400">구좌 정보 없음</div>
+                          <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400 dark:text-slate-500">모바일</span>
+                          <div v-if="row.result.sections.length === 0" class="text-xs text-gray-400 dark:text-slate-500">구좌 정보 없음</div>
                           <div v-else class="flex flex-wrap gap-1">
                             <span
                               v-for="section in [...row.result.sections].sort((a, b) => a.order - b.order)"
@@ -706,13 +706,13 @@ onMounted(async () => {
                               class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
                               :class="sectionColorClass(section.type)"
                             >
-                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
+                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 dark:text-slate-500 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                             </span>
                           </div>
                         </div>
                         <div class="flex items-start gap-1.5">
-                          <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400">PC</span>
-                          <div v-if="!(row.result.pc_sections && row.result.pc_sections.length)" class="text-xs text-gray-400">구좌 정보 없음</div>
+                          <span class="shrink-0 mt-0.5 w-10 text-xs font-medium text-gray-400 dark:text-slate-500">PC</span>
+                          <div v-if="!(row.result.pc_sections && row.result.pc_sections.length)" class="text-xs text-gray-400 dark:text-slate-500">구좌 정보 없음</div>
                           <div v-else class="flex flex-wrap gap-1">
                             <span
                               v-for="section in [...row.result.pc_sections].sort((a, b) => a.order - b.order)"
@@ -720,14 +720,14 @@ onMounted(async () => {
                               class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
                               :class="sectionColorClass(section.type)"
                             >
-                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
+                              {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 dark:text-slate-500 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                             </span>
                           </div>
                         </div>
                       </template>
                       <!-- mobile 단독 -->
                       <template v-else-if="viewMode === 'mobile'">
-                        <div v-if="row.result.sections.length === 0" class="text-xs text-gray-400">구좌 정보 없음</div>
+                        <div v-if="row.result.sections.length === 0" class="text-xs text-gray-400 dark:text-slate-500">구좌 정보 없음</div>
                         <div v-else class="flex flex-wrap gap-1">
                           <span
                             v-for="section in [...row.result.sections].sort((a, b) => a.order - b.order)"
@@ -735,13 +735,13 @@ onMounted(async () => {
                             class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
                             :class="sectionColorClass(section.type)"
                           >
-                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
+                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 dark:text-slate-500 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                           </span>
                         </div>
                       </template>
                       <!-- pc 단독 -->
                       <template v-else>
-                        <div v-if="!(row.result.pc_sections && row.result.pc_sections.length)" class="text-xs text-gray-400">구좌 정보 없음</div>
+                        <div v-if="!(row.result.pc_sections && row.result.pc_sections.length)" class="text-xs text-gray-400 dark:text-slate-500">구좌 정보 없음</div>
                         <div v-else class="flex flex-wrap gap-1">
                           <span
                             v-for="section in [...row.result.pc_sections].sort((a, b) => a.order - b.order)"
@@ -749,7 +749,7 @@ onMounted(async () => {
                             class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium leading-none"
                             :class="sectionColorClass(section.type)"
                           >
-                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
+                            {{ circledNumber(section.order) }}{{ section.label }}<template v-if="section.count != null">{{ section.count }}</template><span v-else class="text-[10px] text-gray-400 dark:text-slate-500 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                           </span>
                         </div>
                       </template>
@@ -758,16 +758,16 @@ onMounted(async () => {
                 </td>
 
                 <!-- 경쟁도 / 유형 -->
-                <td class="px-3 py-2.5 align-top text-gray-700 whitespace-nowrap">
+                <td class="px-3 py-2.5 align-top text-gray-700 dark:text-slate-300 whitespace-nowrap">
                   <template v-if="row.status === 'loading'">
                     <USkeleton class="h-4 w-16" />
                   </template>
                   <template v-else-if="row.status === 'done' && row.result">
                     <span class="text-sm">{{ competitionLabel(row.result.competition) }}</span>
-                    <span class="text-xs text-gray-400 ml-1">/ 유형 -</span>
+                    <span class="text-xs text-gray-400 dark:text-slate-500 ml-1">/ 유형 -</span>
                   </template>
                   <template v-else-if="row.status === 'error'">
-                    <span class="text-gray-300">-</span>
+                    <span class="text-gray-300 dark:text-slate-600">-</span>
                   </template>
                 </td>
 
@@ -804,9 +804,9 @@ onMounted(async () => {
         >
           <!-- 키워드 제목 + 네이버 검색 이동 N 아이콘 -->
           <div>
-            <p class="text-xs text-gray-400 mb-0.5">키워드</p>
+            <p class="text-xs text-gray-400 dark:text-slate-500 mb-0.5">키워드</p>
             <div class="flex items-center gap-2">
-              <h2 class="text-base font-semibold text-gray-900">{{ selectedRow.result.keyword }}</h2>
+              <h2 class="text-base font-semibold text-gray-900 dark:text-slate-100">{{ selectedRow.result.keyword }}</h2>
               <a
                 :href="`https://search.naver.com/search.naver?query=${encodeURIComponent(selectedRow.result.keyword)}`"
                 target="_blank"
@@ -820,44 +820,44 @@ onMounted(async () => {
 
           <!-- 검색량 수치 -->
           <div class="grid grid-cols-2 gap-3">
-            <div class="bg-gray-50 rounded-lg p-3">
-              <p class="text-xs text-gray-500 mb-1">PC 검색량</p>
-              <p class="text-sm font-semibold tabular-nums">{{ formatNumber(selectedRow.result.pc_volume) }}</p>
+            <div class="bg-gray-50 dark:bg-slate-700/50 rounded-lg p-3">
+              <p class="text-xs text-gray-500 dark:text-slate-400 mb-1">PC 검색량</p>
+              <p class="text-sm font-semibold tabular-nums dark:text-slate-100">{{ formatNumber(selectedRow.result.pc_volume) }}</p>
             </div>
-            <div class="bg-gray-50 rounded-lg p-3">
-              <p class="text-xs text-gray-500 mb-1">모바일 검색량</p>
-              <p class="text-sm font-semibold tabular-nums">{{ formatNumber(selectedRow.result.mobile_volume) }}</p>
+            <div class="bg-gray-50 dark:bg-slate-700/50 rounded-lg p-3">
+              <p class="text-xs text-gray-500 dark:text-slate-400 mb-1">모바일 검색량</p>
+              <p class="text-sm font-semibold tabular-nums dark:text-slate-100">{{ formatNumber(selectedRow.result.mobile_volume) }}</p>
             </div>
-            <div class="bg-gray-50 rounded-lg p-3">
-              <p class="text-xs text-gray-500 mb-1">합계</p>
-              <p class="text-sm font-semibold tabular-nums">
+            <div class="bg-gray-50 dark:bg-slate-700/50 rounded-lg p-3">
+              <p class="text-xs text-gray-500 dark:text-slate-400 mb-1">합계</p>
+              <p class="text-sm font-semibold tabular-nums dark:text-slate-100">
                 {{ formatNumber(selectedRow.result.total ?? ((selectedRow.result.pc_volume ?? 0) + (selectedRow.result.mobile_volume ?? 0))) }}
               </p>
             </div>
-            <div class="bg-gray-50 rounded-lg p-3">
-              <p class="text-xs text-gray-500 mb-1">경쟁도</p>
-              <p class="text-sm font-semibold">{{ competitionLabel(selectedRow.result.competition) }}</p>
+            <div class="bg-gray-50 dark:bg-slate-700/50 rounded-lg p-3">
+              <p class="text-xs text-gray-500 dark:text-slate-400 mb-1">경쟁도</p>
+              <p class="text-sm font-semibold dark:text-slate-100">{{ competitionLabel(selectedRow.result.competition) }}</p>
             </div>
           </div>
 
           <!-- 구좌 구성 -->
           <div>
-            <p class="text-xs text-gray-400 mb-2 font-medium">구좌 구성</p>
+            <p class="text-xs text-gray-400 dark:text-slate-500 mb-2 font-medium">구좌 구성</p>
 
             <!-- both: 2열 비교 표 -->
             <template v-if="viewMode === 'both'">
               <div
                 v-if="!selectedRow.result.sections.length && !(selectedRow.result.pc_sections && selectedRow.result.pc_sections.length)"
-                class="text-sm text-gray-400"
+                class="text-sm text-gray-400 dark:text-slate-500"
               >
                 구좌 정보 없음
               </div>
               <table v-else class="w-full text-xs border-collapse">
                 <thead>
-                  <tr class="border-b border-gray-200">
-                    <th class="py-1 pr-2 text-left text-gray-500 font-medium w-28">구좌</th>
-                    <th class="py-1 px-2 text-center text-gray-500 font-medium w-16">모바일</th>
-                    <th class="py-1 pl-2 text-center text-gray-500 font-medium w-16">PC</th>
+                  <tr class="border-b border-gray-200 dark:border-slate-700">
+                    <th class="py-1 pr-2 text-left text-gray-500 dark:text-slate-400 font-medium w-28">구좌</th>
+                    <th class="py-1 px-2 text-center text-gray-500 dark:text-slate-400 font-medium w-16">모바일</th>
+                    <th class="py-1 pl-2 text-center text-gray-500 dark:text-slate-400 font-medium w-16">PC</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -867,7 +867,7 @@ onMounted(async () => {
                       selectedRow.result.pc_sections ?? []
                     )"
                     :key="row.type"
-                    class="border-b border-gray-100 last:border-0"
+                    class="border-b border-gray-100 dark:border-slate-700 last:border-0"
                   >
                     <td class="py-1 pr-2 align-middle">
                       <span
@@ -875,17 +875,17 @@ onMounted(async () => {
                         :class="sectionColorClass(row.type)"
                       >{{ row.label }}</span>
                     </td>
-                    <td class="py-1 px-2 text-center align-middle tabular-nums text-gray-700">
+                    <td class="py-1 px-2 text-center align-middle tabular-nums text-gray-700 dark:text-slate-300">
                       <template v-if="row.mobileOrder != null">
-                        {{ circledNumber(row.mobileOrder) }}<template v-if="row.mobileCount != null"> {{ row.mobileCount }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
+                        {{ circledNumber(row.mobileOrder) }}<template v-if="row.mobileCount != null"> {{ row.mobileCount }}</template><span v-else class="text-[10px] text-gray-400 dark:text-slate-500 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                       </template>
-                      <template v-else><span class="text-gray-300">-</span></template>
+                      <template v-else><span class="text-gray-300 dark:text-slate-600">-</span></template>
                     </td>
-                    <td class="py-1 pl-2 text-center align-middle tabular-nums text-gray-700">
+                    <td class="py-1 pl-2 text-center align-middle tabular-nums text-gray-700 dark:text-slate-300">
                       <template v-if="row.pcOrder != null">
-                        {{ circledNumber(row.pcOrder) }}<template v-if="row.pcCount != null"> {{ row.pcCount }}</template><span v-else class="text-[10px] text-gray-400 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
+                        {{ circledNumber(row.pcOrder) }}<template v-if="row.pcCount != null"> {{ row.pcCount }}</template><span v-else class="text-[10px] text-gray-400 dark:text-slate-500 font-normal" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">?</span>
                       </template>
-                      <template v-else><span class="text-gray-300">-</span></template>
+                      <template v-else><span class="text-gray-300 dark:text-slate-600">-</span></template>
                     </td>
                   </tr>
                 </tbody>
@@ -896,7 +896,7 @@ onMounted(async () => {
             <template v-else-if="viewMode === 'mobile'">
               <div
                 v-if="selectedRow.result.sections.length === 0"
-                class="text-sm text-gray-400"
+                class="text-sm text-gray-400 dark:text-slate-500"
               >
                 구좌 정보 없음
               </div>
@@ -912,10 +912,10 @@ onMounted(async () => {
                   >
                     {{ circledNumber(section.order) }} {{ section.label }}
                   </span>
-                  <span v-if="section.count != null" class="text-xs text-gray-500 tabular-nums">
+                  <span v-if="section.count != null" class="text-xs text-gray-500 dark:text-slate-400 tabular-nums">
                     {{ section.count }}개
                   </span>
-                  <span v-else class="text-xs text-gray-400" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">확인 필요</span>
+                  <span v-else class="text-xs text-gray-400 dark:text-slate-500" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">확인 필요</span>
                 </div>
               </div>
             </template>
@@ -924,7 +924,7 @@ onMounted(async () => {
             <template v-else>
               <div
                 v-if="!(selectedRow.result.pc_sections && selectedRow.result.pc_sections.length)"
-                class="text-sm text-gray-400"
+                class="text-sm text-gray-400 dark:text-slate-500"
               >
                 구좌 정보 없음
               </div>
@@ -940,10 +940,10 @@ onMounted(async () => {
                   >
                     {{ circledNumber(section.order) }} {{ section.label }}
                   </span>
-                  <span v-if="section.count != null" class="text-xs text-gray-500 tabular-nums">
+                  <span v-if="section.count != null" class="text-xs text-gray-500 dark:text-slate-400 tabular-nums">
                     {{ section.count }}개
                   </span>
-                  <span v-else class="text-xs text-gray-400" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">확인 필요</span>
+                  <span v-else class="text-xs text-gray-400 dark:text-slate-500" title="이 구좌는 노출되지만 개수는 직접 확인이 필요합니다">확인 필요</span>
                 </div>
               </div>
             </template>
@@ -951,21 +951,21 @@ onMounted(async () => {
 
           <!-- 연관 검색어 -->
           <div v-if="selectedRow.result.related_keywords && selectedRow.result.related_keywords.length > 0">
-            <p class="text-xs text-gray-400 mb-2 font-medium">연관 검색어</p>
+            <p class="text-xs text-gray-400 dark:text-slate-500 mb-2 font-medium">연관 검색어</p>
             <div class="flex flex-wrap gap-1.5">
               <span
                 v-for="kw in selectedRow.result.related_keywords.slice(0, 10)"
                 :key="kw.keyword"
-                class="inline-flex items-center gap-1.5 pl-2 pr-1.5 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700"
+                class="inline-flex items-center gap-1.5 pl-2 pr-1.5 py-0.5 rounded-full text-xs bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-slate-300"
               >
                 <span class="font-medium">{{ kw.keyword }}</span>
-                <span class="text-gray-400 tabular-nums">{{ formatNumber(kw.total) }}</span>
+                <span class="text-gray-400 dark:text-slate-500 tabular-nums">{{ formatNumber(kw.total) }}</span>
               </span>
             </div>
           </div>
 
           <!-- 하단: 순위 추적 추가 버튼 (현재 disabled) -->
-          <div class="mt-auto pt-4 border-t border-gray-100">
+          <div class="mt-auto pt-4 border-t border-gray-100 dark:border-slate-700">
             <UButton
               label="순위 추적 추가"
               icon="i-heroicons-plus"
@@ -974,7 +974,7 @@ onMounted(async () => {
               disabled
               title="순위 추적 기능은 준비 중입니다"
             />
-            <p class="text-xs text-gray-400 mt-1.5 text-center">순위 추적 기능 준비 중</p>
+            <p class="text-xs text-gray-400 dark:text-slate-500 mt-1.5 text-center">순위 추적 기능 준비 중</p>
           </div>
         </div>
       </template>

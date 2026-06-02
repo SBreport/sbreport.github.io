@@ -28,9 +28,9 @@ function relativeTime(iso: string | null): string {
 </script>
 
 <template>
-  <footer class="h-7 px-6 flex items-center justify-end gap-2 border-t border-gray-100 text-xs text-gray-400 bg-white">
+  <footer class="h-7 px-6 flex items-center justify-end gap-2 border-t border-gray-100 dark:border-slate-700 text-xs text-gray-400 dark:text-slate-500 bg-white dark:bg-slate-800">
     <span class="font-mono">worker {{ shortId(version?.id ?? null) }}</span>
-    <span v-if="version?.timestamp" class="text-gray-300">·</span>
+    <span v-if="version?.timestamp" class="text-gray-300 dark:text-slate-600">·</span>
     <span v-if="version?.timestamp">{{ relativeTime(version.timestamp) }}</span>
     <UButton
       icon="i-heroicons-arrow-path"

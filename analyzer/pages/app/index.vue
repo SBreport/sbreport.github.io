@@ -98,7 +98,7 @@ onMounted(fetchHistory)
 <template>
   <div class="h-full flex flex-col gap-4 max-w-6xl">
 
-    <h1 class="shrink-0 text-lg font-semibold text-gray-900">홈</h1>
+    <h1 class="shrink-0 text-lg font-semibold text-gray-900 dark:text-slate-100">홈</h1>
 
     <div class="flex flex-row gap-4">
 
@@ -106,10 +106,10 @@ onMounted(fetchHistory)
       <div class="flex-1 min-w-0 flex flex-col gap-4">
 
         <!-- Block 2: 키워드 검색 -->
-        <div class="rounded-lg border border-gray-200 p-4 flex flex-col gap-3">
+        <div class="rounded-lg border border-gray-200 dark:border-slate-700 p-4 flex flex-col gap-3">
           <div class="flex items-center gap-1.5">
-            <UIcon name="i-heroicons-magnifying-glass" class="w-4 h-4 text-gray-600 shrink-0" />
-            <span class="text-sm font-medium text-gray-900">키워드 검색</span>
+            <UIcon name="i-heroicons-magnifying-glass" class="w-4 h-4 text-gray-600 dark:text-slate-300 shrink-0" />
+            <span class="text-sm font-medium text-gray-900 dark:text-slate-100">키워드 검색</span>
           </div>
           <div class="flex items-center gap-2">
             <UInput
@@ -129,8 +129,8 @@ onMounted(fetchHistory)
         </div>
 
         <!-- Block 4: 최근 분석한 키워드 -->
-        <div class="rounded-lg border border-gray-200 p-4 flex flex-col gap-3">
-          <span class="text-sm font-medium text-gray-900">최근 분석한 키워드</span>
+        <div class="rounded-lg border border-gray-200 dark:border-slate-700 p-4 flex flex-col gap-3">
+          <span class="text-sm font-medium text-gray-900 dark:text-slate-100">최근 분석한 키워드</span>
 
           <!-- Loading -->
           <div v-if="historyState === 'loading'" class="flex flex-col gap-2">
@@ -161,18 +161,18 @@ onMounted(fetchHistory)
           </div>
 
           <!-- Done -->
-          <div v-else class="flex flex-col divide-y divide-gray-100">
+          <div v-else class="flex flex-col divide-y divide-gray-100 dark:divide-slate-700">
             <button
               v-for="item in historyItems"
               :key="item.id"
-              class="flex items-center gap-3 py-2 text-sm text-left hover:bg-gray-50 rounded px-2 transition-colors"
+              class="flex items-center gap-3 py-2 text-sm text-left hover:bg-gray-50 dark:hover:bg-slate-700/50 rounded px-2 transition-colors"
               @click="navigateTo('/app/search?q=' + encodeURIComponent(item.keyword))"
             >
-              <span class="flex-1 font-medium text-gray-900 truncate">{{ item.keyword }}</span>
-              <span class="tabular-nums text-gray-600 shrink-0 text-xs">
+              <span class="flex-1 font-medium text-gray-900 dark:text-slate-100 truncate">{{ item.keyword }}</span>
+              <span class="tabular-nums text-gray-600 dark:text-slate-300 shrink-0 text-xs">
                 {{ formatNumber(item.pc_volume) }} + {{ formatNumber(item.mobile_volume) }}
               </span>
-              <span class="text-xs text-gray-400 shrink-0 w-14 text-right">{{ relativeTime(item.created_at) }}</span>
+              <span class="text-xs text-gray-400 dark:text-slate-500 shrink-0 w-14 text-right">{{ relativeTime(item.created_at) }}</span>
             </button>
           </div>
         </div>
@@ -183,20 +183,20 @@ onMounted(fetchHistory)
       <aside class="w-80 shrink-0 flex flex-col gap-4">
 
         <!-- Block 1: 이용 현황 -->
-        <div class="rounded-lg border border-gray-200 p-4 flex flex-col gap-1">
-          <span class="text-xs text-gray-500">플랜</span>
-          <span class="text-sm font-medium text-gray-900">{{ planLabel }}</span>
-          <span class="text-xs text-gray-500 mt-2">이용 기간</span>
-          <span class="text-sm text-gray-700">{{ expiresLabel }}</span>
+        <div class="rounded-lg border border-gray-200 dark:border-slate-700 p-4 flex flex-col gap-1">
+          <span class="text-xs text-gray-500 dark:text-slate-400">플랜</span>
+          <span class="text-sm font-medium text-gray-900 dark:text-slate-100">{{ planLabel }}</span>
+          <span class="text-xs text-gray-500 dark:text-slate-400 mt-2">이용 기간</span>
+          <span class="text-sm text-gray-700 dark:text-slate-300">{{ expiresLabel }}</span>
         </div>
 
         <!-- Block 3: 순위 추적 -->
-        <div class="rounded-lg border border-gray-200 p-4 flex flex-col gap-3">
+        <div class="rounded-lg border border-gray-200 dark:border-slate-700 p-4 flex flex-col gap-3">
           <div class="flex items-center gap-1.5">
-            <UIcon name="i-heroicons-chart-bar" class="w-4 h-4 text-gray-600 shrink-0" />
-            <span class="text-sm font-medium text-gray-900">순위 추적</span>
+            <UIcon name="i-heroicons-chart-bar" class="w-4 h-4 text-gray-600 dark:text-slate-300 shrink-0" />
+            <span class="text-sm font-medium text-gray-900 dark:text-slate-100">순위 추적</span>
           </div>
-          <p class="text-xs text-gray-500">내 글 순위 추적</p>
+          <p class="text-xs text-gray-500 dark:text-slate-400">내 글 순위 추적</p>
           <div>
             <UButton
               label="바로가기 →"
@@ -208,12 +208,12 @@ onMounted(fetchHistory)
         </div>
 
         <!-- Block 5: 확장 프로그램 -->
-        <div class="rounded-lg border border-gray-200 p-4 flex flex-col gap-3">
+        <div class="rounded-lg border border-gray-200 dark:border-slate-700 p-4 flex flex-col gap-3">
           <div class="flex items-center gap-1.5">
-            <UIcon name="i-heroicons-puzzle-piece" class="w-4 h-4 text-gray-600 shrink-0" />
-            <span class="text-sm font-medium text-gray-900">스마트 브랜딩 서포터 (확장)</span>
+            <UIcon name="i-heroicons-puzzle-piece" class="w-4 h-4 text-gray-600 dark:text-slate-300 shrink-0" />
+            <span class="text-sm font-medium text-gray-900 dark:text-slate-100">스마트 브랜딩 서포터 (확장)</span>
           </div>
-          <p class="text-xs text-gray-500">네이버 검색 페이지 위에서 동작하는 확장 프로그램</p>
+          <p class="text-xs text-gray-500 dark:text-slate-400">네이버 검색 페이지 위에서 동작하는 확장 프로그램</p>
           <div>
             <UButton
               label="다운로드 안내 →"
@@ -228,12 +228,12 @@ onMounted(fetchHistory)
         </div>
 
         <!-- Block 6: 문의 -->
-        <div class="rounded-lg border border-gray-200 p-4 flex flex-col gap-3">
+        <div class="rounded-lg border border-gray-200 dark:border-slate-700 p-4 flex flex-col gap-3">
           <div class="flex items-center gap-1.5">
-            <UIcon name="i-heroicons-chat-bubble-left-right" class="w-4 h-4 text-gray-600 shrink-0" />
-            <span class="text-sm font-medium text-gray-900">문의</span>
+            <UIcon name="i-heroicons-chat-bubble-left-right" class="w-4 h-4 text-gray-600 dark:text-slate-300 shrink-0" />
+            <span class="text-sm font-medium text-gray-900 dark:text-slate-100">문의</span>
           </div>
-          <p class="text-xs text-gray-500">카카오톡 채널로 빠르게 문의해 주세요</p>
+          <p class="text-xs text-gray-500 dark:text-slate-400">카카오톡 채널로 빠르게 문의해 주세요</p>
           <div>
             <UButton
               label="카카오톡 채널 →"
