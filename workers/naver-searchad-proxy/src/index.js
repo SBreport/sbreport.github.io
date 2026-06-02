@@ -3672,7 +3672,7 @@ AI/광고 의심은 *길게 쓰면서도* 상투적·홍보성·과장된 경우
 const ANALYZE_GATE = 40; // 내부 고정 — 외부 노출 안 함
 
 async function analyzePlaceReviews(env, placeRowId, {
-  scope = 'suspect',   // 'suspect' | 'all' | 'rejudge'
+  scope = 'suspect',   // 'suspect' | 'all' | 'rejudge' | 'heuristic'
   maxGpt = 200,
   provider = 'openai',
   model = null,
@@ -3774,6 +3774,88 @@ async function analyzePlaceReviews(env, placeRowId, {
     };
   }
 
+  // scope='heuristic': GPT 0회 — 규칙필터 + 휴리스틱 점수만으로 미캐시 전체 분류
+  if (scope === 'heuristic') {
+    const { results: uncachedForHeuristic } = await env.DB.prepare(`
+      SELECT pr.id AS review_id, pr.body
+      FROM place_reviews pr
+      WHERE pr.place_row_id = ?
+        AND pr.id NOT IN (SELECT review_id FROM place_review_analysis WHERE place_row_id = ?)
+    `).bind(placeRowId, placeRowId).all();
+
+    if (uncachedForHeuristic.length === 0) {
+      return { analyzed: 0, low_quality: 0, heuristic_suspect: 0, presumed_human: 0, gpt_called: 0, gpt_skipped: 0, usage: { prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 } };
+    }
+
+    const factPoolArr = await extractFactPool(env, placeRowId, SAMPLE_FACT_POOL_SIZE);
+    const factPoolSet = new Set(factPoolArr);
+
+    const analyzedAt = new Date().toISOString();
+    const insertStmts = [];
+    let hLowQuality = 0;
+    let hSuspect = 0;
+    let hPresumedHuman = 0;
+
+    for (const row of uncachedForHeuristic) {
+      const { review_id, body } = row;
+
+      if (classifyRuleLowQuality(body)) {
+        // 규칙 저품질 → ai_suspect=null, rule_low_quality=1
+        hLowQuality++;
+        insertStmts.push(
+          env.DB.prepare(`
+            INSERT OR REPLACE INTO place_review_analysis
+              (review_id, place_row_id, ai_suspect, rule_low_quality, heuristic_score, flags, sentiment, reason, model, analyzed_at)
+            VALUES (?, ?, NULL, 1, 0, '[]', NULL, NULL, NULL, ?)
+          `).bind(review_id, placeRowId, analyzedAt)
+        );
+      } else {
+        const { score, flags } = computeHeuristicSlopScore(body ?? '', factPoolSet);
+
+        if (score >= ANALYZE_GATE) {
+          // 게이트 통과 — 휴리스틱 추정 의심분: ai_suspect=score, 'heuristic_only' 마커 추가
+          hSuspect++;
+          const mergedFlags = JSON.stringify([...flags, 'heuristic_only']);
+          insertStmts.push(
+            env.DB.prepare(`
+              INSERT OR REPLACE INTO place_review_analysis
+                (review_id, place_row_id, ai_suspect, rule_low_quality, heuristic_score, flags, sentiment, reason, model, analyzed_at)
+              VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, NULL, ?)
+            `).bind(review_id, placeRowId, score, score, mergedFlags, analyzedAt)
+          );
+        } else {
+          // 게이트 미달 — presumed_human (ai_suspect=null)
+          hPresumedHuman++;
+          const mergedFlags = JSON.stringify([...flags, 'presumed_human']);
+          insertStmts.push(
+            env.DB.prepare(`
+              INSERT OR REPLACE INTO place_review_analysis
+                (review_id, place_row_id, ai_suspect, rule_low_quality, heuristic_score, flags, sentiment, reason, model, analyzed_at)
+              VALUES (?, ?, NULL, 0, ?, ?, NULL, NULL, NULL, ?)
+            `).bind(review_id, placeRowId, score, mergedFlags, analyzedAt)
+          );
+        }
+      }
+    }
+
+    if (insertStmts.length > 0) {
+      const CHUNK = 100;
+      for (let i = 0; i < insertStmts.length; i += CHUNK) {
+        await env.DB.batch(insertStmts.slice(i, i + CHUNK));
+      }
+    }
+
+    return {
+      analyzed:         uncachedForHeuristic.length,
+      low_quality:      hLowQuality,
+      heuristic_suspect: hSuspect,
+      presumed_human:   hPresumedHuman,
+      gpt_called:       0,
+      gpt_skipped:      0,
+      usage: { prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 },
+    };
+  }
+
   // 1a. 미캐시 리뷰 로드 (분석 행 없는 것)
   const { results: uncachedRows } = await env.DB.prepare(`
     SELECT pr.id AS review_id, pr.body
@@ -3792,7 +3874,19 @@ async function analyzePlaceReviews(env, placeRowId, {
       AND (pra.rule_low_quality IS NULL OR pra.rule_low_quality = 0)
   `).bind(placeRowId).all();
 
-  const hasWork = uncachedRows.length > 0 || presumedRows.length > 0;
+  // 1c. heuristic_only 재판정 후보 — 휴리스틱 진단만 된 행(ai_suspect>=GATE, flags에 'heuristic_only')을 GPT로 정밀 판정
+  const { results: heuristicOnlyRows } = await env.DB.prepare(`
+    SELECT pra.review_id, pr.body, pra.heuristic_score, pra.flags AS existing_flags
+    FROM place_review_analysis pra
+    LEFT JOIN place_reviews pr ON pr.id = pra.review_id
+    WHERE pra.place_row_id = ?
+      AND pra.ai_suspect IS NOT NULL
+      AND pra.ai_suspect >= ?
+      AND pra.flags LIKE '%heuristic_only%'
+      AND (pra.rule_low_quality IS NULL OR pra.rule_low_quality = 0)
+  `).bind(placeRowId, ANALYZE_GATE).all();
+
+  const hasWork = uncachedRows.length > 0 || presumedRows.length > 0 || heuristicOnlyRows.length > 0;
   if (!hasWork) {
     return { analyzed: 0, low_quality: 0, gpt_called: 0, gpt_skipped: 0, usage: { prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 } };
   }
@@ -3840,6 +3934,20 @@ async function analyzePlaceReviews(env, placeRowId, {
     }
     // 이미 gptQueue에 없을 때만 추가 (review_id 중복 방지)
     gptQueue.push({ review_id: row.review_id, body, heuristicScore, heuristicFlags, isRecheck: true });
+  }
+
+  // 휴리스틱 전용 판정 후보를 gptQueue에 추가 — GPT 정밀 판정 대상 (isHeuristicOnly=true 마킹)
+  const gptQueueIds = new Set(gptQueue.map(r => r.review_id));
+  for (const row of heuristicOnlyRows) {
+    if (gptQueueIds.has(row.review_id)) continue; // 중복 방지
+    const body = row.body ?? '';
+    const heuristicScore = typeof row.heuristic_score === 'number' ? row.heuristic_score : ANALYZE_GATE;
+    // existing_flags에서 'heuristic_only' 제거한 순수 heuristic flags만 남김
+    let existingFlags = [];
+    try { existingFlags = JSON.parse(row.existing_flags ?? '[]'); } catch { /* ignore */ }
+    const heuristicFlags = existingFlags.filter(f => f !== 'heuristic_only');
+    gptQueue.push({ review_id: row.review_id, body, heuristicScore, heuristicFlags, isRecheck: true, isHeuristicOnly: true });
+    gptQueueIds.add(row.review_id);
   }
 
   // 4. GPT 후보 결정
@@ -3905,8 +4013,9 @@ async function analyzePlaceReviews(env, placeRowId, {
       );
       continue;
     }
-    // heuristic flags + gpt flags 합산 (중복 제거)
+    // heuristic flags + gpt flags 합산 (중복 제거, 'heuristic_only' 마커는 GPT 정밀 완료로 제거)
     const mergedFlagsSet = new Set([...cand.heuristicFlags, ...(gptResult.flags ?? [])]);
+    mergedFlagsSet.delete('heuristic_only');
     const mergedFlags = JSON.stringify([...mergedFlagsSet]);
     const aiSuspect = typeof gptResult.ai_suspect === 'number'
       ? Math.min(100, Math.max(0, Math.round(gptResult.ai_suspect)))
@@ -4225,8 +4334,8 @@ async function handleAnalyzeReviews(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
   }
 
-  // scope 파싱 ('suspect' | 'all' | 'rejudge', 기본 'suspect')
-  const VALID_SCOPES = ['suspect', 'all', 'rejudge'];
+  // scope 파싱 ('suspect' | 'all' | 'rejudge' | 'heuristic', 기본 'suspect')
+  const VALID_SCOPES = ['suspect', 'all', 'rejudge', 'heuristic'];
   const scope = body?.scope ?? 'suspect';
   if (!VALID_SCOPES.includes(scope)) {
     return jsonResponse(
@@ -4236,26 +4345,29 @@ async function handleAnalyzeReviews(request, env, corsHeaders, placeRowId) {
     );
   }
 
-  // provider / model 파싱
-  const VALID_PROVIDERS = ['openai', 'anthropic', 'xai'];
-  const provider = body?.provider ?? 'openai';
-  if (!VALID_PROVIDERS.includes(provider)) {
-    return jsonResponse(
-      { error: 'invalid_provider', message: `provider는 ${VALID_PROVIDERS.join(' | ')} 중 하나여야 합니다` },
-      400,
-      cors
-    );
-  }
+  // heuristic scope는 GPT 불필요 — provider/key 검증 스킵
+  let provider = body?.provider ?? 'openai';
+  if (scope !== 'heuristic') {
+    // provider / model 파싱
+    const VALID_PROVIDERS = ['openai', 'anthropic', 'xai'];
+    if (!VALID_PROVIDERS.includes(provider)) {
+      return jsonResponse(
+        { error: 'invalid_provider', message: `provider는 ${VALID_PROVIDERS.join(' | ')} 중 하나여야 합니다` },
+        400,
+        cors
+      );
+    }
 
-  // provider별 API 키 사전 확인
-  const keyCheck = {
-    openai:    { key: env.OPENAI_API_KEY,    code: 'no_openai_key',    msg: 'OpenAI API 키가 설정되지 않았습니다' },
-    anthropic: { key: env.ANTHROPIC_API_KEY, code: 'no_anthropic_key', msg: 'Anthropic API 키가 설정되지 않았습니다' },
-    xai:       { key: env.XAI_API_KEY,       code: 'no_xai_key',       msg: 'xAI API 키가 설정되지 않았습니다' },
-  };
-  const { key: providerKey, code: keyErrorCode, msg: keyErrorMsg } = keyCheck[provider];
-  if (!providerKey) {
-    return jsonResponse({ error: keyErrorCode, message: keyErrorMsg }, 503, cors);
+    // provider별 API 키 사전 확인
+    const keyCheck = {
+      openai:    { key: env.OPENAI_API_KEY,    code: 'no_openai_key',    msg: 'OpenAI API 키가 설정되지 않았습니다' },
+      anthropic: { key: env.ANTHROPIC_API_KEY, code: 'no_anthropic_key', msg: 'Anthropic API 키가 설정되지 않았습니다' },
+      xai:       { key: env.XAI_API_KEY,       code: 'no_xai_key',       msg: 'xAI API 키가 설정되지 않았습니다' },
+    };
+    const { key: providerKey, code: keyErrorCode, msg: keyErrorMsg } = keyCheck[provider];
+    if (!providerKey) {
+      return jsonResponse({ error: keyErrorCode, message: keyErrorMsg }, 503, cors);
+    }
   }
 
   const model = (typeof body?.model === 'string' && body.model.trim())

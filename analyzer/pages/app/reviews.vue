@@ -448,6 +448,7 @@ const AI_FLAG_LABEL: Record<string, string> = {
   '장점나열': '장점 나열형',
   '템플릿성': '상투적 구성',
   '업종불일치': '업종 안 맞음',
+  'heuristic_only': '휴리스틱 추정',
 }
 
 function flagLabel(flag: string): string {
@@ -1004,8 +1005,9 @@ async function loadMoreAiReviews() {
   await fetchAiReviews(selectedPlace.value.id, { reset: false })
 }
 
-async function runAiAnalyze(placeId: number, scope: 'suspect' | 'all') {
+async function runAiAnalyze(placeId: number, scope: 'suspect' | 'all' | 'heuristic') {
   if (aiAnalyzeRunning.value) return
+  // heuristic은 무료이므로 confirm 없이 바로 실행
   if (scope === 'all') {
     const pendingAll = aiDiagnosis.value?.pending_all ?? 0
     if (pendingAll > 300) {
@@ -3268,7 +3270,28 @@ onUnmounted(() => {
                 <!-- 진단 결과 있을 때 -->
                 <template v-else-if="aiDiagnosisStatus === 'done' && aiDiagnosis">
 
-                  <!-- 1: 진단 결과 (1~2줄 압축) -->
+                  <!-- 미분석 빈 상태: 한 건도 분석되지 않았을 때 -->
+                  <div v-if="aiDiagnosis.total_analyzed === 0" class="flex flex-col items-center gap-3 py-6 px-2 text-center">
+                    <UIcon name="i-heroicons-beaker" class="w-8 h-8 text-gray-300 dark:text-slate-600" />
+                    <p class="text-xs font-medium text-gray-600 dark:text-slate-300">아직 진단을 실행하지 않았습니다</p>
+                    <p class="text-[11px] text-gray-400 dark:text-slate-500 leading-snug">
+                      무료 휴리스틱 진단으로 1차 분류를 시작하세요.<br>GPT 비용이 들지 않습니다.
+                    </p>
+                    <UButton
+                      v-if="authStore.isAdmin"
+                      label="휴리스틱 진단 시작"
+                      size="sm"
+                      color="primary"
+                      variant="outline"
+                      icon="i-heroicons-beaker"
+                      :loading="aiAnalyzeRunning"
+                      :disabled="aiAnalyzeRunning"
+                      @click="selectedPlace && runAiAnalyze(selectedPlace.id, 'heuristic')"
+                    />
+                  </div>
+
+                  <!-- 1: 진단 결과 (1~2줄 압축) — 분석 결과 있을 때만 -->
+                  <template v-if="aiDiagnosis.total_analyzed > 0">
                   <div class="rounded border border-gray-100 dark:border-slate-700 px-3 py-2 flex items-center gap-3 bg-white dark:bg-slate-800">
                     <div class="flex items-baseline gap-1.5 shrink-0">
                       <span class="text-2xl font-bold tabular-nums text-gray-900 dark:text-slate-50">{{ Math.round(aiDiagnosis.suspect_rate * 100) }}<span class="text-sm font-normal text-gray-500 dark:text-slate-400">%</span></span>
@@ -3435,9 +3458,25 @@ onUnmounted(() => {
                     <p v-else class="text-[11px] text-gray-400 dark:text-slate-500">아직 검수 라벨 없음</p>
                   </div>
 
-                  <!-- 6: GPT 분석 버튼 (관리자 전용, 컴팩트) -->
+                  <!-- 6: 1차 진단 — 무료 휴리스틱 (관리자 전용) -->
                   <div v-if="authStore.isAdmin" class="rounded border border-gray-100 dark:border-slate-700 px-3 py-2 flex flex-col gap-1.5 bg-white dark:bg-slate-800">
-                    <p class="text-[11px] font-medium text-gray-500 dark:text-slate-400">GPT 분석 <span class="font-normal text-gray-400 dark:text-slate-500">— 관리자 전용</span></p>
+                    <p class="text-[11px] font-medium text-gray-500 dark:text-slate-400">1차 진단 <span class="font-normal text-gray-400 dark:text-slate-500">— 무료 (GPT 0회)</span></p>
+                    <UButton
+                      label="휴리스틱 진단"
+                      size="xs"
+                      color="primary"
+                      variant="outline"
+                      icon="i-heroicons-beaker"
+                      :loading="aiAnalyzeRunning"
+                      :disabled="aiAnalyzeRunning || aiRejudgeRunning"
+                      @click="selectedPlace && runAiAnalyze(selectedPlace.id, 'heuristic')"
+                    />
+                    <p class="text-[10px] text-gray-400 dark:text-slate-500 leading-snug">미분석 리뷰를 규칙+점수로 분류 · 비용 없음 · GPT 분석 전 1차 추정</p>
+                  </div>
+
+                  <!-- 7: 2차 정밀 — GPT (관리자 전용, 컴팩트) -->
+                  <div v-if="authStore.isAdmin" class="rounded border border-gray-100 dark:border-slate-700 px-3 py-2 flex flex-col gap-1.5 bg-white dark:bg-slate-800">
+                    <p class="text-[11px] font-medium text-gray-500 dark:text-slate-400">2차 정밀 <span class="font-normal text-gray-400 dark:text-slate-500">— GPT (비용 발생)</span></p>
                     <div class="flex flex-wrap gap-1.5">
                       <UButton
                         label="의심만 분석"
@@ -3488,6 +3527,8 @@ onUnmounted(() => {
                       <UIcon name="i-heroicons-exclamation-circle" class="w-3 h-3 shrink-0" />{{ aiRejudgeError }}
                     </div>
                   </div>
+
+                  </template><!-- /v-if total_analyzed > 0 -->
 
                 </template>
 
@@ -3583,9 +3624,15 @@ onUnmounted(() => {
                         <span v-if="item.sentiment" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300">
                           {{ item.sentiment === 'positive' ? '긍정' : item.sentiment === 'negative' ? '부정' : '중립' }}
                         </span>
+                        <!-- 휴리스틱 추정 뱃지 (GPT 미정밀 표시) -->
+                        <span
+                          v-if="item.flags.includes('heuristic_only')"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-sky-50 dark:bg-sky-900/20 text-sky-600 dark:text-sky-300 shrink-0"
+                          title="휴리스틱 추정 — GPT 정밀 분석 전"
+                        >휴리스틱 추정</span>
                         <!-- 플래그 칩 -->
                         <span
-                          v-for="f in item.flags.filter((fl: string) => fl !== 'presumed_human')"
+                          v-for="f in item.flags.filter((fl: string) => fl !== 'presumed_human' && fl !== 'heuristic_only')"
                           :key="f"
                           class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-300"
                           :title="f"
