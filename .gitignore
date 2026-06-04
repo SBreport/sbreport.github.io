@@ -18,3 +18,4 @@ _세션/
 # 조사·디버그용 임시 SERP 덤프 (OneDrive가 되살려도 git 제외)
 pc_serp_*.html
 Program.lnk
+.gstack/
