@@ -323,7 +323,7 @@ function toggleExpandSample(id: string) {
 
 // ─── AI 진단 (Phase 4-2) 타입 ────────────────────────────────────────────────
 
-type HumanLabel = 'human' | 'ad' | 'unsure' | null
+type HumanLabel = 'human' | 'ad' | 'ai' | 'unsure' | null
 
 interface AiDiagnosisSuspectReview {
   review_id: string
@@ -336,6 +336,7 @@ interface AiDiagnosisSuspectReview {
   review_date: string | null
   human_label?: HumanLabel
   human_note?: string | null
+  kind?: 'ad' | 'ai' | null
 }
 
 interface AiDiagnosisAgreement {
@@ -364,7 +365,7 @@ interface AiDiagnosisResult {
   distribution: Record<string, number>
   flag_breakdown: Record<string, number>
   sample_suspect: AiDiagnosisSuspectReview[]
-  human_counts: { human: number; ad: number; unsure: number }
+  human_counts: { human: number; ad: number; ai: number; unsure: number }
   agreement: AiDiagnosisAgreement
 }
 
@@ -381,6 +382,7 @@ interface AiReviewItem {
   heuristic_score: number | null
   human_label: HumanLabel
   human_note: string | null
+  kind?: 'ad' | 'ai' | null
 }
 
 // AI 진단 상태
@@ -477,7 +479,7 @@ const aiSuspectLevelClass: Record<string, string> = {
 // 현재 필터 라벨 (우측 헤더용)
 const aiReviewsFilterLabel = computed(() => {
   if (activeHumanLabel.value !== null) {
-    const humanLabelMap: Record<string, string> = { human: '사람 라벨', ad: '광고·AI 라벨', unsure: '애매 라벨' }
+    const humanLabelMap: Record<string, string> = { human: '사람 라벨', ad: '광고 라벨', ai: 'AI 라벨', unsure: '애매 라벨' }
     return humanLabelMap[activeHumanLabel.value] ?? activeHumanLabel.value
   }
   if (activeScoreMin.value !== null || activeScoreMax.value !== null) {
@@ -3420,13 +3422,21 @@ onUnmounted(() => {
                         :class="activeHumanLabel === 'ad'
                           ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium'
                           : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'"
-                        :title="`광고·AI로 라벨된 리뷰 ${aiDiagnosis.human_counts.ad}건 보기`"
+                        :title="`광고로 라벨된 리뷰 ${aiDiagnosis.human_counts.ad}건 보기`"
                         @click="setHumanLabelFilter('ad')"
                       >광고 {{ aiDiagnosis.human_counts.ad }}</button>
                       <button
                         class="flex items-center gap-1 text-[11px] px-1 py-0.5 rounded transition-colors"
-                        :class="activeHumanLabel === 'unsure'
+                        :class="activeHumanLabel === 'ai'
                           ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium'
+                          : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'"
+                        :title="`AI로 라벨된 리뷰 ${aiDiagnosis.human_counts.ai}건 보기`"
+                        @click="setHumanLabelFilter('ai')"
+                      >AI {{ aiDiagnosis.human_counts.ai }}</button>
+                      <button
+                        class="flex items-center gap-1 text-[11px] px-1 py-0.5 rounded transition-colors"
+                        :class="activeHumanLabel === 'unsure'
+                          ? 'bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium'
                           : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'"
                         :title="`애매로 라벨된 리뷰 ${aiDiagnosis.human_counts.unsure}건 보기`"
                         @click="setHumanLabelFilter('unsure')"
@@ -3584,7 +3594,7 @@ onUnmounted(() => {
                       v-for="item in aiReviewsItems"
                       :key="item.review_id"
                       class="border border-gray-100 dark:border-slate-700 rounded p-2.5 flex flex-col gap-1.5 bg-white dark:bg-slate-800"
-                      :class="item.human_label === 'human' ? 'border-l-2 border-l-emerald-400' : item.human_label === 'ad' ? 'border-l-2 border-l-red-400' : item.human_label === 'unsure' ? 'border-l-2 border-l-amber-400' : ''"
+                      :class="item.human_label === 'human' ? 'border-l-2 border-l-emerald-400' : item.human_label === 'ad' ? 'border-l-2 border-l-red-400' : item.human_label === 'ai' ? 'border-l-2 border-l-amber-400' : item.human_label === 'unsure' ? 'border-l-2 border-l-slate-400' : ''"
                     >
                       <!-- 헤더: 점수 배지 + 플래그 + 날짜 -->
                       <div class="flex items-center gap-1.5 flex-wrap">
@@ -3604,6 +3614,17 @@ onUnmounted(() => {
                           v-else
                           class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium shrink-0 bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400"
                         >사람추정</span>
+                        <!-- kind 꼬리표 (광고형/AI형) -->
+                        <span
+                          v-if="item.kind === 'ad'"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300"
+                          title="광고형 플래그(광고체·과장) 포함"
+                        >광고형</span>
+                        <span
+                          v-else-if="item.kind === 'ai'"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                          title="AI형 플래그(격식체·템플릿성 등) 포함"
+                        >AI형</span>
                         <!-- 보정 표기: 원점수와 effective가 다를 때 -->
                         <span
                           v-if="item.raw_ai_suspect !== undefined && item.ai_suspect !== null"
@@ -3614,8 +3635,8 @@ onUnmounted(() => {
                         <span
                           v-if="item.human_label"
                           class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0"
-                          :class="item.human_label === 'human' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : item.human_label === 'ad' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300' : 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300'"
-                        >{{ item.human_label === 'human' ? '사람' : item.human_label === 'ad' ? '광고·AI' : '애매' }}</span>
+                          :class="item.human_label === 'human' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : item.human_label === 'ad' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300' : item.human_label === 'ai' ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400'"
+                        >{{ item.human_label === 'human' ? '사람' : item.human_label === 'ad' ? '광고' : item.human_label === 'ai' ? 'AI' : '애매' }}</span>
                         <!-- 감성 -->
                         <span v-if="item.sentiment" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300">
                           {{ item.sentiment === 'positive' ? '긍정' : item.sentiment === 'negative' ? '부정' : '중립' }}
@@ -3647,7 +3668,7 @@ onUnmounted(() => {
 
                       <!-- 라벨 컨트롤 (researcher 이상) -->
                       <div class="flex items-center gap-1 flex-wrap pt-0.5 border-t border-gray-50 dark:border-slate-700/60">
-                        <!-- 3개 버튼 -->
+                        <!-- 4개 버튼: 사람 / 광고 / AI / 애매 -->
                         <button
                           class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-50"
                           :class="item.human_label === 'human'
@@ -3663,14 +3684,23 @@ onUnmounted(() => {
                             ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium'
                             : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-700 dark:hover:text-red-300'"
                           :disabled="labelSavingIds.has(item.review_id)"
-                          :title="item.human_label === 'ad' ? '클릭하면 라벨 해제' : '광고·AI 작성 리뷰'"
+                          :title="item.human_label === 'ad' ? '클릭하면 라벨 해제' : '광고 목적으로 작성된 리뷰 (체험단 등)'"
                           @click="saveReviewLabel(item.review_id, item.human_label === 'ad' ? null : 'ad')"
-                        >광고·AI</button>
+                        >광고</button>
+                        <button
+                          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-50"
+                          :class="item.human_label === 'ai'
+                            ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium'
+                            : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 hover:text-amber-700 dark:hover:text-amber-300'"
+                          :disabled="labelSavingIds.has(item.review_id)"
+                          :title="item.human_label === 'ai' ? '클릭하면 라벨 해제' : 'AI가 생성한 것으로 판단된 리뷰'"
+                          @click="saveReviewLabel(item.review_id, item.human_label === 'ai' ? null : 'ai')"
+                        >AI</button>
                         <button
                           class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-50"
                           :class="item.human_label === 'unsure'
-                            ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium'
-                            : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 hover:text-amber-700 dark:hover:text-amber-300'"
+                            ? 'bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium'
+                            : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 hover:text-slate-700 dark:hover:text-slate-200'"
                           :disabled="labelSavingIds.has(item.review_id)"
                           :title="item.human_label === 'unsure' ? '클릭하면 라벨 해제' : '판단하기 애매한 리뷰'"
                           @click="saveReviewLabel(item.review_id, item.human_label === 'unsure' ? null : 'unsure')"

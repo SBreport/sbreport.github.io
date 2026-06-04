@@ -3329,6 +3329,25 @@ function effectiveSuspect(rawAiSuspect, bodyLen, flags) {
   return rawAiSuspect;
 }
 
+// ── AI형/광고형 꼬리표 헬퍼 (읽는 시점 계산, 저장값 변경 없음) ─────────────
+/** 광고 성격 플래그 — 하나라도 있으면 'ad' */
+const AD_KIND_FLAGS = new Set(['광고체', '과장']);
+/** AI 작성 성격 플래그 — 광고형 없고 이것들만 있으면 'ai' */
+const AI_KIND_FLAGS = new Set(['격식체', '템플릿성', '장점나열', '정갈끝이모지', '추상칭찬', '구체성결여']);
+
+/**
+ * 저장된 flags 배열에서 'ad'|'ai'|null 꼬리표를 결정.
+ * 광고형 우선: 광고형 플래그 있으면 'ad', 없고 AI형 플래그만 있으면 'ai', 둘 다 없으면 null.
+ * @param {string[]} flags
+ * @returns {'ad'|'ai'|null}
+ */
+function reviewKind(flags) {
+  if (!Array.isArray(flags)) return null;
+  if (flags.some(f => AD_KIND_FLAGS.has(f))) return 'ad';
+  if (flags.some(f => AI_KIND_FLAGS.has(f))) return 'ai';
+  return null;
+}
+
 /**
  * 1단계 규칙 필터 — 명백한 저품질 리뷰 판별 (무료, deterministic).
  * true = 저품질(빈·극초단문·자모·특수문자만) → AI 아님, GPT 호출 스킵.
@@ -4158,12 +4177,12 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
     const flag_breakdown = {};
 
     // 사람 검수 집계용
-    const human_counts = { human: 0, ad: 0, unsure: 0 };
-    // AI 일치율 집계 (unsure 제외한 human/ad 라벨만)
+    const human_counts = { human: 0, ad: 0, ai: 0, unsure: 0 };
+    // AI 일치율 집계 (unsure 제외한 human/ad/ai 라벨만)
     let agree_count = 0;
     let compared_count = 0;
     let false_positive = 0;  // AI=suspect, 사람=human
-    let false_negative = 0;  // AI=not-suspect, 사람=ad
+    let false_negative = 0;  // AI=not-suspect, 사람∈{ad,ai}
 
     // GPT 판정 행만 따로 수집 (sample_suspect 용)
     const gptJudgedItems = [];
@@ -4176,6 +4195,7 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       // 사람 라벨 집계 (분류 여부 무관)
       if (row.human_label === 'human') human_counts.human++;
       else if (row.human_label === 'ad') human_counts.ad++;
+      else if (row.human_label === 'ai') human_counts.ai++;
       else if (row.human_label === 'unsure') human_counts.unsure++;
 
       if (row.rule_low_quality === 1) {
@@ -4200,9 +4220,10 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       }
 
       // humanCorrection 적용: 사람 라벨로 suspect 덮어쓰기
+      // human∈{ad,ai} → suspect, human='human' → not-suspect, unsure/없음 → effectiveSuspect
       let isSuspect;
       if (humanCorrection) {
-        if (row.human_label === 'ad') {
+        if (row.human_label === 'ad' || row.human_label === 'ai') {
           isSuspect = true;
         } else if (row.human_label === 'human') {
           isSuspect = false;
@@ -4214,10 +4235,11 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       }
 
       // AI 일치율 집계 (GPT 판정 행만 — 휴리스틱 추정 제외, 보정 모드 무관 순수 AI 기준)
+      // "의심 정답" = human∈{ad,ai}, "사람 정답" = human='human', unsure 제외
       const aiIsSuspect = eff >= suspectThreshold;
-      if (!isHeuristicOnly && (row.human_label === 'human' || row.human_label === 'ad')) {
+      const humanIsSuspect = row.human_label === 'ad' || row.human_label === 'ai';
+      if (!isHeuristicOnly && (row.human_label === 'human' || row.human_label === 'ad' || row.human_label === 'ai')) {
         compared_count++;
-        const humanIsSuspect = row.human_label === 'ad';
         if (aiIsSuspect === humanIsSuspect) {
           agree_count++;
         } else if (aiIsSuspect && !humanIsSuspect) {
@@ -4290,6 +4312,7 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         review_date:   r.review_date,
         human_label:   r.human_label,
         human_note:    r.human_note,
+        kind:          reviewKind(r.flags),
       }));
 
     // pending_all = GPT 미판정 전체 건수 (사람추정 + 미분석 + 휴리스틱 추정)
@@ -4497,8 +4520,8 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
   if (!Number.isFinite(size) || size < 1) size = 30;
   size = Math.min(100, size);
 
-  // 사람 라벨 필터 (human|ad|unsure)
-  const VALID_HUMAN_LABELS = ['human', 'ad', 'unsure'];
+  // 사람 라벨 필터 (human|ad|ai|unsure)
+  const VALID_HUMAN_LABELS = ['human', 'ad', 'ai', 'unsure'];
   const humanLabelFilter = urlObj.searchParams.get('humanLabel') ?? null;
   if (humanLabelFilter !== null && !VALID_HUMAN_LABELS.includes(humanLabelFilter)) {
     return jsonResponse(
@@ -4556,7 +4579,7 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         // humanCorrection 적용
         let isSuspect;
         if (humanCorrection) {
-          if (r.human_label === 'ad') isSuspect = true;
+          if (r.human_label === 'ad' || r.human_label === 'ai') isSuspect = true;
           else if (r.human_label === 'human') isSuspect = false;
           else isSuspect = eff >= suspectThreshold;
         } else {
@@ -4600,6 +4623,7 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         heuristic_score: r.heuristic_score ?? null,
         human_label:     r.human_label ?? null,
         human_note:      r.human_note ?? null,
+        kind:            reviewKind(r.flags_parsed),
       }));
 
       return jsonResponse({ total, page, size, items }, 200, cors);
@@ -4667,6 +4691,7 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         heuristic_score: r.heuristic_score ?? null,
         human_label:     r.human_label ?? null,
         human_note:      r.human_note ?? null,
+        kind:            reviewKind(flags_parsed),
       };
     });
 
@@ -4719,7 +4744,7 @@ async function handleSetReviewLabel(request, env, corsHeaders, placeRowId, revie
     return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
   }
 
-  const VALID_LABELS = ['human', 'ad', 'unsure'];
+  const VALID_LABELS = ['human', 'ad', 'ai', 'unsure'];
   const label = body?.label ?? null;
   const note = typeof body?.note === 'string' ? body.note.trim().slice(0, 500) : null;
 
