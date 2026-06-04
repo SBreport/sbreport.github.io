@@ -34,6 +34,13 @@
       <span id="search-count" class="search-count"></span>
     </div>
 
+    <div class="filter-chips" role="group" aria-label="유형 필터">
+      <button type="button" class="chip is-active" data-filter="all">전체</button>
+      <button type="button" class="chip" data-filter="page">서비스</button>
+      <button type="button" class="chip" data-filter="doc">문서</button>
+      <button type="button" class="chip" data-filter="tool">도구</button>
+    </div>
+
     <section class="cards" aria-label="프로젝트 목록">
 
       <a class="card card-page" href="http://smartbranding.synology.me:8080/" target="_blank" rel="noopener noreferrer"
@@ -136,8 +143,7 @@
         </div>
         <h2 class="card-title">SB analyzer <span class="ext-arrow" aria-hidden="true">↗</span></h2>
         <p class="card-desc">
-          네이버 통합검색 구좌 분석과 플레이스 리뷰 수집·분석을 제공하는 정식 분석 사이트.
-          '네이버 키워드 분석 확장프로그램'과 연동되는 사내 서비스. (로그인 필요)
+          네이버 키워드·구좌 분석과 플레이스 리뷰 분석 정식 사이트. 확장과 연동. (로그인)
         </p>
         <div class="card-footer">
           <span class="card-meta">로그인 · 사내 서비스</span>
@@ -357,6 +363,8 @@
       sorted.forEach(card => cardContainer.appendChild(card));
     }
 
+    let activeFilter = 'all';
+
     function applySearch(query) {
       const q = query.replace(/^#/, '').trim().toLowerCase();
       let shown = 0;
@@ -364,14 +372,27 @@
         const tags = (card.dataset.tags || '').toLowerCase();
         const title = card.querySelector('.card-title').textContent.toLowerCase();
         const desc = card.querySelector('.card-desc').textContent.toLowerCase();
-        const match = !q || tags.includes(q) || title.includes(q) || desc.includes(q);
+        const qMatch = !q || tags.includes(q) || title.includes(q) || desc.includes(q);
+        const fMatch = activeFilter === 'all' || card.dataset.type === activeFilter;
+        const match = qMatch && fMatch;
         card.style.display = match ? '' : 'none';
         if (match) shown++;
       });
       emptyEl.hidden = shown !== 0;
-      countEl.textContent = q ? `${shown}건` : '';
+      const filtering = q || activeFilter !== 'all';
+      countEl.textContent = filtering ? `${shown}건` : '';
       clearBtn.style.display = q ? '' : 'none';
     }
+
+    // 유형 필터 칩
+    const chips = document.querySelectorAll('.chip');
+    function setFilter(f) {
+      activeFilter = f;
+      chips.forEach(c => c.classList.toggle('is-active', c.dataset.filter === f));
+      localStorage.setItem('typeFilter', f);
+      applySearch(searchInput.value);
+    }
+    chips.forEach(c => c.addEventListener('click', () => setFilter(c.dataset.filter)));
 
     searchInput.addEventListener('input', e => applySearch(e.target.value));
     clearBtn.addEventListener('click', () => {
@@ -401,7 +422,8 @@
     const savedSort = localStorage.getItem('sortMode') || 'platform';
     sortSelect.value = savedSort;
     applySort(savedSort);
-    applySearch('');
+    const savedFilter = localStorage.getItem('typeFilter') || 'all';
+    setFilter(savedFilter);
   </script>
 </body>
 </html>
