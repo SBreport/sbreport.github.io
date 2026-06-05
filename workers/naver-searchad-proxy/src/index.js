@@ -4931,6 +4931,89 @@ async function handleSetReviewLabel(request, env, corsHeaders, placeRowId, revie
   }
 }
 
+// =============================================================================
+// Phase 4 — 구조적 휴머나이저 (생성 후 미세 불완전성 주입)
+// =============================================================================
+
+/** 전체 샘플 중 이 비율에만 휴머나이즈 적용 (0 = 꺼짐, 1 = 전체) */
+const HUMANIZE_RATE = 0.5;
+/** 쉼표→공백/줄바꿈 치환 확률 (쉼표 하나당 독립 시행) */
+const HUMANIZE_COMMA_PROB = 0.7;
+/** 어절 사이 공백 1개 제거 확률 (리뷰당 최대 1회) */
+const HUMANIZE_SPACE_PROB = 0.3;
+/** 구어 변형 오타 적용 확률 */
+const HUMANIZE_TYPO_PROB = 0.25;
+
+/**
+ * 알려진 캐주얼 구어 변형 맵 (첫 매치 1개만 치환).
+ * 문장 의미를 바꾸지 않는 표기 변형만 포함.
+ */
+const HUMANIZE_TYPO_MAP = [
+  ['좋아요', '조아요'],
+  ['너무', '넘'],
+  ['받았어요', '받았어용'],
+  ['감사합니다', '감사함다'],
+  ['같아요', '같아용'],
+  ['왔어요', '왔어용'],
+];
+
+/**
+ * LLM이 생성한 리뷰 본문에 사람 글 특유의 미세 불완전성을 확률적으로 주입한다.
+ * - 과하면 인위적으로 보이므로 한 리뷰당 총 편집 횟수를 최대 2개로 제한.
+ * - 이모지/이모티콘 추가 금지. 종결어미 변경 금지. 가독성 유지 필수.
+ * @param {string} text 원본 생성 본문
+ * @returns {string} 후처리된 본문
+ */
+function humanizeBody(text) {
+  let result = text;
+  let editCount = 0;
+
+  // ── 1. 쉼표 줄이기 ──────────────────────────────────────────────────────
+  // 사람은 쉼표를 거의 쓰지 않음 → ", " 를 공백 또는 줄바꿈으로 확률 치환
+  if (editCount < 2) {
+    result = result.replace(/, /g, (match) => {
+      if (editCount >= 2) return match;
+      if (Math.random() < HUMANIZE_COMMA_PROB) {
+        editCount++;
+        // 줄바꿈이 이미 있는 텍스트엔 공백, 아니면 50% 확률로 줄바꿈
+        return Math.random() < 0.5 ? ' ' : '\n';
+      }
+      return match;
+    });
+  }
+
+  // ── 2. 띄어쓰기 붙이기 ──────────────────────────────────────────────────
+  // 한 군데만, 인접한 두 어절 사이 공백 1개 제거
+  if (editCount < 2 && Math.random() < HUMANIZE_SPACE_PROB) {
+    // 한글 어절 경계(한글자+ 공백 한글자+) 목록에서 무작위 1개 선택해 공백 제거
+    const spacePositions = [];
+    const spacePattern = /([가-힣]+) ([가-힣])/g;
+    let m;
+    while ((m = spacePattern.exec(result)) !== null) {
+      spacePositions.push(m.index + m[1].length); // 공백 위치
+    }
+    if (spacePositions.length > 0) {
+      const pos = spacePositions[Math.floor(Math.random() * spacePositions.length)];
+      result = result.slice(0, pos) + result.slice(pos + 1);
+      editCount++;
+    }
+  }
+
+  // ── 3. 가벼운 오타 (구어 변형) ──────────────────────────────────────────
+  // 안전 맵에서 첫 매치 1개만 치환
+  if (editCount < 2 && Math.random() < HUMANIZE_TYPO_PROB) {
+    for (const [from, to] of HUMANIZE_TYPO_MAP) {
+      if (result.includes(from)) {
+        result = result.replace(from, to); // 첫 번째 매치만 replace
+        editCount++;
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
 /**
  * POST /api/places/:id/generate-samples  (researcher/tester 이상)
  * fact pool 추출 → few-shot 표본 선정 → 스타일 조합 → GPT 생성 → DB 저장 → 반환.
@@ -5237,14 +5320,20 @@ ${itemLines}
     const gptItem = gptSamples.find(s => s.index === i + 1) ?? gptSamples[i];
     if (!gptItem?.body) continue;
 
+    // ── 구조적 휴머나이저 후처리 ──────────────────────────────────────────
+    // HUMANIZE_RATE 확률로만 적용. 나머지는 원본 그대로 저장·반환.
+    const finalBody = Math.random() < HUMANIZE_RATE
+      ? humanizeBody(gptItem.body)
+      : gptItem.body;
+
     const sampleId = crypto.randomUUID();
     // style_length: 실제 생성 결과 길이로 계산 (short<30 / medium<80 / long)
-    const bodyLen = gptItem.body.length;
+    const bodyLen = finalBody.length;
     const actualLength = bodyLen < 30 ? 'short' : bodyLen < 80 ? 'medium' : 'long';
     // style_tone / style_focus: 허구 라벨 대신 정직한 'n/a' 저장
     samples.push({
       id:       sampleId,
-      body:     gptItem.body,
+      body:     finalBody,
       length:   actualLength,
       tone:     'n/a',
       focus:    'n/a',
@@ -5257,7 +5346,7 @@ ${itemLines}
         INSERT INTO place_generated_samples
           (id, place_row_id, body, style_length, style_tone, style_focus, model, provider, created_at, status, actor_user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-      `).bind(sampleId, placeRowId, gptItem.body, actualLength, 'n/a', 'n/a', model, provider, generatedAt, authResult.user.id)
+      `).bind(sampleId, placeRowId, finalBody, actualLength, 'n/a', 'n/a', model, provider, generatedAt, authResult.user.id)
     );
   }
 
