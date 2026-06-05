@@ -3157,6 +3157,10 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
     '하고','않고','않아요','없어요','없는','있는','이번','다음','가장','때문','때문에',
     '하나','하는','하는데','해서','해요','해도','했는데','했어','이렇게','저렇게','어떻게',
     '너무나','좀더','더욱','매번','항상','자주','가끔','이미','벌써','항상','절대','역시',
+    // 시술/제품/담당자가 아닌 흔한 일반어 — fact pool 오염 방지
+    '모두','오늘','처음','다른','부분','시간','생각','느낌','정도','이것저것','하나씩','중간중간',
+    '진행','과정','방식','방법','설명','안내','선택','결정','경험','결과','효과','반응',
+    '상태','분들','분위기','느낌이','생각이','것같','것같이','것이라','이라서','라서',
   ]);
 
   // 일반 칭찬어·필러 — 어느 가게든 쓸 수 있는 흔한 어휘. fact pool에서 제거.
@@ -3181,6 +3185,10 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
     '친절한','꼼꼼한','깔끔한','편안한','세심한','자세한','정확한','상냥한','능숙한','깨끗한','시원한','훌륭한',
     '친절하신','꼼꼼하신','깔끔하신','세심하신','자세하신','친절했던','꼼꼼했던',
   ]);
+  // 동사·접속어로 끝나는 namePart 오탐 차단 — "절하시고원장님" 류 근절
+  const BAD_STAFF_SUFFIX_RE = /(하시고|하셔서|하신|했던|하고|해서|한|하게|하며|하여|시고|셔서|히고)$/;
+  // 형용사 어근 포함 오탐 차단 — "친절", "꼼꼼" 등이 namePart에 포함된 경우
+  const BAD_STAFF_ADJECTIVE_RE = /친절|꼼꼼|깔끔|세심|자세|정확|상냥|편안|능숙|훌륭|깨끗/;
   const staffEntityFreq = new Map();
 
   const wordFreq = new Map();
@@ -3194,6 +3202,10 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
       const namePart = m[1];
       // 형용사 관형형·일반어가 이름으로 잡힌 오탐 제거
       if (BAD_STAFF_NAMES.has(namePart) || GENERIC_FILLER.has(namePart) || STOPWORDS.has(namePart)) continue;
+      // 동사·접속어 어미로 끝나는 경우 ("절하시고", "도해서" 등) 제거
+      if (BAD_STAFF_SUFFIX_RE.test(namePart)) continue;
+      // 형용사 어근이 namePart 안에 포함된 경우 제거
+      if (BAD_STAFF_ADJECTIVE_RE.test(namePart)) continue;
       const entity = m[0].replace(/\s+/g, ''); // 공백 제거해서 정규화
       staffEntityFreq.set(entity, (staffEntityFreq.get(entity) ?? 0) + 1);
     }
@@ -5006,7 +5018,11 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   //           → (c) length>=20 아무거나
   let styleExamples;
   try {
-    // (a) 사람 라벨 확정 리뷰
+    // 부정 후기 키워드 — 이 단어가 body에 포함된 리뷰는 본보기 후보에서 제외
+    // (부정적 말투가 생성물에 전염되는 것 방지)
+    const NEGATIVE_RE = /별로|최악|불친절|환불|실망|아깝|비추|짜증|그닥|돈만|불만|최악|별로예요|후회|최악이|별로임|실망임|돈낭비|다시는/;
+
+    // (a) 사람 라벨 확정 리뷰 (긍정만)
     const { results: humanRows } = await env.DB.prepare(`
       SELECT r.body
       FROM place_reviews r
@@ -5017,13 +5033,13 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
         AND l.human_label = 'human'
       ORDER BY RANDOM()
       LIMIT ?
-    `).bind(placeRowId, count * 3).all();
+    `).bind(placeRowId, count * 5).all();
 
-    styleExamples = humanRows ?? [];
+    styleExamples = (humanRows ?? []).filter(r => !NEGATIVE_RE.test(r.body));
 
-    // (b) 광고·AI 아닌 것 (라벨 없음 포함), length>=20 으로 보충
+    // (b) 광고·AI 아닌 것 (라벨 없음 포함), length>=20 으로 보충 (긍정만)
     if (styleExamples.length < count) {
-      const needed = count * 3 - styleExamples.length;
+      const needed = count * 5 - styleExamples.length;
       const seenA = new Set(styleExamples.map(r => r.body));
       const { results: cleanRows } = await env.DB.prepare(`
         SELECT r.body
@@ -5036,10 +5052,13 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
         ORDER BY RANDOM()
         LIMIT ?
       `).bind(placeRowId, needed).all();
-      styleExamples = [...styleExamples, ...(cleanRows ?? []).filter(r => !seenA.has(r.body))];
+      styleExamples = [
+        ...styleExamples,
+        ...(cleanRows ?? []).filter(r => !seenA.has(r.body) && !NEGATIVE_RE.test(r.body)),
+      ];
     }
 
-    // (c) fallback: length>=20 아무거나
+    // (c) fallback: length>=20 아무거나 (긍정만)
     if (styleExamples.length < count) {
       const needed = count * 2 - styleExamples.length;
       const seenB = new Set(styleExamples.map(r => r.body));
@@ -5052,7 +5071,10 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
         ORDER BY RANDOM()
         LIMIT ?
       `).bind(placeRowId, needed).all();
-      styleExamples = [...styleExamples, ...(anyRows ?? []).filter(r => !seenB.has(r.body))];
+      styleExamples = [
+        ...styleExamples,
+        ...(anyRows ?? []).filter(r => !seenB.has(r.body) && !NEGATIVE_RE.test(r.body)),
+      ];
     }
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
@@ -5077,21 +5099,25 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 
 [역할]
 각 요청마다 "말투 본보기 리뷰" 1개가 주어진다. 그 리뷰의 말투·문장 길이·호흡·구조를 흉내내되, 내용(경험·시술·메뉴)은 [허용 사실] 목록에서 가져와 완전히 새로 지어라.
+긍정적이고 만족한 후기만 생성. 불만·부정·가격 불만 내용 절대 금지.
 
-[가드레일 i — 상투어 금지]
-- "친절", "꼼꼼", "깔끔", "만족", "추천", "최고", "훌륭", "완벽" 같은 뻔한 칭찬어를 쓰지 마라.
-- 여러 샘플이 같은 형용사·감탄어를 반복하지 마라. 표현을 매번 새로 지어라.
+[가드레일 i — 상투어·군더더기 금지]
+- "친절", "꼼꼼", "깔끔", "만족", "추천", "최고", "훌륭", "완벽" 같은 뻔한 칭찬어를 쓰지 마라. 본보기에 이런 칭찬어가 있어도 너는 따라 쓰지 말고 구체 내용(시술명·부위·수치·결과)으로 대체하라.
+- 여러 샘플이 같은 형용사·감탄어·단어(예: "가성비")를 반복하지 마라. 표현을 매번 새로 지어라.
 - "추천합니다", "또 가고 싶어요", "전체적으로 만족" 같은 총평·결론을 붙이지 마라.
+- 알맹이 없는 과정 묘사 금지: "흐름이 이어져서", "동선이 짧아서/짧았어요", "설명이 끊기지 않게", "다른 데랑은 좀 달랐어요", "부담 없이", "막힘 없이" 같은 추상적 연결어로 채우지 마라. 대신 구체적 시술명·부위·수치·결과만 담백하게 써라.
 
-[가드레일 ii — 말투 본보기]
-- 각 샘플에 지정된 "말투 본보기" 리뷰의 말투·길이·호흡·구조를 따라라.
+[가드레일 ii — 말투 본보기 충실 재현]
+- 각 샘플에 지정된 "말투 본보기" 리뷰의 말투·길이·호흡·구조를 그대로 따라라. 본보기가 짧으면 짧게. 본보기가 캐주얼하면 캐주얼하게.
 - 오타·미완결·구어적 특성도 그대로 살려라. 원본보다 더 매끄럽게 다듬지 마라.
+- 종결어미는 '~어요'만 반복하지 말고 음슴체('~함', '~음')·구어체를 섞어라. 쉼표 대신 줄바꿈이나 물결(~)을 활용하라.
 
 [절대 금지]
 - 업체명·지점명을 쓰지 마라.
 - [허용 사실] 목록에 없는 시술명·메뉴명·담당자 이름을 지어내지 마라.
-- 격식체("~습니다", "~됩니다") 금지 — 본보기가 구어체면 구어체 유지.
+- 격식체("~습니다", "~됩니다") 과다 사용 금지 — 본보기가 구어체면 구어체 유지.
 - 말투 본보기와 내용이 거의 같은 문장을 그대로 내지 마라. 내용은 반드시 바꿔야 한다.
+- 각 후기는 서로 다른 시술·소재를 담아야 한다. 같은 단어가 여러 편에 반복 등장 금지.
 
 [허용]
 - [허용 사실] 목록 안의 항목(시술명·메뉴명·담당자명·특징어)은 자유롭게 사용.
@@ -5106,27 +5132,30 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     : '[허용 사실: 없음 — 구체적 사실을 새로 지어내지 말 것]';
 
   // 리뷰별 말투 본보기 1개 + 바꿔 넣을 사실 1~3개 서로 다르게 배정
-  // 샘플마다 서로 다른 fact 조합을 위해 factPool을 rotate
+  // 샘플 간 fact 겹침을 최소화하기 위해: 이미 다른 샘플에 배정된 fact는 우선순위 후순위로
   const shuffledFacts = [...factPool].sort(() => Math.random() - 0.5);
+  const assignedFactSet = new Set(); // 배치 내 이미 배정된 fact 추적
 
   const itemLines = styleAssignments.map((style, i) => {
     const example = shuffledExamples[i % shuffledExamples.length];
     const exampleText = example.body;
 
-    // 이 본보기에 이미 포함된 fact를 제외하고, 다른 샘플과 겹치지 않도록 rotate
-    const unusedFacts = shuffledFacts.filter(f => !exampleText.includes(f));
-    // 샘플별로 다른 구간 선택 (i * 2 offset)
-    const offset = (i * 2) % Math.max(unusedFacts.length, 1);
-    const pickCount = Math.min(3, Math.max(1, unusedFacts.length));
-    const pickedFacts = [];
-    for (let k = 0; k < pickCount && k < 3; k++) {
-      pickedFacts.push(unusedFacts[(offset + k) % unusedFacts.length]);
-    }
+    // 이 본보기에 이미 포함된 fact 제외 + 배치 내 이미 배정된 fact 우선 제외
+    const notInExample = shuffledFacts.filter(f => !exampleText.includes(f));
+    const freshFacts = notInExample.filter(f => !assignedFactSet.has(f));
+    const fallbackFacts = notInExample.filter(f => assignedFactSet.has(f));
+    // 새 fact 우선, 부족하면 fallback으로 보충
+    const candidateFacts = [...freshFacts, ...fallbackFacts];
+
+    const pickCount = Math.min(2, Math.max(1, candidateFacts.length)); // 최대 2개로 줄여 다양성 확보
+    const pickedFacts = candidateFacts.slice(0, pickCount);
+    pickedFacts.forEach(f => assignedFactSet.add(f));
+
     const factsStr = pickedFacts.length > 0
       ? pickedFacts.filter(Boolean).join(', ')
       : '(없음 — 본보기 말투·구조만 살려 변형)';
 
-    return `[${i + 1}] 말투 본보기: "${exampleText}" / 이번 리뷰에 담을 사실: ${factsStr} → 본보기 말투·길이 유지, 내용은 완전히 새로`;
+    return `[${i + 1}] 말투 본보기: "${exampleText}" / 이번 리뷰에 담을 사실(구체 내용만, 칭찬어 금지): ${factsStr} → 본보기 말투·길이 유지, 내용은 완전히 새로`;
   }).join('\n\n');
 
   const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 절대 쓰지 말 것]
@@ -5135,7 +5164,8 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 
 ${factPoolText}
 
-[생성 요청 목록 — 각 번호마다 말투 본보기가 다름. 상투적 칭찬어 반복 금지]
+[생성 요청 목록 — 각 번호마다 말투 본보기가 다름]
+주의: 상투적 칭찬어(친절·꼼꼼·깔끔·가성비 등) 반복 금지. 각 후기는 서로 다른 시술·소재. 알맹이 없는 과정 묘사("흐름이 이어져서", "동선이 짧아서") 금지. 본보기가 짧으면 짧게.
 ${itemLines}
 
 위 ${styleAssignments.length}개 리뷰를 생성해서 JSON으로 응답하시오.`;
