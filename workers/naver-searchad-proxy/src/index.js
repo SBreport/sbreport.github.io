@@ -3067,6 +3067,12 @@ const SAMPLE_FEW_SHOT_SIZE = 25;
 const SAMPLE_FACT_POOL_SIZE = 25;
 
 /**
+ * 담당자명(실장님/원장님 등)을 포함할 샘플 비율 (0~1).
+ * 0.3 = 전체 샘플의 약 30%에만 담당자명 배정. 튜닝 시 여기만 조정.
+ */
+const STAFF_NAME_RATE = 0.3;
+
+/**
  * count 개의 스타일 조합을 실측 길이 분포 가중치로 분산 생성.
  * length 축:
  *   includeLong=false(기본): short 45% · medium 55% (long 제외)
@@ -5131,24 +5137,52 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     ? `[허용 사실 — 시술명·메뉴·담당자명·특징어. 이 목록 안에서만 구체적 사실을 사용할 것]\n${factPool.join(', ')}`
     : '[허용 사실: 없음 — 구체적 사실을 새로 지어내지 말 것]';
 
-  // 리뷰별 말투 본보기 1개 + 바꿔 넣을 사실 1~3개 서로 다르게 배정
-  // 샘플 간 fact 겹침을 최소화하기 위해: 이미 다른 샘플에 배정된 fact는 우선순위 후순위로
-  const shuffledFacts = [...factPool].sort(() => Math.random() - 0.5);
+  // ── 담당자명 희소 배정 ──
+  // factPool을 담당자명(staffNames)과 그 외 사실(otherFacts)로 분리.
+  // 담당자명은 전체 샘플의 STAFF_NAME_RATE(≈30%)에만, 이름마다 최대 1회 배정.
+  const STAFF_NAME_RE = /(실장님|원장님|선생님|쌤|대표님|상담실장)$/;
+  const staffNames = factPool.filter(f => STAFF_NAME_RE.test(f));
+  const otherFacts = factPool.filter(f => !STAFF_NAME_RE.test(f));
+
+  // 이름을 받을 샘플 수: 있는 이름 개수와 rate 기준 수 중 작은 값
+  const nameQuota = Math.min(staffNames.length, Math.ceil(count * STAFF_NAME_RATE));
+
+  // count개 인덱스 중 nameQuota개를 무작위로 골라 named 샘플 집합 구성
+  const allIndices = Array.from({ length: count }, (_, i) => i);
+  const shuffledIndices = [...allIndices].sort(() => Math.random() - 0.5);
+  const nameSampleIdx = new Set(shuffledIndices.slice(0, nameQuota));
+
+  // named 샘플에 배정할 이름 순서 (셔플, 중복 없이 순서대로 1개씩)
+  const shuffledStaffNames = [...staffNames].sort(() => Math.random() - 0.5);
+
+  // otherFacts 배정용: 샘플 간 겹침 최소화
+  const shuffledOtherFacts = [...otherFacts].sort(() => Math.random() - 0.5);
   const assignedFactSet = new Set(); // 배치 내 이미 배정된 fact 추적
+
+  let namedCount = 0; // 이름 배정 카운터
 
   const itemLines = styleAssignments.map((style, i) => {
     const example = shuffledExamples[i % shuffledExamples.length];
     const exampleText = example.body;
 
-    // 이 본보기에 이미 포함된 fact 제외 + 배치 내 이미 배정된 fact 우선 제외
-    const notInExample = shuffledFacts.filter(f => !exampleText.includes(f));
-    const freshFacts = notInExample.filter(f => !assignedFactSet.has(f));
-    const fallbackFacts = notInExample.filter(f => assignedFactSet.has(f));
-    // 새 fact 우선, 부족하면 fallback으로 보충
-    const candidateFacts = [...freshFacts, ...fallbackFacts];
+    // otherFacts 중 이 본보기에 없고, 아직 배정 안 된 것 우선
+    const notInExample = shuffledOtherFacts.filter(f => !exampleText.includes(f));
+    const freshOther = notInExample.filter(f => !assignedFactSet.has(f));
+    const fallbackOther = notInExample.filter(f => assignedFactSet.has(f));
+    const candidateOther = [...freshOther, ...fallbackOther];
 
-    const pickCount = Math.min(2, Math.max(1, candidateFacts.length)); // 최대 2개로 줄여 다양성 확보
-    const pickedFacts = candidateFacts.slice(0, pickCount);
+    let pickedFacts;
+    if (nameSampleIdx.has(i) && namedCount < shuffledStaffNames.length) {
+      // named 샘플: 이름 1개 + otherFacts 1개(있으면)
+      const assignedName = shuffledStaffNames[namedCount++];
+      const otherPick = candidateOther.slice(0, 1);
+      pickedFacts = [assignedName, ...otherPick];
+    } else {
+      // 일반 샘플: otherFacts 1~2개(이름 없음)
+      const pickCount = Math.min(2, Math.max(1, candidateOther.length));
+      pickedFacts = candidateOther.slice(0, pickCount);
+    }
+
     pickedFacts.forEach(f => assignedFactSet.add(f));
 
     const factsStr = pickedFacts.length > 0
