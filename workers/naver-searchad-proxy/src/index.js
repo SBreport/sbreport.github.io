@@ -3123,6 +3123,11 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
   // 담당자명 엔티티 추출: "이름+(실장님|원장님|선생님|쌤|대표님|상담실장)" 패턴
   // 예: "김실장님", "박원장님", "수연쌤", "지은 상담실장"
   const STAFF_TITLE_RE = /([가-힣]{1,4})\s*(실장님|원장님|선생님|쌤|대표님|상담실장)/g;
+  // 형용사 관형형(친절한/꼼꼼한 등)이 이름으로 오탐되는 것 방지용 블록셋
+  const BAD_STAFF_NAMES = new Set([
+    '친절한','꼼꼼한','깔끔한','편안한','세심한','자세한','정확한','상냥한','능숙한','깨끗한','시원한','훌륭한',
+    '친절하신','꼼꼼하신','깔끔하신','세심하신','자세하신','친절했던','꼼꼼했던',
+  ]);
   const staffEntityFreq = new Map();
 
   const wordFreq = new Map();
@@ -3133,6 +3138,9 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
     let m;
     STAFF_TITLE_RE.lastIndex = 0;
     while ((m = STAFF_TITLE_RE.exec(row.body)) !== null) {
+      const namePart = m[1];
+      // 형용사 관형형·일반어가 이름으로 잡힌 오탐 제거
+      if (BAD_STAFF_NAMES.has(namePart) || GENERIC_FILLER.has(namePart) || STOPWORDS.has(namePart)) continue;
       const entity = m[0].replace(/\s+/g, ''); // 공백 제거해서 정규화
       staffEntityFreq.set(entity, (staffEntityFreq.get(entity) ?? 0) + 1);
     }
