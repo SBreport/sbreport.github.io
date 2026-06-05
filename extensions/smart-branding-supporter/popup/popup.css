@@ -227,3 +227,157 @@ input.toggle:disabled + .toggle-track { background: #e0e0e0; }
   font-weight: 600;
 }
 .position-grid button.active:hover { background: #03c75a; }
+
+/* ── 블로그 전체 캡처 섹션 ────────────────────────────────────── */
+.sbs-capture {
+  border-top: 1px solid #eee;
+  padding: 10px 16px 8px;
+}
+
+.sbs-capture-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.sbs-capture-label {
+  font-size: 11px;
+  color: #888;
+  flex-shrink: 0;
+}
+
+#sbsCaptureBtn {
+  flex: 1;
+  background: #222;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+  text-align: center;
+}
+#sbsCaptureBtn:hover { background: #3a3a3a; }
+#sbsCaptureBtn:active { transform: scale(0.99); }
+#sbsCaptureBtn:disabled { background: #aaa; cursor: not-allowed; transform: none; }
+
+/* 캡처 목록 */
+#sbsCaptureList {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+#sbsCaptureList:empty { display: none; }
+
+/* 추천 항목 버튼 */
+.sbsCapture-recommended {
+  width: 100%;
+  background: #f0f8ff;
+  border: 1.5px solid #1684F2;
+  border-radius: 6px;
+  padding: 9px 11px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: background 0.12s;
+}
+.sbsCapture-recommended:hover { background: #dceeff; }
+.sbsCapture-recommended:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.sbsCapture-recommended .sbsCapture-friendly {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #1684F2;
+  margin-bottom: 2px;
+}
+.sbsCapture-recommended .sbsCapture-meta {
+  display: block;
+  font-size: 11px;
+  color: #555;
+  margin-bottom: 1px;
+}
+.sbsCapture-recommended .sbsCapture-sub {
+  display: block;
+  font-size: 10.5px;
+  color: #999;
+  word-break: break-all;
+}
+
+/* details / 다른 범위 선택 */
+.sbsCapture-details {
+  border: 1px solid #e5e5e5;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.sbsCapture-summary {
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: #555;
+  cursor: pointer;
+  user-select: none;
+  background: #fafafa;
+  list-style: none;
+}
+.sbsCapture-summary::-webkit-details-marker { display: none; }
+.sbsCapture-summary:hover { background: #f0f0f0; }
+
+.sbsCapture-alt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: #fff;
+}
+
+/* 일반(대안) 항목 버튼 */
+.sbsCapture-alt-btn {
+  width: 100%;
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: 5px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: background 0.12s;
+}
+.sbsCapture-alt-btn:hover { background: #f5f5f5; }
+.sbsCapture-alt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.sbsCapture-alt-btn .sbsCapture-friendly {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 1px;
+}
+.sbsCapture-alt-btn .sbsCapture-meta {
+  display: block;
+  font-size: 10.5px;
+  color: #666;
+  margin-bottom: 1px;
+}
+.sbsCapture-alt-btn .sbsCapture-sub {
+  display: block;
+  font-size: 10px;
+  color: #aaa;
+  word-break: break-all;
+}
+
+/* 상태줄 */
+#sbsCaptureStatus {
+  font-size: 11px;
+  color: #888;
+  min-height: 16px;
+  line-height: 1.5;
+  padding-top: 2px;
+}
+#sbsCaptureStatus:empty { display: none; }
+#sbsCaptureStatus.sbs-capture-error { color: #c0392b; }
+#sbsCaptureStatus.sbs-capture-done  { color: #03874a; font-weight: 600; }
