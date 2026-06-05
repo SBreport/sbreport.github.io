@@ -254,8 +254,8 @@ interface GenerateSamplesResponse {
 
 // 리뷰 예시 생성 상태
 const sampleCount = ref(10)
-const sampleProvider = ref<'openai' | 'anthropic' | 'xai'>('openai')
-const sampleModel = ref<string>('gpt-5.4-mini')
+const sampleProvider = ref<'openai' | 'anthropic' | 'xai'>('anthropic')
+const sampleModel = ref<string>('claude-sonnet-4-6')
 const samples = ref<ReviewSample[]>([])
 const samplesStatus = ref<'idle' | 'loading' | 'generating' | 'empty' | 'error' | 'done'>('idle')
 const samplesError = ref<string | null>(null)
@@ -299,7 +299,7 @@ const sampleDeleteLoading = ref(false)
 
 // ─── 예시 테이블 정렬 ────────────────────────────────────────────────────────
 
-type SampleSortKey = 'created_at' | 'length' | 'tone' | 'focus' | 'provider' | 'status'
+type SampleSortKey = 'created_at' | 'length' | 'provider' | 'status'
 const sampleSortKey = ref<SampleSortKey>('created_at')
 const sampleSortAsc = ref(false)  // 기본: 생성시각 desc
 
@@ -308,20 +308,18 @@ function toggleSampleSort(key: SampleSortKey) {
     sampleSortAsc.value = !sampleSortAsc.value
   } else {
     sampleSortKey.value = key
-    sampleSortAsc.value = key !== 'created_at'  // created_at은 desc 기본, 나머진 asc 기본
+    sampleSortAsc.value = key !== 'created_at'  // created_at은 desc 기본, 나머지 asc 기본
   }
 }
 
 // 태그 필터 (다중 선택)
 const filterLengths = ref<Set<string>>(new Set())
-const filterTones = ref<Set<string>>(new Set())
-const filterFocuses = ref<Set<string>>(new Set())
 
-function toggleFilterTag(set: Ref<Set<string>>, value: string) {
-  const next = new Set(set.value)
+function toggleLengthFilter(value: string) {
+  const next = new Set(filterLengths.value)
   if (next.has(value)) next.delete(value)
   else next.add(value)
-  set.value = next
+  filterLengths.value = next
 }
 
 // 본문 펼침 상태
@@ -538,8 +536,6 @@ const placeUsageStatus = ref<LoadStatus>('idle')
 
 // enum → 한글 매핑
 const lengthLabel: Record<string, string> = { short: '한줄', medium: '중간', long: '장문' }
-const toneLabel: Record<string, string> = { friendly: '친근', polite: '정중', emotional: '감성', plain: '담백' }
-const focusLabel: Record<string, string> = { outcome: '결과·효과', service: '응대·서비스', space: '시설·분위기', price: '가격·혜택', revisit: '재방문·추천', taste: '맛·품질', mood: '분위기' }
 
 // ─── 신규 리뷰 판별 (cron 자동 수집으로 처음 적재된 리뷰만 신규로 표시) ─────
 
@@ -1271,8 +1267,6 @@ const filteredSamples = computed(() => {
       if (sampleFilter.value === 'active') return status === 'active'
       // 태그 필터 (다중 선택 — 각 필터 내 OR, 필터 간 AND)
       if (filterLengths.value.size > 0 && !filterLengths.value.has(s.length)) return false
-      if (filterTones.value.size > 0 && !filterTones.value.has(s.tone)) return false
-      if (filterFocuses.value.size > 0 && !filterFocuses.value.has(s.focus)) return false
       return true
     })
     .sort((a, b) => {
@@ -1282,10 +1276,6 @@ const filteredSamples = computed(() => {
         cmp = (a.created_at ?? '').localeCompare(b.created_at ?? '')
       } else if (k === 'length') {
         cmp = (sortOrder[a.length] ?? 99) - (sortOrder[b.length] ?? 99)
-      } else if (k === 'tone') {
-        cmp = (a.tone ?? '').localeCompare(b.tone ?? '')
-      } else if (k === 'focus') {
-        cmp = (a.focus ?? '').localeCompare(b.focus ?? '')
       } else if (k === 'provider') {
         cmp = (a.provider ?? '').localeCompare(b.provider ?? '')
       } else if (k === 'status') {
@@ -1313,14 +1303,15 @@ function exportSamplesCsv() {
     ? samples.value.filter(s => checkedSampleIds.value.has(s.id))
     : samples.value
   if (target.length === 0) return
-  const headers = ['본문', '길이', '어조', '초점']
+  const headers = ['본문', '길이', '제공자', '상태', '생성시각']
   const lines = [headers.join(',')]
   for (const s of target) {
     lines.push([
       csvEscape(s.body),
       csvEscape(lengthLabel[s.length] ?? s.length),
-      csvEscape(toneLabel[s.tone] ?? s.tone),
-      csvEscape(focusLabel[s.focus] ?? s.focus),
+      csvEscape(providerLabel[s.provider ?? ''] ?? s.provider ?? ''),
+      csvEscape(s.status ?? 'active'),
+      csvEscape(s.created_at ? new Date(s.created_at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''),
     ].join(','))
   }
   const bom = '﻿'
@@ -3012,7 +3003,7 @@ onUnmounted(() => {
           <!-- ══ /탭 2: 통계 · AI 인사이트 ════════════════════════════ -->
 
           <!-- ══ 탭 3: 예시 생성 (researcher/admin/tester) ════════════════ -->
-          <div v-if="authStore.isResearcher || authStore.isTester" v-show="activeTab === 'samples'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div v-if="authStore.isResearcher || authStore.isTester" v-show="activeTab === 'samples'" class="flex-1 min-h-0 w-full flex flex-col overflow-hidden">
 
             <!-- 탭 상단 고정 영역 (shrink-0) -->
             <div class="shrink-0 flex flex-col divide-y divide-gray-100 dark:divide-slate-700 border-b border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800">
@@ -3092,33 +3083,7 @@ onUnmounted(() => {
                     :class="filterLengths.has(val)
                       ? 'bg-gray-700 dark:bg-slate-500 text-white'
                       : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-gray-200 dark:hover:bg-slate-600'"
-                    @click="toggleFilterTag(filterLengths, val)"
-                  >{{ lbl }}</button>
-                </div>
-                <span class="text-gray-200 dark:text-slate-600 text-xs">|</span>
-                <!-- 어조 태그 필터 -->
-                <div class="flex items-center gap-1">
-                  <button
-                    v-for="[val, lbl] in [['friendly','친근'],['polite','정중'],['emotional','감성'],['plain','담백']] as const"
-                    :key="val"
-                    class="px-2 py-0.5 rounded text-xs transition-colors whitespace-nowrap"
-                    :class="filterTones.has(val)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-gray-200 dark:hover:bg-slate-600'"
-                    @click="toggleFilterTag(filterTones, val)"
-                  >{{ lbl }}</button>
-                </div>
-                <span class="text-gray-200 dark:text-slate-600 text-xs">|</span>
-                <!-- 초점 태그 필터 -->
-                <div class="flex items-center gap-1">
-                  <button
-                    v-for="[val, lbl] in [['outcome','결과'],['service','응대'],['space','시설'],['price','가격'],['revisit','재방문']] as const"
-                    :key="val"
-                    class="px-2 py-0.5 rounded text-xs transition-colors whitespace-nowrap"
-                    :class="filterFocuses.has(val)
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-gray-200 dark:hover:bg-slate-600'"
-                    @click="toggleFilterTag(filterFocuses, val)"
+                    @click="toggleLengthFilter(val)"
                   >{{ lbl }}</button>
                 </div>
                 <span class="text-gray-200 dark:text-slate-600 text-xs">|</span>
@@ -3165,7 +3130,7 @@ onUnmounted(() => {
             </div>
 
             <!-- 본문 스크롤 영역 (flex-1 min-h-0) -->
-            <div class="flex-1 min-h-0 overflow-y-auto bg-white dark:bg-slate-900">
+            <div class="flex-1 min-h-0 min-w-0 overflow-auto bg-white dark:bg-slate-900">
 
               <!-- 생성 중 -->
               <div v-if="samplesStatus === 'generating' || samplesGenerating" class="flex items-center gap-1.5 px-3 py-2.5">
@@ -3198,7 +3163,7 @@ onUnmounted(() => {
                   <p class="text-xs text-gray-400 dark:text-slate-500">해당 필터에 맞는 예시가 없습니다</p>
                 </div>
                 <!-- 테이블 -->
-                <table v-else class="w-full text-xs border-collapse">
+                <table v-else class="w-full min-w-[36rem] text-xs border-collapse">
                   <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-slate-800">
                     <tr class="h-8">
                       <!-- 체크박스 전체선택 -->
@@ -3240,32 +3205,6 @@ onUnmounted(() => {
                           길이
                           <span class="text-gray-400 dark:text-slate-500">
                             <template v-if="sampleSortKey === 'length'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
-                            <template v-else>↕</template>
-                          </span>
-                        </span>
-                      </th>
-                      <!-- 어조 -->
-                      <th
-                        class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
-                        @click="toggleSampleSort('tone')"
-                      >
-                        <span class="inline-flex items-center gap-0.5">
-                          어조
-                          <span class="text-gray-400 dark:text-slate-500">
-                            <template v-if="sampleSortKey === 'tone'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
-                            <template v-else>↕</template>
-                          </span>
-                        </span>
-                      </th>
-                      <!-- 초점 -->
-                      <th
-                        class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-16 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
-                        @click="toggleSampleSort('focus')"
-                      >
-                        <span class="inline-flex items-center gap-0.5">
-                          초점
-                          <span class="text-gray-400 dark:text-slate-500">
-                            <template v-if="sampleSortKey === 'focus'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
                             <template v-else>↕</template>
                           </span>
                         </span>
@@ -3342,14 +3281,6 @@ onUnmounted(() => {
                       <!-- 길이 -->
                       <td class="px-3 py-1.5 whitespace-nowrap align-top">
                         <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 dark:bg-slate-700 text-[10px] text-gray-600 dark:text-slate-300">{{ lengthLabel[sample.length] ?? sample.length }}</span>
-                      </td>
-                      <!-- 어조 -->
-                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-[10px] text-blue-700 dark:text-blue-300">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
-                      </td>
-                      <!-- 초점 -->
-                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-900/30 text-[10px] text-emerald-700 dark:text-emerald-300">{{ focusLabel[sample.focus] ?? sample.focus }}</span>
                       </td>
                       <!-- 제공자 -->
                       <td class="px-3 py-1.5 whitespace-nowrap align-top">
