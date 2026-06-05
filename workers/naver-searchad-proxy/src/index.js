@@ -613,7 +613,7 @@ async function fetchNaverSearchPc(keyword) {
   return { sections };
 }
 
-function parseNaverSections(html, device = 'mobile') {
+export function parseNaverSections(html, device = 'mobile') {
   // 모든 구좌를 HTML 내 등장 위치(byte offset)로 모은 뒤 한 번에 정렬한다.
   // (과거 버그: 파워링크→block-id→플레이스를 단계별로 push해서, data-block-id가 없는
   //  플레이스(place-app-root)가 실제 위치와 무관하게 항상 맨 끝으로 밀렸다.
