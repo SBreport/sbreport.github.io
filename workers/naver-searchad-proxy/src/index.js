@@ -3082,11 +3082,11 @@ function buildStyleAssignments(count, includeLong = false) {
 
 /**
  * fact pool(허용 소재 키워드 목록) 추출.
- * computePlaceQuantitative 의 STOPWORDS + 토큰화 로직을 재사용해 상위 N개 반환.
+ * 빈도순 단어 + 담당자명 엔티티를 함께 반환해 구체성을 높인다.
  * @param {object} env
  * @param {string} placeRowId
  * @param {number} topN
- * @returns {Promise<string[]>} 단어 배열 (빈도 내림차순)
+ * @returns {Promise<string[]>} 단어 배열 (엔티티 우선, 빈도 내림차순)
  */
 async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
   const { results: bodyRows } = await env.DB.prepare(`
@@ -3120,9 +3120,24 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
     '처음','오늘','저번','지난','이번에',
   ]);
 
+  // 담당자명 엔티티 추출: "이름+(실장님|원장님|선생님|쌤|대표님|상담실장)" 패턴
+  // 예: "김실장님", "박원장님", "수연쌤", "지은 상담실장"
+  const STAFF_TITLE_RE = /([가-힣]{1,4})\s*(실장님|원장님|선생님|쌤|대표님|상담실장)/g;
+  const staffEntityFreq = new Map();
+
   const wordFreq = new Map();
   for (const row of bodyRows) {
     if (!row.body) continue;
+
+    // 담당자명 엔티티 수집 (원형 보존)
+    let m;
+    STAFF_TITLE_RE.lastIndex = 0;
+    while ((m = STAFF_TITLE_RE.exec(row.body)) !== null) {
+      const entity = m[0].replace(/\s+/g, ''); // 공백 제거해서 정규화
+      staffEntityFreq.set(entity, (staffEntityFreq.get(entity) ?? 0) + 1);
+    }
+
+    // 빈도 단어 수집 (기존 로직)
     const tokens = row.body.split(/[\s.,!?;:·""''()\[\]{}<>/\\|@#$%^&*+=~`\-—–…]+/u);
     for (const token of tokens) {
       const word = token.trim();
@@ -3134,10 +3149,24 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
     }
   }
 
-  return Array.from(wordFreq.entries())
+  // 엔티티(담당자명)를 우선 배치, 나머지 슬롯을 빈도 단어로 채움
+  const staffEntities = Array.from(staffEntityFreq.entries())
     .sort((a, b) => b[1] - a[1])
-    .slice(0, topN)
     .map(([word]) => word);
+
+  const freqWords = Array.from(wordFreq.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([word]) => word)
+    .filter(w => !staffEntities.includes(w)); // 중복 제거
+
+  // 엔티티 최대 5개 우선 + 나머지 빈도 단어로 topN 채우기
+  const entitySlots = Math.min(staffEntities.length, 5);
+  const result = [
+    ...staffEntities.slice(0, entitySlots),
+    ...freqWords.slice(0, topN - entitySlots),
+  ];
+
+  return result.slice(0, topN);
 }
 
 /**
@@ -4909,9 +4938,10 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
-  // ── 씨앗(seed) 풀: 사람이 쓴 것으로 검증된 리뷰를 변형 뼈대로 선택 ──
-  // 우선순위: (a) human_label='human' → (b) ai_suspect IS NULL 또는 < 40, ad 아님 → (c) length>=15 전체
-  let seedReviews;
+  // ── 스타일 본보기 풀: 각 생성 샘플의 말투·길이·호흡 레퍼런스 ──
+  // 우선순위: (a) human_label='human' → (b) 광고/AI 아닌 것(라벨없음 포함), length>=20
+  //           → (c) length>=20 아무거나
+  let styleExamples;
   try {
     // (a) 사람 라벨 확정 리뷰
     const { results: humanRows } = await env.DB.prepare(`
@@ -4920,116 +4950,132 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
       LEFT JOIN place_review_labels l ON l.review_id = r.id
       WHERE r.place_row_id = ?
         AND r.body IS NOT NULL
-        AND length(r.body) >= 15
+        AND length(r.body) >= 20
         AND l.human_label = 'human'
       ORDER BY RANDOM()
       LIMIT ?
     `).bind(placeRowId, count * 3).all();
 
-    seedReviews = humanRows ?? [];
+    styleExamples = humanRows ?? [];
 
-    // (b) 분석 결과상 낮은 의심도 리뷰로 보충
-    if (seedReviews.length < count) {
-      const needed = count * 3 - seedReviews.length;
-      const seenA = new Set(seedReviews.map(r => r.body));
+    // (b) 광고·AI 아닌 것 (라벨 없음 포함), length>=20 으로 보충
+    if (styleExamples.length < count) {
+      const needed = count * 3 - styleExamples.length;
+      const seenA = new Set(styleExamples.map(r => r.body));
       const { results: cleanRows } = await env.DB.prepare(`
         SELECT r.body
         FROM place_reviews r
-        LEFT JOIN place_review_analysis a ON a.review_id = r.id
-        LEFT JOIN place_review_labels   l ON l.review_id = r.id
+        LEFT JOIN place_review_labels l ON l.review_id = r.id
         WHERE r.place_row_id = ?
           AND r.body IS NOT NULL
-          AND length(r.body) >= 15
-          AND COALESCE(l.human_label, '') != 'ad'
-          AND COALESCE(l.human_label, '') != 'human'
-          AND (a.ai_suspect IS NULL OR a.ai_suspect < 40)
+          AND length(r.body) >= 20
+          AND COALESCE(l.human_label, '') NOT IN ('ad', 'ai')
         ORDER BY RANDOM()
         LIMIT ?
       `).bind(placeRowId, needed).all();
-      seedReviews = [...seedReviews, ...(cleanRows ?? []).filter(r => !seenA.has(r.body))];
+      styleExamples = [...styleExamples, ...(cleanRows ?? []).filter(r => !seenA.has(r.body))];
     }
 
-    // (c) fallback: 그래도 부족하면 length>=15 아무거나
-    if (seedReviews.length < count) {
-      const needed = count * 2 - seedReviews.length;
-      const seenB = new Set(seedReviews.map(r => r.body));
+    // (c) fallback: length>=20 아무거나
+    if (styleExamples.length < count) {
+      const needed = count * 2 - styleExamples.length;
+      const seenB = new Set(styleExamples.map(r => r.body));
       const { results: anyRows } = await env.DB.prepare(`
         SELECT body
         FROM place_reviews
         WHERE place_row_id = ?
           AND body IS NOT NULL
-          AND length(body) >= 15
+          AND length(body) >= 20
         ORDER BY RANDOM()
         LIMIT ?
       `).bind(placeRowId, needed).all();
-      seedReviews = [...seedReviews, ...(anyRows ?? []).filter(r => !seenB.has(r.body))];
+      styleExamples = [...styleExamples, ...(anyRows ?? []).filter(r => !seenB.has(r.body))];
     }
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
-  if (seedReviews.length === 0) {
+  if (styleExamples.length === 0) {
     return jsonResponse(
-      { error: 'no_sample', message: '변형에 쓸 15자 이상 리뷰가 없습니다' },
+      { error: 'no_sample', message: '스타일 본보기로 쓸 20자 이상 리뷰가 없습니다' },
       400,
       cors
     );
   }
 
-  // 씨앗 배열을 count 개 순환 할당 (다양성 위해 셔플)
-  const shuffledSeeds = [...seedReviews].sort(() => Math.random() - 0.5);
+  // 스타일 본보기 배열을 셔플해서 각 샘플마다 서로 다른 본보기 1개 배정
+  const shuffledExamples = [...styleExamples].sort(() => Math.random() - 0.5);
 
-  // 스타일 조합 생성
+  // 스타일 조합은 길이 배정 목적으로만 생성 (tone/focus는 n/a 처리)
   const styleAssignments = buildStyleAssignments(count, includeLong);
 
-  // ── 변형 기반 프롬프트 구성 ──
-  const systemPrompt = `너는 진짜 사람이 쓴 한국어 리뷰를 받아, 그 사람의 말투·길이·문장 호흡·오타·미완결을 그대로 유지한 채 '사실(시술명·메뉴·구체 경험)'만 바꿔 새 리뷰를 만든다.
+  // ── 변형 기반 프롬프트 구성 (가드레일 2개 포함) ──
+  const systemPrompt = `너는 한국어 리뷰 작성 보조 도구다. 아래 규칙을 엄격히 따른다.
+
+[역할]
+각 요청마다 "말투 본보기 리뷰" 1개가 주어진다. 그 리뷰의 말투·문장 길이·호흡·구조를 흉내내되, 내용(경험·시술·메뉴)은 [허용 사실] 목록에서 가져와 완전히 새로 지어라.
+
+[가드레일 i — 상투어 금지]
+- "친절", "꼼꼼", "깔끔", "만족", "추천", "최고", "훌륭", "완벽" 같은 뻔한 칭찬어를 쓰지 마라.
+- 여러 샘플이 같은 형용사·감탄어를 반복하지 마라. 표현을 매번 새로 지어라.
+- "추천합니다", "또 가고 싶어요", "전체적으로 만족" 같은 총평·결론을 붙이지 마라.
+
+[가드레일 ii — 말투 본보기]
+- 각 샘플에 지정된 "말투 본보기" 리뷰의 말투·길이·호흡·구조를 따라라.
+- 오타·미완결·구어적 특성도 그대로 살려라. 원본보다 더 매끄럽게 다듬지 마라.
 
 [절대 금지]
-- 원본보다 더 매끄럽게·길게·완결되게 다듬지 마라.
-- "추천합니다", "또 가고 싶어요", "전체적으로 만족" 같은 총평·결론 붙이지 마라.
 - 업체명·지점명을 쓰지 마라.
-- [검증된 사실] 목록에 없는 시술명·메뉴명·이름을 지어내지 마라.
-- 격식체("~습니다", "~됩니다") 금지 — 원본이 구어체면 구어체 유지.
-- 원본과 내용이 충분히 달라야 한다. 단어만 살짝 바꾸거나 거의 동일한 문장은 실패다.
+- [허용 사실] 목록에 없는 시술명·메뉴명·담당자 이름을 지어내지 마라.
+- 격식체("~습니다", "~됩니다") 금지 — 본보기가 구어체면 구어체 유지.
+- 말투 본보기와 내용이 거의 같은 문장을 그대로 내지 마라. 내용은 반드시 바꿔야 한다.
 
 [허용]
-- 상황·기분·군말 같은 '사람 냄새' 표현은 원본 느낌을 살려 자유롭게 유지.
-- [검증된 사실] 목록 안의 항목(시술명·메뉴명·특징어)은 자유롭게 사용.
-- 목록이 비어 있으면 사실을 교체하지 말고 원본 말투·구조만 살짝 변형해서 새 리뷰 생성.
+- [허용 사실] 목록 안의 항목(시술명·메뉴명·담당자명·특징어)은 자유롭게 사용.
+- 목록이 비어 있으면 사실을 새로 지어내지 말고, 본보기 말투·구조만 살려 내용을 추상적으로 변형.
+- 상황·기분·군말 같은 '사람 냄새' 표현은 자유롭게 추가.
 
 [출력 형식]
 반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }`;
 
   const factPoolText = factPool.length > 0
-    ? `[검증된 사실 — 시술명·메뉴·특징어. 이 목록 안에서만 사실을 교체할 것]\n${factPool.join(', ')}`
-    : '[검증된 사실: 없음 — 사실 교체 없이 말투·구조만 변형할 것]';
+    ? `[허용 사실 — 시술명·메뉴·담당자명·특징어. 이 목록 안에서만 구체적 사실을 사용할 것]\n${factPool.join(', ')}`
+    : '[허용 사실: 없음 — 구체적 사실을 새로 지어내지 말 것]';
 
-  // 리뷰별 씨앗 1개 + 바꿔 넣을 사실 1~2개 지정
+  // 리뷰별 말투 본보기 1개 + 바꿔 넣을 사실 1~3개 서로 다르게 배정
+  // 샘플마다 서로 다른 fact 조합을 위해 factPool을 rotate
+  const shuffledFacts = [...factPool].sort(() => Math.random() - 0.5);
+
   const itemLines = styleAssignments.map((style, i) => {
-    const seed = shuffledSeeds[i % shuffledSeeds.length];
-    // 씨앗에 없는 fact를 우선 골라서 교체 소재로 제공
-    const seedText = seed.body;
-    const unusedFacts = factPool.filter(f => !seedText.includes(f));
-    const pickedFacts = unusedFacts.length >= 2
-      ? [unusedFacts[Math.floor(Math.random() * unusedFacts.length)], unusedFacts[Math.floor(Math.random() * unusedFacts.length)]]
-      : unusedFacts.length === 1
-        ? [unusedFacts[0]]
-        : factPool.slice(0, 2);  // fallback
-    const factsStr = pickedFacts.length > 0 ? pickedFacts.join(', ') : '(없음 — 말투만 변형)';
-    return `[${i + 1}] 원본 리뷰: "${seedText}" / 바꿀 사실: ${factsStr} → 이 사람 말투·길이 그대로, 사실만 바꿔 새 리뷰 1개`;
+    const example = shuffledExamples[i % shuffledExamples.length];
+    const exampleText = example.body;
+
+    // 이 본보기에 이미 포함된 fact를 제외하고, 다른 샘플과 겹치지 않도록 rotate
+    const unusedFacts = shuffledFacts.filter(f => !exampleText.includes(f));
+    // 샘플별로 다른 구간 선택 (i * 2 offset)
+    const offset = (i * 2) % Math.max(unusedFacts.length, 1);
+    const pickCount = Math.min(3, Math.max(1, unusedFacts.length));
+    const pickedFacts = [];
+    for (let k = 0; k < pickCount && k < 3; k++) {
+      pickedFacts.push(unusedFacts[(offset + k) % unusedFacts.length]);
+    }
+    const factsStr = pickedFacts.length > 0
+      ? pickedFacts.filter(Boolean).join(', ')
+      : '(없음 — 본보기 말투·구조만 살려 변형)';
+
+    return `[${i + 1}] 말투 본보기: "${exampleText}" / 이번 리뷰에 담을 사실: ${factsStr} → 본보기 말투·길이 유지, 내용은 완전히 새로`;
   }).join('\n\n');
 
-  const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 쓰지 말 것]
+  const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 절대 쓰지 말 것]
 업체명: ${placeRow.name ?? ''}
 업종: ${placeRow.business_type || '미분류'}
 
 ${factPoolText}
 
-[변형 요청 목록 — 각 원본의 말투·길이 유지, 사실만 교체]
+[생성 요청 목록 — 각 번호마다 말투 본보기가 다름. 상투적 칭찬어 반복 금지]
 ${itemLines}
 
-위 ${styleAssignments.length}개 리뷰를 변형해서 JSON으로 응답하시오.`;
+위 ${styleAssignments.length}개 리뷰를 생성해서 JSON으로 응답하시오.`;
 
   // LLM 호출 (provider 분기)
   let gptSamples;
@@ -5065,12 +5111,16 @@ ${itemLines}
     if (!gptItem?.body) continue;
 
     const sampleId = crypto.randomUUID();
+    // style_length: 실제 생성 결과 길이로 계산 (short<30 / medium<80 / long)
+    const bodyLen = gptItem.body.length;
+    const actualLength = bodyLen < 30 ? 'short' : bodyLen < 80 ? 'medium' : 'long';
+    // style_tone / style_focus: 허구 라벨 대신 정직한 'n/a' 저장
     samples.push({
       id:       sampleId,
       body:     gptItem.body,
-      length:   style.length,
-      tone:     style.tone,
-      focus:    style.focus,
+      length:   actualLength,
+      tone:     'n/a',
+      focus:    'n/a',
       status:   'active',
       provider,
       model,
@@ -5080,7 +5130,7 @@ ${itemLines}
         INSERT INTO place_generated_samples
           (id, place_row_id, body, style_length, style_tone, style_focus, model, provider, created_at, status, actor_user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-      `).bind(sampleId, placeRowId, gptItem.body, style.length, style.tone, style.focus, model, provider, generatedAt, authResult.user.id)
+      `).bind(sampleId, placeRowId, gptItem.body, actualLength, 'n/a', 'n/a', model, provider, generatedAt, authResult.user.id)
     );
   }
 
