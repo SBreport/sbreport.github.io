@@ -4935,14 +4935,20 @@ async function handleSetReviewLabel(request, env, corsHeaders, placeRowId, revie
 // Phase 4 — 구조적 휴머나이저 (생성 후 미세 불완전성 주입)
 // =============================================================================
 
-/** 전체 샘플 중 이 비율에만 휴머나이즈 적용 (0 = 꺼짐, 1 = 전체) */
-const HUMANIZE_RATE = 0.5;
-/** 쉼표→공백/줄바꿈 치환 확률 (쉼표 하나당 독립 시행) */
-const HUMANIZE_COMMA_PROB = 0.7;
-/** 어절 사이 공백 1개 제거 확률 (리뷰당 최대 1회) */
-const HUMANIZE_SPACE_PROB = 0.3;
-/** 구어 변형 오타 적용 확률 */
-const HUMANIZE_TYPO_PROB = 0.25;
+/**
+ * 휴머나이즈 강도별 파라미터 상수 테이블.
+ * - rate       : 리뷰당 적용 여부 확률 (0=꺼짐, 1=전체)
+ * - maxEdits   : 리뷰당 총 편집 상한 (가독성 캡)
+ * - spaceMergeMax : 띄어쓰기 붙이기를 최대 N군데 적용
+ * - commaProb  : 쉼표→공백/줄바꿈 치환 확률 (쉼표 하나당 독립 시행)
+ * - typoProb   : 구어 변형 오타 적용 확률
+ */
+const HUMANIZE_LEVEL_PARAMS = {
+  off:    { rate: 0,   maxEdits: 0, spaceMergeMax: 0, commaProb: 0,   typoProb: 0    },
+  light:  { rate: 0.5, maxEdits: 2, spaceMergeMax: 1, commaProb: 0.6, typoProb: 0.2  },
+  medium: { rate: 0.8, maxEdits: 3, spaceMergeMax: 2, commaProb: 0.7, typoProb: 0.3  },
+  strong: { rate: 1.0, maxEdits: 5, spaceMergeMax: 4, commaProb: 0.8, typoProb: 0.45 },
+};
 
 /**
  * 알려진 캐주얼 구어 변형 맵 (첫 매치 1개만 치환).
@@ -4959,21 +4965,24 @@ const HUMANIZE_TYPO_MAP = [
 
 /**
  * LLM이 생성한 리뷰 본문에 사람 글 특유의 미세 불완전성을 확률적으로 주입한다.
- * - 과하면 인위적으로 보이므로 한 리뷰당 총 편집 횟수를 최대 2개로 제한.
  * - 이모지/이모티콘 추가 금지. 종결어미 변경 금지. 가독성 유지 필수.
  * @param {string} text 원본 생성 본문
+ * @param {'off'|'light'|'medium'|'strong'} level 강도 (기본 'medium')
  * @returns {string} 후처리된 본문
  */
-function humanizeBody(text) {
+function humanizeBody(text, level = 'medium') {
+  const params = HUMANIZE_LEVEL_PARAMS[level] ?? HUMANIZE_LEVEL_PARAMS.medium;
+  if (params.maxEdits === 0) return text;
+
   let result = text;
   let editCount = 0;
 
   // ── 1. 쉼표 줄이기 ──────────────────────────────────────────────────────
   // 사람은 쉼표를 거의 쓰지 않음 → ", " 를 공백 또는 줄바꿈으로 확률 치환
-  if (editCount < 2) {
+  if (editCount < params.maxEdits) {
     result = result.replace(/, /g, (match) => {
-      if (editCount >= 2) return match;
-      if (Math.random() < HUMANIZE_COMMA_PROB) {
+      if (editCount >= params.maxEdits) return match;
+      if (Math.random() < params.commaProb) {
         editCount++;
         // 줄바꿈이 이미 있는 텍스트엔 공백, 아니면 50% 확률로 줄바꿈
         return Math.random() < 0.5 ? ' ' : '\n';
@@ -4982,26 +4991,41 @@ function humanizeBody(text) {
     });
   }
 
-  // ── 2. 띄어쓰기 붙이기 ──────────────────────────────────────────────────
-  // 한 군데만, 인접한 두 어절 사이 공백 1개 제거
-  if (editCount < 2 && Math.random() < HUMANIZE_SPACE_PROB) {
-    // 한글 어절 경계(한글자+ 공백 한글자+) 목록에서 무작위 1개 선택해 공백 제거
-    const spacePositions = [];
-    const spacePattern = /([가-힣]+) ([가-힣])/g;
-    let m;
-    while ((m = spacePattern.exec(result)) !== null) {
-      spacePositions.push(m.index + m[1].length); // 공백 위치
-    }
-    if (spacePositions.length > 0) {
-      const pos = spacePositions[Math.floor(Math.random() * spacePositions.length)];
+  // ── 2. 띄어쓰기 붙이기 (여러 군데 가능) ────────────────────────────────
+  // spaceMergeMax 회까지 반복. 매번 다른 한글 어절 경계 무작위 선택, 중복 방지.
+  if (editCount < params.maxEdits && params.spaceMergeMax > 0) {
+    // 현재 result 기준 모든 어절 경계 수집
+    const collectSpacePositions = (str) => {
+      const positions = [];
+      const spacePattern = /([가-힣]+) ([가-힣])/g;
+      let m;
+      while ((m = spacePattern.exec(str)) !== null) {
+        positions.push(m.index + m[1].length);
+      }
+      return positions;
+    };
+
+    const usedOffsets = new Set(); // 이미 처리한 원본 위치 추적
+    let mergesDone = 0;
+
+    while (mergesDone < params.spaceMergeMax && editCount < params.maxEdits) {
+      // 매 반복마다 현재 result를 기준으로 위치 재수집
+      const positions = collectSpacePositions(result).filter(p => !usedOffsets.has(p));
+      if (positions.length === 0) break;
+
+      const pos = positions[Math.floor(Math.random() * positions.length)];
+      usedOffsets.add(pos); // 처리 전 원본 오프셋 기록
       result = result.slice(0, pos) + result.slice(pos + 1);
       editCount++;
+      mergesDone++;
+      // 공백 제거로 이후 위치가 1씩 당겨지므로 usedOffsets의 기존 값 보정 불필요
+      // (positions를 매 반복마다 새로 수집하므로 자연히 처리됨)
     }
   }
 
   // ── 3. 가벼운 오타 (구어 변형) ──────────────────────────────────────────
   // 안전 맵에서 첫 매치 1개만 치환
-  if (editCount < 2 && Math.random() < HUMANIZE_TYPO_PROB) {
+  if (editCount < params.maxEdits && Math.random() < params.typoProb) {
     for (const [from, to] of HUMANIZE_TYPO_MAP) {
       if (result.includes(from)) {
         result = result.replace(from, to); // 첫 번째 매치만 replace
@@ -5073,6 +5097,17 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 
   // includeLong 파싱 (기본 false — long 길이 제외)
   const includeLong = body?.includeLong === true;
+
+  // length 파싱: 'auto' | 'short' | 'medium' | 'long' (기본 'auto')
+  const VALID_LENGTHS = ['auto', 'short', 'medium', 'long'];
+  const lengthParam = VALID_LENGTHS.includes(body?.length) ? body.length : 'auto';
+
+  // includeNames 파싱: boolean (기본 true)
+  const includeNames = body?.includeNames !== false;
+
+  // humanizeLevel 파싱: 'off' | 'light' | 'medium' | 'strong' (기본 'medium')
+  const VALID_HUMANIZE_LEVELS = ['off', 'light', 'medium', 'strong'];
+  const humanizeLevel = VALID_HUMANIZE_LEVELS.includes(body?.humanizeLevel) ? body.humanizeLevel : 'medium';
 
   // 플레이스 소유 확인 (admin/tester는 전체 접근, researcher는 자기 지점만)
   let placeRow;
@@ -5177,11 +5212,26 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     );
   }
 
+  // ── length 파라미터에 따른 본보기 필터 ──────────────────────────────────
+  // 'auto': 자연 분포 / 그 외: 해당 구간 본보기 우선 필터링
+  const LENGTH_CHAR_RANGES = { short: [0, 29], medium: [30, 80], long: [81, Infinity] };
+  let filteredExamples = styleExamples;
+  if (lengthParam !== 'auto') {
+    const [lo, hi] = LENGTH_CHAR_RANGES[lengthParam];
+    const rangeFiltered = styleExamples.filter(r => r.body.length >= lo && r.body.length <= hi);
+    // 해당 구간 본보기가 없으면 전체 풀로 폴백
+    filteredExamples = rangeFiltered.length > 0 ? rangeFiltered : styleExamples;
+  }
+
   // 스타일 본보기 배열을 셔플해서 각 샘플마다 서로 다른 본보기 1개 배정
-  const shuffledExamples = [...styleExamples].sort(() => Math.random() - 0.5);
+  const shuffledExamples = [...filteredExamples].sort(() => Math.random() - 0.5);
 
   // 스타일 조합은 길이 배정 목적으로만 생성 (tone/focus는 n/a 처리)
+  // lengthParam이 'auto'가 아니면 해당 길이로 모든 styleAssignment.length를 고정
   const styleAssignments = buildStyleAssignments(count, includeLong);
+  if (lengthParam !== 'auto') {
+    styleAssignments.forEach(a => { a.length = lengthParam; });
+  }
 
   // ── 변형 기반 프롬프트 구성 (가드레일 2개 포함) ──
   const systemPrompt = `너는 한국어 리뷰 작성 보조 도구다. 아래 규칙을 엄격히 따른다.
@@ -5227,8 +5277,10 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   const staffNames = factPool.filter(f => STAFF_NAME_RE.test(f));
   const otherFacts = factPool.filter(f => !STAFF_NAME_RE.test(f));
 
-  // 이름을 받을 샘플 수: 있는 이름 개수와 rate 기준 수 중 작은 값
-  const nameQuota = Math.min(staffNames.length, Math.ceil(count * STAFF_NAME_RATE));
+  // 이름을 받을 샘플 수: includeNames=false이면 0, 아니면 있는 이름 개수와 rate 기준 수 중 작은 값
+  const nameQuota = includeNames
+    ? Math.min(staffNames.length, Math.ceil(count * STAFF_NAME_RATE))
+    : 0;
 
   // count개 인덱스 중 nameQuota개를 무작위로 골라 named 샘플 집합 구성
   const allIndices = Array.from({ length: count }, (_, i) => i);
@@ -5321,9 +5373,11 @@ ${itemLines}
     if (!gptItem?.body) continue;
 
     // ── 구조적 휴머나이저 후처리 ──────────────────────────────────────────
-    // HUMANIZE_RATE 확률로만 적용. 나머지는 원본 그대로 저장·반환.
-    const finalBody = Math.random() < HUMANIZE_RATE
-      ? humanizeBody(gptItem.body)
+    // humanizeLevel별 rate 확률 통과 시 humanizeBody(text, level) 적용.
+    // 'off'이면 rate=0이므로 항상 원본 반환.
+    const hlParams = HUMANIZE_LEVEL_PARAMS[humanizeLevel] ?? HUMANIZE_LEVEL_PARAMS.medium;
+    const finalBody = Math.random() < hlParams.rate
+      ? humanizeBody(gptItem.body, humanizeLevel)
       : gptItem.body;
 
     const sampleId = crypto.randomUUID();

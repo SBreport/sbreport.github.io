@@ -256,6 +256,9 @@ interface GenerateSamplesResponse {
 const sampleCount = ref(10)
 const sampleProvider = ref<'openai' | 'anthropic' | 'xai'>('anthropic')
 const sampleModel = ref<string>('claude-sonnet-4-6')
+const sampleLength = ref<'auto' | 'short' | 'medium' | 'long'>('auto')
+const sampleIncludeNames = ref(true)
+const sampleHumanizeLevel = ref<'off' | 'light' | 'medium' | 'strong'>('medium')
 const samples = ref<ReviewSample[]>([])
 const samplesStatus = ref<'idle' | 'loading' | 'generating' | 'empty' | 'error' | 'done'>('idle')
 const samplesError = ref<string | null>(null)
@@ -1144,7 +1147,14 @@ async function generateSamples(placeId: number) {
     const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/generate-samples`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ count: sampleCount.value, provider: sampleProvider.value, model: sampleModel.value }),
+      body: JSON.stringify({
+        count: sampleCount.value,
+        provider: sampleProvider.value,
+        model: sampleModel.value,
+        length: sampleLength.value,
+        includeNames: sampleIncludeNames.value,
+        humanizeLevel: sampleHumanizeLevel.value,
+      }),
     })
     if (!res.ok) {
       let code = ''
@@ -3014,7 +3024,7 @@ onUnmounted(() => {
                   <span class="text-xs font-medium text-gray-700 dark:text-slate-300">리뷰 예시 생성</span>
                   <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 whitespace-nowrap">AI 합성·연구용</span>
                 </div>
-                <div class="flex items-center gap-2 shrink-0">
+                <div class="flex items-center gap-2 shrink-0 flex-wrap">
                   <!-- 모델 선택 드롭다운 -->
                   <select
                     :value="sampleModel"
@@ -3027,6 +3037,37 @@ onUnmounted(() => {
                       :key="opt.model"
                       :value="opt.model"
                     >{{ opt.label }}</option>
+                  </select>
+                  <!-- 길이 선택 -->
+                  <select
+                    v-model="sampleLength"
+                    class="h-7 px-2 py-0 text-xs border border-gray-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 focus:outline-none focus:border-primary-400 cursor-pointer"
+                    :disabled="samplesGenerating"
+                  >
+                    <option value="auto">길이 자동</option>
+                    <option value="short">한줄</option>
+                    <option value="medium">중간</option>
+                    <option value="long">장문</option>
+                  </select>
+                  <!-- 이름 포함 여부 -->
+                  <select
+                    v-model="sampleIncludeNames"
+                    class="h-7 px-2 py-0 text-xs border border-gray-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 focus:outline-none focus:border-primary-400 cursor-pointer"
+                    :disabled="samplesGenerating"
+                  >
+                    <option :value="true">이름 포함</option>
+                    <option :value="false">이름 제외</option>
+                  </select>
+                  <!-- 휴머나이즈 강도 -->
+                  <select
+                    v-model="sampleHumanizeLevel"
+                    class="h-7 px-2 py-0 text-xs border border-gray-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 focus:outline-none focus:border-primary-400 cursor-pointer"
+                    :disabled="samplesGenerating"
+                  >
+                    <option value="off">휴머나이즈 끔</option>
+                    <option value="light">약</option>
+                    <option value="medium">중</option>
+                    <option value="strong">강</option>
                   </select>
                   <span class="text-xs text-gray-500 dark:text-slate-400">개수</span>
                   <input
