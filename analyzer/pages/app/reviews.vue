@@ -1308,9 +1308,14 @@ function copySampleBody(body: string) {
 
 function exportSamplesCsv() {
   if (samples.value.length === 0) return
+  // 선택된 것이 있으면 선택분만, 없으면 전체
+  const target = checkedSampleIds.value.size > 0
+    ? samples.value.filter(s => checkedSampleIds.value.has(s.id))
+    : samples.value
+  if (target.length === 0) return
   const headers = ['본문', '길이', '어조', '초점']
   const lines = [headers.join(',')]
-  for (const s of samples.value) {
+  for (const s of target) {
     lines.push([
       csvEscape(s.body),
       csvEscape(lengthLabel[s.length] ?? s.length),
@@ -3006,8 +3011,8 @@ onUnmounted(() => {
           </div>
           <!-- ══ /탭 2: 통계 · AI 인사이트 ════════════════════════════ -->
 
-          <!-- ══ 탭 3: 예시 생성 (researcher/admin 전용) ════════════════ -->
-          <div v-if="authStore.isResearcher" v-show="activeTab === 'samples'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <!-- ══ 탭 3: 예시 생성 (researcher/admin/tester) ════════════════ -->
+          <div v-if="authStore.isResearcher || authStore.isTester" v-show="activeTab === 'samples'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
 
             <!-- 탭 상단 고정 영역 (shrink-0) -->
             <div class="shrink-0 flex flex-col divide-y divide-gray-100 dark:divide-slate-700 border-b border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800">
@@ -3125,7 +3130,7 @@ onUnmounted(() => {
                   <UIcon name="i-heroicons-eye-slash" class="w-3 h-3" />
                   숨김
                 </button>
-                <template v-if="checkedSampleIds.size > 0">
+                <template v-if="checkedSampleIds.size > 0 && !authStore.isTester">
                   <span class="text-gray-300 dark:text-slate-600 text-xs">·</span>
                   <UButton
                     :label="`선택 삭제 (${checkedSampleIds.size})`"
