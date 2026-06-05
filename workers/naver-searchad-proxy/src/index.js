@@ -177,6 +177,16 @@ export default {
     if (samplesMatch && request.method === 'GET') {
       return handleGetSamples(request, env, corsHeaders, samplesMatch[1]);
     }
+    // GET /api/places/review-sprint-sample — 라벨링 스프린트 표본 추출 (researcher 이상)
+    // 주의: 정확히 /api/places/{id} 매칭보다 먼저 위치해야 함
+    if (url.pathname === '/api/places/review-sprint-sample' && request.method === 'GET') {
+      return handleReviewSprintSample(request, env, corsHeaders);
+    }
+    // GET /api/places/review-sprint-stats — 라벨링 스프린트 진행 통계 (researcher 이상)
+    if (url.pathname === '/api/places/review-sprint-stats' && request.method === 'GET') {
+      return handleReviewSprintStats(request, env, corsHeaders);
+    }
+
     // DELETE /api/places/:id — 플레이스 + 연관 데이터 cascade 삭제
     // 주의: 정확히 /api/places/{id} 로 끝나는 것만 매칭(하위 경로 없음)
     const deletePlaceMatch = url.pathname.match(/^\/api\/places\/([^/]+)$/);
@@ -5707,6 +5717,141 @@ ${reviewsText}`;
       return await fetchOnce();
     }
     throw firstErr;
+  }
+}
+
+// --- 라벨링 스프린트 ---
+
+/**
+ * GET /api/places/review-sprint-sample?limit=200  (researcher 이상)
+ * 26개 지점 × 본문 길이 구간(~30 / 30~80 / 80~)으로 골고루 층화 표본 추출.
+ * 이미 라벨된 review_id 및 명백한 저품질(body 2자 이하) 제외.
+ */
+async function handleReviewSprintSample(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  const url = new URL(request.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '200', 10), 500);
+
+  try {
+    // 전체 지점 목록
+    const { results: places } = await env.DB.prepare(
+      `SELECT id, name, place_id FROM review_places ORDER BY id`
+    ).all();
+
+    if (!places || places.length === 0) {
+      return jsonResponse({ total: 0, items: [] }, 200, cors);
+    }
+
+    // 길이 구간 3개
+    const BUCKETS = [
+      { key: 'short',  minLen: 0,  maxLen: 29  },
+      { key: 'medium', minLen: 30, maxLen: 79  },
+      { key: 'long',   minLen: 80, maxLen: 9999 },
+    ];
+
+    const placeCount = places.length;
+    const bucketCount = BUCKETS.length;
+    // 지점당 각 구간에서 뽑을 목표: ceil(limit / (지점수 * 구간수))
+    const perSlot = Math.max(1, Math.ceil(limit / (placeCount * bucketCount)));
+
+    const collected = [];
+
+    for (const place of places) {
+      for (const bucket of BUCKETS) {
+        const rows = await env.DB.prepare(`
+          SELECT pr.id AS review_id, pr.body, pr.review_date
+          FROM place_reviews pr
+          LEFT JOIN place_review_labels prl ON prl.review_id = pr.id
+          WHERE pr.place_row_id = ?
+            AND prl.review_id IS NULL
+            AND LENGTH(COALESCE(pr.body, '')) > 2
+            AND LENGTH(COALESCE(pr.body, '')) >= ?
+            AND LENGTH(COALESCE(pr.body, '')) <= ?
+          ORDER BY RANDOM()
+          LIMIT ?
+        `).bind(place.id, bucket.minLen, bucket.maxLen, perSlot).all();
+
+        for (const row of (rows.results ?? [])) {
+          collected.push({
+            review_id:   row.review_id,
+            body:        row.body,
+            place_row_id: place.id,
+            place_name:  place.name || place.place_id,
+            length_bucket: bucket.key,
+            body_length: (row.body || '').length,
+            review_date: row.review_date,
+          });
+        }
+      }
+    }
+
+    // 전체를 섞고 limit 수만큼 반환
+    for (let i = collected.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [collected[i], collected[j]] = [collected[j], collected[i]];
+    }
+    const items = collected.slice(0, limit);
+
+    return jsonResponse({ total: items.length, items }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+/**
+ * GET /api/places/review-sprint-stats  (researcher 이상)
+ * 전체 라벨링 진행 통계: 총 라벨 수, 분류별 합계, 지점별 소계.
+ */
+async function handleReviewSprintStats(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  try {
+    // 전체 라벨 건수
+    const totalRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM place_review_labels`
+    ).first();
+    const total = totalRow?.cnt ?? 0;
+
+    // 분류별
+    const { results: labelRows } = await env.DB.prepare(
+      `SELECT human_label, COUNT(*) AS cnt FROM place_review_labels GROUP BY human_label`
+    ).all();
+
+    const by_label = { human: 0, ad: 0, ai: 0, unsure: 0 };
+    for (const r of (labelRows ?? [])) {
+      if (r.human_label in by_label) by_label[r.human_label] = r.cnt;
+    }
+
+    // 지점별
+    const { results: placeRows } = await env.DB.prepare(`
+      SELECT rp.id, rp.name, rp.place_id,
+             COUNT(prl.review_id) AS labeled_count
+      FROM review_places rp
+      LEFT JOIN place_review_labels prl ON prl.place_row_id = rp.id
+      GROUP BY rp.id
+      ORDER BY labeled_count DESC
+    `).all();
+
+    const by_place = (placeRows ?? []).map(r => ({
+      place_row_id:  r.id,
+      place_name:    r.name || r.place_id,
+      labeled_count: r.labeled_count ?? 0,
+    }));
+
+    return jsonResponse({ total, by_label, by_place }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 }
 

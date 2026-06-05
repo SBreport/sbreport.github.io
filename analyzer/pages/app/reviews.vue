@@ -511,7 +511,7 @@ const aiReviewsFilterLabel = computed(() => {
 
 // ─── 탭 상태 ─────────────────────────────────────────────────────────────────
 
-type DetailTab = 'reviews' | 'stats' | 'collections' | 'samples' | 'ai-diagnosis'
+type DetailTab = 'reviews' | 'stats' | 'collections' | 'samples' | 'ai-diagnosis' | 'sprint'
 const activeTab = ref<DetailTab>('reviews')
 
 // ─── usage(비용) 상태 ────────────────────────────────────────────────────────
@@ -1954,6 +1954,157 @@ async function toggleAutoCollect(place: Place) {
   }
 }
 
+// ─── 라벨링 스프린트 (Phase 4 보완) ─────────────────────────────────────────
+
+interface SprintItem {
+  review_id: string
+  body: string
+  place_row_id: number
+  place_name: string
+  length_bucket: 'short' | 'medium' | 'long'
+  body_length: number
+  review_date: string | null
+}
+
+interface SprintStats {
+  total: number
+  by_label: { human: number; ad: number; ai: number; unsure: number }
+  by_place: { place_row_id: number; place_name: string; labeled_count: number }[]
+}
+
+// 스프린트 상태
+const sprintItems = ref<SprintItem[]>([])
+const sprintStatus = ref<LoadStatus>('idle')
+const sprintError = ref<string | null>(null)
+const sprintIndex = ref(0)  // 현재 보고 있는 항목 인덱스 (0-based)
+const sprintNote = ref('')
+const sprintSavingId = ref<string | null>(null)
+const sprintSaveError = ref<string | null>(null)
+const sprintLimit = ref(200)
+
+// 통계
+const sprintStats = ref<SprintStats | null>(null)
+const sprintStatsStatus = ref<LoadStatus>('idle')
+
+// 현재 스프린트 항목
+const sprintCurrent = computed<SprintItem | null>(() => sprintItems.value[sprintIndex.value] ?? null)
+const sprintLabeledInSession = ref(0)  // 이번 세션 라벨 횟수
+const sprintDoneIds = ref<Set<string>>(new Set())  // 이번 세션에 라벨한 review_id
+
+async function fetchSprintSample() {
+  sprintStatus.value = 'loading'
+  sprintError.value = null
+  sprintItems.value = []
+  sprintIndex.value = 0
+  sprintNote.value = ''
+  sprintLabeledInSession.value = 0
+  sprintDoneIds.value = new Set()
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/review-sprint-sample?limit=${sprintLimit.value}`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { message?: string }
+        if (b.message) msg = b.message
+      } catch { /* ignore */ }
+      sprintError.value = msg
+      sprintStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as { total: number; items: SprintItem[] }
+    sprintItems.value = data.items
+    sprintStatus.value = data.items.length > 0 ? 'done' : 'done'
+  } catch (e: unknown) {
+    sprintError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    sprintStatus.value = 'error'
+  }
+}
+
+async function fetchSprintStats() {
+  sprintStatsStatus.value = 'loading'
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/review-sprint-stats`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      sprintStatsStatus.value = 'error'
+      return
+    }
+    sprintStats.value = await res.json() as SprintStats
+    sprintStatsStatus.value = 'done'
+  } catch {
+    sprintStatsStatus.value = 'error'
+  }
+}
+
+async function sprintLabel(label: HumanLabel) {
+  const item = sprintCurrent.value
+  if (!item || sprintSavingId.value) return
+  sprintSavingId.value = item.review_id
+  sprintSaveError.value = null
+  try {
+    const res = await fetch(
+      `${WORKER_BASE}/api/places/${item.place_row_id}/reviews/${item.review_id}/label`,
+      {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ label, note: sprintNote.value.trim() || null }),
+      }
+    )
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({})) as { message?: string }
+      sprintSaveError.value = b.message ?? `저장 실패 (${res.status})`
+      return
+    }
+    // 성공: 다음으로 이동
+    sprintDoneIds.value = new Set([...sprintDoneIds.value, item.review_id])
+    sprintLabeledInSession.value++
+    sprintNote.value = ''
+    // 현재 항목을 건너뛰고 다음으로
+    sprintIndex.value++
+    // 통계 낙관적 반영
+    if (sprintStats.value && label) {
+      sprintStats.value = {
+        ...sprintStats.value,
+        total: sprintStats.value.total + 1,
+        by_label: {
+          ...sprintStats.value.by_label,
+          [label]: (sprintStats.value.by_label[label] ?? 0) + 1,
+        },
+      }
+    }
+  } catch (e: unknown) {
+    sprintSaveError.value = e instanceof Error ? e.message : '저장 중 오류'
+  } finally {
+    sprintSavingId.value = null
+  }
+}
+
+function sprintSkip() {
+  if (sprintIndex.value < sprintItems.value.length - 1) {
+    sprintIndex.value++
+    sprintNote.value = ''
+    sprintSaveError.value = null
+  }
+}
+
+function sprintPrev() {
+  if (sprintIndex.value > 0) {
+    sprintIndex.value--
+    sprintNote.value = ''
+    sprintSaveError.value = null
+  }
+}
+
+const SPRINT_LABEL_MAP: Record<string, { text: string; short: string; cls: string }> = {
+  human:  { text: '진짜손님',   short: '사람',  cls: 'bg-emerald-500 hover:bg-emerald-600 text-white' },
+  ad:     { text: '사람마케팅', short: '광고',  cls: 'bg-red-500 hover:bg-red-600 text-white' },
+  ai:     { text: 'AI조립',     short: 'AI',    cls: 'bg-amber-500 hover:bg-amber-600 text-white' },
+  unsure: { text: '모름',       short: '?',     cls: 'bg-slate-400 hover:bg-slate-500 text-white' },
+}
+
 // ─── 초기 로드 / 정리 ────────────────────────────────────────────────────────
 
 onMounted(() => {
@@ -2371,17 +2522,18 @@ onUnmounted(() => {
         </div>
         <!-- ── /공통 헤더 ────────────────────────────────────────── -->
 
-        <!-- 플레이스 미선택 안내 -->
-        <div v-if="!selectedPlace" class="flex-1 flex items-center justify-center bg-white dark:bg-slate-900">
+        <!-- 플레이스 미선택 안내 (스프린트 탭 활성 시 숨김) -->
+        <div v-if="!selectedPlace && activeTab !== 'sprint'" class="flex-1 flex items-center justify-center bg-white dark:bg-slate-900">
           <p class="text-sm text-gray-400 dark:text-slate-500">좌측에서 플레이스를 선택하세요.</p>
         </div>
 
-        <!-- 플레이스 선택 시: 탭 바 + 탭 콘텐츠 -->
-        <template v-else>
+        <!-- 탭 바 + 탭 콘텐츠 (플레이스 선택 시 또는 스프린트 탭 활성 시) -->
+        <template v-if="selectedPlace || activeTab === 'sprint'">
 
           <!-- ── 탭 바 (shrink-0) ─────────────────────────────────── -->
-          <div class="shrink-0 flex border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+          <div class="shrink-0 flex border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-x-auto">
             <button
+              v-if="selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'reviews'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2391,6 +2543,7 @@ onUnmounted(() => {
               리뷰
             </button>
             <button
+              v-if="selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'stats'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2400,7 +2553,7 @@ onUnmounted(() => {
               통계
             </button>
             <button
-              v-if="authStore.isResearcher"
+              v-if="authStore.isResearcher && selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'ai-diagnosis'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2410,7 +2563,7 @@ onUnmounted(() => {
               AI 진단
             </button>
             <button
-              v-if="authStore.isResearcher"
+              v-if="authStore.isResearcher && selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'samples'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2420,6 +2573,7 @@ onUnmounted(() => {
               예시 생성
             </button>
             <button
+              v-if="selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'collections'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2427,6 +2581,16 @@ onUnmounted(() => {
               @click="activeTab = 'collections'"
             >
               수집 이력
+            </button>
+            <button
+              v-if="authStore.isResearcher"
+              class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+              :class="activeTab === 'sprint'
+                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                : 'border-transparent text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
+              @click="activeTab = 'sprint'; fetchSprintStats()"
+            >
+              라벨링 스프린트
             </button>
           </div>
           <!-- ── /탭 바 ──────────────────────────────────────────── -->
@@ -3844,6 +4008,273 @@ onUnmounted(() => {
 
           </div>
           <!-- ══ /탭 5: 수집 이력 ══════════════════════════════════════ -->
+
+          <!-- ══ 탭 6: 라벨링 스프린트 (researcher/admin 전용) ══════════ -->
+          <div v-if="authStore.isResearcher" v-show="activeTab === 'sprint'" class="h-full flex flex-col overflow-hidden">
+
+            <!-- 상단 컨트롤 바 (shrink-0) -->
+            <div class="shrink-0 flex items-center gap-3 px-3 py-2 border-b border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 flex-wrap">
+              <span class="text-xs font-semibold text-gray-700 dark:text-slate-200 shrink-0">라벨링 스프린트</span>
+              <span class="text-[11px] text-gray-400 dark:text-slate-500">|</span>
+              <!-- 표본 크기 -->
+              <div class="flex items-center gap-1.5 shrink-0">
+                <span class="text-[11px] text-gray-500 dark:text-slate-400">표본</span>
+                <select
+                  v-model.number="sprintLimit"
+                  class="text-xs rounded border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 px-1.5 py-0.5 focus:outline-none"
+                >
+                  <option :value="100">100건</option>
+                  <option :value="200">200건</option>
+                  <option :value="300">300건</option>
+                </select>
+              </div>
+              <UButton
+                label="표본 불러오기"
+                size="xs"
+                color="primary"
+                variant="outline"
+                icon="i-heroicons-arrow-down-tray"
+                :loading="sprintStatus === 'loading'"
+                :disabled="sprintStatus === 'loading'"
+                @click="fetchSprintSample(); fetchSprintStats()"
+              />
+              <div class="ml-auto flex items-center gap-2 shrink-0">
+                <!-- 진행률 -->
+                <span class="text-xs tabular-nums text-gray-500 dark:text-slate-400">
+                  이번 세션 {{ sprintLabeledInSession }}건 라벨 완료
+                  <template v-if="sprintItems.length > 0">
+                    / 표본 {{ sprintItems.length }}건 중 {{ sprintIndex }}/{{ sprintItems.length }}
+                  </template>
+                </span>
+              </div>
+            </div>
+
+            <!-- 본문 2분할 -->
+            <div class="flex-1 min-h-0 flex flex-row gap-0 overflow-hidden">
+
+              <!-- ── 좌측: 카드 뷰어 ── -->
+              <div class="flex-1 min-h-0 flex flex-col overflow-hidden border-r border-gray-100 dark:border-slate-700">
+
+                <!-- Loading -->
+                <div v-if="sprintStatus === 'loading'" class="flex-1 flex items-center justify-center">
+                  <UIcon name="i-heroicons-arrow-path" class="w-6 h-6 text-gray-400 animate-spin" />
+                </div>
+
+                <!-- Error -->
+                <div v-else-if="sprintStatus === 'error'" class="flex-1 flex flex-col items-center justify-center gap-2 p-4">
+                  <UIcon name="i-heroicons-exclamation-circle" class="w-6 h-6 text-red-400" />
+                  <p class="text-xs text-red-500 text-center">{{ sprintError }}</p>
+                  <button class="text-xs text-primary-600 hover:text-primary-800 dark:hover:text-primary-300" @click="fetchSprintSample()">재시도</button>
+                </div>
+
+                <!-- Idle/Empty -->
+                <div v-else-if="sprintStatus === 'idle' || sprintItems.length === 0" class="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
+                  <UIcon name="i-heroicons-tag" class="w-10 h-10 text-gray-200 dark:text-slate-700" />
+                  <p class="text-sm font-medium text-gray-500 dark:text-slate-400">라벨링 스프린트</p>
+                  <p class="text-[11px] text-gray-400 dark:text-slate-500 leading-snug max-w-xs">
+                    수집된 리뷰를 층화 표본 추출하여<br>
+                    4분류 라벨링을 빠르게 진행합니다.<br>
+                    이미 라벨된 리뷰는 제외됩니다.
+                  </p>
+                  <UButton
+                    label="표본 불러오기"
+                    size="sm"
+                    color="primary"
+                    variant="outline"
+                    icon="i-heroicons-arrow-down-tray"
+                    :loading="(sprintStatus as string) === 'loading'"
+                    @click="fetchSprintSample(); fetchSprintStats()"
+                  />
+                </div>
+
+                <!-- 모두 완료 -->
+                <div v-else-if="sprintStatus === 'done' && sprintIndex >= sprintItems.length" class="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
+                  <UIcon name="i-heroicons-check-circle" class="w-10 h-10 text-emerald-400" />
+                  <p class="text-sm font-semibold text-gray-700 dark:text-slate-200">표본 {{ sprintItems.length }}건 완료!</p>
+                  <p class="text-xs text-gray-400 dark:text-slate-500">이번 세션에서 {{ sprintLabeledInSession }}건 라벨했습니다.</p>
+                  <UButton
+                    label="새 표본 불러오기"
+                    size="sm"
+                    color="primary"
+                    variant="outline"
+                    icon="i-heroicons-arrow-path"
+                    @click="fetchSprintSample(); fetchSprintStats()"
+                  />
+                </div>
+
+                <!-- 카드 -->
+                <template v-else-if="sprintStatus === 'done' && sprintCurrent">
+                  <div class="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-3">
+
+                    <!-- 진행 바 -->
+                    <div class="shrink-0 flex items-center gap-2">
+                      <div class="flex-1 h-1.5 bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                        <div
+                          class="h-full bg-primary-500 rounded-full transition-all"
+                          :style="{ width: `${Math.round(sprintIndex / sprintItems.length * 100)}%` }"
+                        />
+                      </div>
+                      <span class="text-[11px] tabular-nums text-gray-400 dark:text-slate-500 shrink-0">{{ sprintIndex }}/{{ sprintItems.length }}</span>
+                    </div>
+
+                    <!-- 메타 정보 -->
+                    <div class="shrink-0 flex items-center gap-2 flex-wrap">
+                      <span class="text-[11px] font-medium text-gray-500 dark:text-slate-400 px-2 py-0.5 rounded bg-gray-100 dark:bg-slate-700">{{ sprintCurrent.place_name }}</span>
+                      <span class="text-[11px] text-gray-400 dark:text-slate-500">{{ sprintCurrent.length_bucket === 'short' ? '단문' : sprintCurrent.length_bucket === 'medium' ? '중문' : '장문' }} ({{ sprintCurrent.body_length }}자)</span>
+                      <span v-if="sprintCurrent.review_date" class="text-[11px] text-gray-400 dark:text-slate-500">{{ sprintCurrent.review_date }}</span>
+                      <span v-if="sprintDoneIds.has(sprintCurrent.review_id)" class="text-[11px] text-emerald-500 font-medium">라벨 완료</span>
+                    </div>
+
+                    <!-- 본문 -->
+                    <div class="rounded border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-3 text-sm text-gray-800 dark:text-slate-100 leading-relaxed min-h-[80px] whitespace-pre-wrap">{{ sprintCurrent.body }}</div>
+
+                    <!-- 라벨 버튼 -->
+                    <div class="shrink-0 flex flex-col gap-2">
+                      <div class="flex gap-2 flex-wrap">
+                        <button
+                          v-for="(cfg, key) in SPRINT_LABEL_MAP"
+                          :key="key"
+                          class="px-4 py-2 rounded text-sm font-semibold transition-colors disabled:opacity-50"
+                          :class="cfg.cls"
+                          :disabled="!!sprintSavingId"
+                          @click="sprintLabel(key as HumanLabel)"
+                        >
+                          <span v-if="sprintSavingId === sprintCurrent.review_id" class="flex items-center gap-1.5">
+                            <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 animate-spin" />
+                            저장 중
+                          </span>
+                          <span v-else>{{ cfg.text }}</span>
+                        </button>
+                      </div>
+
+                      <!-- 메모 -->
+                      <input
+                        v-model="sprintNote"
+                        type="text"
+                        placeholder="메모 (선택 사항)"
+                        maxlength="200"
+                        class="w-full text-xs rounded border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-primary-400 placeholder-gray-300 dark:placeholder-slate-600"
+                        @keydown.enter.prevent
+                      />
+
+                      <!-- 저장 오류 -->
+                      <p v-if="sprintSaveError" class="text-xs text-red-500">{{ sprintSaveError }}</p>
+                    </div>
+
+                    <!-- 이전/다음 네비게이션 -->
+                    <div class="shrink-0 flex items-center justify-between">
+                      <button
+                        class="text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 disabled:opacity-30 transition-colors"
+                        :disabled="sprintIndex === 0"
+                        @click="sprintPrev"
+                      >
+                        이전
+                      </button>
+                      <button
+                        class="text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 disabled:opacity-30 transition-colors"
+                        :disabled="sprintIndex >= sprintItems.length - 1"
+                        @click="sprintSkip"
+                      >
+                        건너뛰기
+                      </button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <!-- ── 우측: 진행 통계 패널 (240px) ── -->
+              <div class="w-60 shrink-0 overflow-y-auto flex flex-col gap-3 p-3 bg-gray-50 dark:bg-slate-800/50">
+                <!-- 통계 헤더 -->
+                <div class="flex items-center justify-between">
+                  <span class="text-[11px] font-semibold text-gray-600 dark:text-slate-300">전체 라벨 통계</span>
+                  <button
+                    class="text-[11px] text-primary-500 hover:text-primary-700 dark:hover:text-primary-300 transition-colors"
+                    :class="sprintStatsStatus === 'loading' ? 'opacity-50 pointer-events-none' : ''"
+                    @click="fetchSprintStats()"
+                  >새로고침</button>
+                </div>
+
+                <!-- 통계 로딩 -->
+                <div v-if="sprintStatsStatus === 'loading'" class="flex items-center justify-center py-4">
+                  <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 text-gray-400 animate-spin" />
+                </div>
+
+                <!-- 통계 결과 -->
+                <template v-else-if="sprintStats">
+                  <!-- 전체 합계 -->
+                  <div class="rounded border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2.5 flex flex-col gap-1">
+                    <div class="flex items-baseline gap-1">
+                      <span class="text-2xl font-bold tabular-nums text-gray-800 dark:text-slate-100">{{ sprintStats.total.toLocaleString('ko-KR') }}</span>
+                      <span class="text-xs text-gray-400 dark:text-slate-500">건 라벨 완료</span>
+                    </div>
+
+                    <!-- 분류별 바 -->
+                    <div class="flex h-3 rounded overflow-hidden gap-px mt-1" v-if="sprintStats.total > 0">
+                      <div
+                        v-if="sprintStats.by_label.human > 0"
+                        class="h-full bg-emerald-500"
+                        :style="{ width: `${Math.round(sprintStats.by_label.human / sprintStats.total * 100)}%` }"
+                        :title="`진짜손님 ${sprintStats.by_label.human}건`"
+                      />
+                      <div
+                        v-if="sprintStats.by_label.ad > 0"
+                        class="h-full bg-red-500"
+                        :style="{ width: `${Math.round(sprintStats.by_label.ad / sprintStats.total * 100)}%` }"
+                        :title="`사람마케팅 ${sprintStats.by_label.ad}건`"
+                      />
+                      <div
+                        v-if="sprintStats.by_label.ai > 0"
+                        class="h-full bg-amber-500"
+                        :style="{ width: `${Math.round(sprintStats.by_label.ai / sprintStats.total * 100)}%` }"
+                        :title="`AI조립 ${sprintStats.by_label.ai}건`"
+                      />
+                      <div
+                        v-if="sprintStats.by_label.unsure > 0"
+                        class="h-full bg-slate-400"
+                        :style="{ width: `${Math.round(sprintStats.by_label.unsure / sprintStats.total * 100)}%` }"
+                        :title="`모름 ${sprintStats.by_label.unsure}건`"
+                      />
+                    </div>
+                  </div>
+
+                  <!-- 분류별 수치 -->
+                  <div class="flex flex-col gap-1">
+                    <div v-for="([key, cfg]) in Object.entries(SPRINT_LABEL_MAP)" :key="key" class="flex items-center gap-1.5">
+                      <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="key === 'human' ? 'bg-emerald-500' : key === 'ad' ? 'bg-red-500' : key === 'ai' ? 'bg-amber-500' : 'bg-slate-400'" />
+                      <span class="text-[11px] text-gray-600 dark:text-slate-400 flex-1">{{ cfg.text }}</span>
+                      <span class="text-[11px] tabular-nums font-medium text-gray-700 dark:text-slate-300">
+                        {{ ((sprintStats.by_label as Record<string, number>)[key] ?? 0).toLocaleString('ko-KR') }}
+                      </span>
+                      <span v-if="sprintStats.total > 0" class="text-[11px] tabular-nums text-gray-400 dark:text-slate-500 w-8 text-right">
+                        {{ Math.round(((sprintStats.by_label as Record<string, number>)[key] ?? 0) / sprintStats.total * 100) }}%
+                      </span>
+                    </div>
+                  </div>
+
+                  <!-- 지점별 소계 (top 10) -->
+                  <div class="flex flex-col gap-1 pt-1 border-t border-gray-100 dark:border-slate-700">
+                    <span class="text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-1">지점별</span>
+                    <div
+                      v-for="p in sprintStats.by_place.filter(x => x.labeled_count > 0).slice(0, 10)"
+                      :key="p.place_row_id"
+                      class="flex items-center gap-1.5"
+                    >
+                      <span class="text-[11px] text-gray-600 dark:text-slate-400 flex-1 truncate" :title="p.place_name">{{ p.place_name }}</span>
+                      <span class="text-[11px] tabular-nums font-medium text-gray-700 dark:text-slate-300">{{ p.labeled_count }}</span>
+                    </div>
+                    <p v-if="sprintStats.by_place.every(x => x.labeled_count === 0)" class="text-[11px] text-gray-400 dark:text-slate-500">아직 없음</p>
+                  </div>
+                </template>
+
+                <!-- 통계 없음 -->
+                <div v-else-if="sprintStatsStatus === 'idle'" class="flex flex-col items-center justify-center gap-2 py-4">
+                  <p class="text-[11px] text-gray-400 dark:text-slate-500 text-center">표본을 불러오면<br>통계가 표시됩니다</p>
+                </div>
+              </div>
+
+            </div>
+          </div>
+          <!-- ══ /탭 6: 라벨링 스프린트 ══════════════════════════════════ -->
 
         </template>
         <!-- /플레이스 선택 시 탭 구조 -->
