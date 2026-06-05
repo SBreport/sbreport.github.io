@@ -217,6 +217,12 @@ export default {
     if (adminRoleMatch && request.method === 'POST') {
       return handleAdminSetRole(request, env, corsHeaders, adminRoleMatch[1]);
     }
+    // POST /api/labels/llm-classify — LLM judge 판별 실행 (admin 전용)
+    // 사람 라벨된 리뷰 전체를 codebook 기반 4분류 → review_llm_classifications upsert
+    // 결과는 잠정(단일 평가자 대비) — IAA 검증 전
+    if (url.pathname === '/api/labels/llm-classify' && request.method === 'POST') {
+      return handleLLMClassify(request, env, corsHeaders);
+    }
 
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
@@ -3451,6 +3457,9 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
   if (provider === 'anthropic') {
     if (!env.ANTHROPIC_API_KEY) throw Object.assign(new Error('Anthropic API 키가 설정되지 않았습니다'), { code: 'no_anthropic_key' });
 
+    // ★ Opus temperature rider: claude-opus-* 모델은 temperature 제외 (deprecated)
+    const isOpusSamples = model.startsWith('claude-opus-');
+
     const anthropicBody = {
       model,
       max_tokens: maxTokens,
@@ -3482,7 +3491,7 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
         },
       ],
       tool_choice: { type: 'tool', name: 'emit_samples' },
-      temperature: 0.8,
+      ...(isOpusSamples ? {} : { temperature: 0.8 }),
     };
 
     async function fetchOnceAnthropic() {
@@ -3834,6 +3843,9 @@ AI/광고 의심은 *길게 쓰면서도* 상투적·홍보성·과장된 경우
   if (provider === 'anthropic') {
     if (!env.ANTHROPIC_API_KEY) throw Object.assign(new Error('Anthropic API 키가 설정되지 않았습니다'), { code: 'no_anthropic_key' });
 
+    // ★ Opus temperature rider: claude-opus-* 모델은 temperature 제외 (deprecated)
+    const isOpusAuth = model.startsWith('claude-opus-');
+
     const anthropicBody = {
       model,
       max_tokens: maxTokens,
@@ -3866,7 +3878,7 @@ AI/광고 의심은 *길게 쓰면서도* 상투적·홍보성·과장된 경우
         },
       ],
       tool_choice: { type: 'tool', name: 'emit_analysis' },
-      temperature: 0.1,
+      ...(isOpusAuth ? {} : { temperature: 0.1 }),
     };
 
     async function fetchOnceAnthropic() {
@@ -3903,6 +3915,375 @@ AI/광고 의심은 *길게 쓰면서도* 상투적·홍보성·과장된 경우
   }
 
   throw new Error(`지원하지 않는 provider: ${provider}`);
+}
+
+// =============================================================================
+// Phase 4-2 Step A2 — LLM judge: codebook 기반 4분류 판별기
+// 주의: 다중평가(IAA) 전이라 결과는 *잠정(단일 평가자 대비)* — "검증됨" 주장 금지.
+// =============================================================================
+
+/**
+ * Codebook 기반 LLM 판별기 — 배치 호출.
+ * place_review_labels에 사람 라벨된 리뷰를 4분류(genuine/ad/ai/unsure)하고
+ * review_llm_classifications 테이블에 upsert 저장용 결과를 반환한다.
+ *
+ * ★ Opus temperature rider:
+ *   anthropic provider에서 model이 'claude-opus-'로 시작하면
+ *   temperature 파라미터를 제외한다 (Opus 4.8 deprecated).
+ *
+ * @param {object} env
+ * @param {string} provider  'openai' | 'anthropic' | 'xai'
+ * @param {string} model
+ * @param {{ review_id: string, body: string }[]} items
+ * @returns {Promise<{ results: { review_id: string, llm_label: string, reason: string }[], usage: { prompt_tokens: number, completion_tokens: number } }>}
+ */
+async function classifyReviewLLM(env, provider, model, items) {
+  // Codebook 핵심 규칙을 임베드한 시스템 프롬프트
+  const systemPrompt = `너는 한국어 네이버 플레이스 리뷰를 4분류하는 전문가다.
+아래 Codebook 규칙에 따라 각 리뷰를 정확히 분류하라.
+
+## 4분류 정의
+- genuine: 실제 방문·시술 경험을 본인이 직접 서술. 홍보 의도 없음.
+- ad: 사람이 썼지만 판촉 구조(추천 CTA·지역 타겟·실명 plug)가 핵심.
+- ai: 구체 경험 없이 기계적으로 조립된 일반 칭찬 패턴.
+- unsure: 신호 부족·상충으로 판단 불가.
+
+## 판정 체크리스트 (이 순서로 적용)
+1. 판촉 구조 있음? (지역CTA "경기광주 분 추천" / 담당자 실명 plug / 이벤트 유도)
+   → YES → ad
+
+2. 구체 경험 0 + 표현이 정갈·반복적? ("말랑말랑+촉촉+다음방문기대" 같은 骨格 반복)
+   → YES → ai
+
+3. 오타·구체 디테일·군말·불완전성 있음? (시술명·수치·부위·개인상황·양가감정)
+   → YES → genuine
+
+4. 그 외 (너무 짧아 단서 없음 / 신호 상충)?
+   → unsure (단, 하나라도 뚜렷한 신호 있으면 억지로 unsure 두지 말 것)
+
+## 주의
+- 길고 긍정적이라고 ad가 아님. genuine도 길게 쓴다.
+- ai vs genuine 핵심: 정갈함(no 오타·구체성) vs 불완전성(오타·디테일·군말).
+- unsure 남발 금지. 뚜렷한 신호 하나면 해당 라벨로.
+
+## 출력 규칙
+반드시 다음 JSON 구조만 응답 (다른 텍스트 없이 순수 JSON):
+{
+  "results": [
+    {
+      "review_id": "...",
+      "llm_label": "genuine",
+      "reason": "판단 근거 한 줄 (30자 이내)"
+    }
+  ]
+}
+- llm_label 값은 반드시 genuine | ad | ai | unsure 중 하나.
+- 입력된 모든 review_id에 대해 빠짐없이 결과를 반환할 것.`;
+
+  const reviewsText = items
+    .map((item, i) => `[${i + 1}] review_id=${item.review_id}\n${item.body}`)
+    .join('\n\n');
+  const userPrompt = `다음 ${items.length}개 리뷰를 Codebook 기준으로 4분류하라:\n\n${reviewsText}`;
+
+  const maxTokens = Math.max(800, items.length * 100);
+
+  if (provider === 'openai') {
+    if (!env.OPENAI_API_KEY) throw Object.assign(new Error('OpenAI API 키가 설정되지 않았습니다'), { code: 'no_openai_key' });
+
+    const reqBody = {
+      model,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      temperature: 0.1,
+      max_completion_tokens: maxTokens,
+    };
+
+    async function fetchOnceOpenAIClassify() {
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+        body: JSON.stringify(reqBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`OpenAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('OpenAI 응답에 content가 없습니다');
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.results)) throw new Error('OpenAI 응답 구조 오류: results 배열 없음');
+      return {
+        results: parsed.results,
+        usage: {
+          prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+          completion_tokens: data?.usage?.completion_tokens ?? 0,
+        },
+      };
+    }
+
+    try {
+      return await fetchOnceOpenAIClassify();
+    } catch (firstErr) {
+      if (firstErr instanceof SyntaxError) return await fetchOnceOpenAIClassify();
+      throw firstErr;
+    }
+  }
+
+  if (provider === 'xai') {
+    if (!env.XAI_API_KEY) throw Object.assign(new Error('xAI API 키가 설정되지 않았습니다'), { code: 'no_xai_key' });
+
+    const reqBody = {
+      model,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      temperature: 0.1,
+      max_completion_tokens: maxTokens,
+    };
+
+    async function fetchOnceXAIClassify() {
+      const resp = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.XAI_API_KEY}` },
+        body: JSON.stringify(reqBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`xAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('xAI 응답에 content가 없습니다');
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.results)) throw new Error('xAI 응답 구조 오류: results 배열 없음');
+      return {
+        results: parsed.results,
+        usage: {
+          prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+          completion_tokens: data?.usage?.completion_tokens ?? 0,
+        },
+      };
+    }
+
+    try {
+      return await fetchOnceXAIClassify();
+    } catch (firstErr) {
+      if (firstErr instanceof SyntaxError) return await fetchOnceXAIClassify();
+      throw firstErr;
+    }
+  }
+
+  if (provider === 'anthropic') {
+    if (!env.ANTHROPIC_API_KEY) throw Object.assign(new Error('Anthropic API 키가 설정되지 않았습니다'), { code: 'no_anthropic_key' });
+
+    // ★ Opus temperature rider: claude-opus-* 모델은 temperature 제외 (deprecated)
+    const isOpus = model.startsWith('claude-opus-');
+
+    const anthropicBody = {
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      tools: [
+        {
+          name: 'emit_classifications',
+          description: '리뷰 4분류(genuine/ad/ai/unsure) 결과를 반환한다',
+          input_schema: {
+            type: 'object',
+            properties: {
+              results: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    review_id: { type: 'string' },
+                    llm_label: { type: 'string', enum: ['genuine', 'ad', 'ai', 'unsure'] },
+                    reason:    { type: 'string' },
+                  },
+                  required: ['review_id', 'llm_label', 'reason'],
+                },
+              },
+            },
+            required: ['results'],
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'emit_classifications' },
+      ...(isOpus ? {} : { temperature: 0.1 }),
+    };
+
+    async function fetchOnceAnthropicClassify() {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type':      'application/json',
+          'x-api-key':         env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(anthropicBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`Anthropic API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const toolBlock = Array.isArray(data?.content)
+        ? data.content.find(b => b.type === 'tool_use' && b.name === 'emit_classifications')
+        : null;
+      if (!toolBlock?.input) throw new Error('Anthropic 응답에 emit_classifications tool_use 블록이 없습니다');
+      const parsed = toolBlock.input;
+      if (!Array.isArray(parsed?.results)) throw new Error('Anthropic 응답 구조 오류: results 배열 없음');
+      return {
+        results: parsed.results,
+        usage: {
+          prompt_tokens:     data?.usage?.input_tokens  ?? 0,
+          completion_tokens: data?.usage?.output_tokens ?? 0,
+        },
+      };
+    }
+
+    return await fetchOnceAnthropicClassify();
+  }
+
+  throw new Error(`지원하지 않는 provider: ${provider}`);
+}
+
+/**
+ * POST /api/labels/llm-classify  (admin 전용)
+ * place_review_labels에 라벨된 리뷰 전체를 classifyReviewLLM으로 분류 →
+ * review_llm_classifications에 upsert 저장.
+ * body: { provider?: string, model?: string }
+ * 결과: { ok: true, classified: number, usage: {...}, cost_usd: number|null }
+ *
+ * 주의: 결과는 *잠정(단일 평가자 대비)* — IAA 검증 전임.
+ */
+async function handleLLMClassify(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  // admin 전용
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // body 파싱
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  const VALID_PROVIDERS = ['openai', 'anthropic', 'xai'];
+  const provider = body?.provider ?? 'openai';
+  if (!VALID_PROVIDERS.includes(provider)) {
+    return jsonResponse(
+      { error: 'invalid_provider', message: `provider는 ${VALID_PROVIDERS.join(' | ')} 중 하나여야 합니다` },
+      400,
+      cors
+    );
+  }
+
+  // provider별 API 키 사전 확인
+  const keyCheck = {
+    openai:    { key: env.OPENAI_API_KEY,    code: 'no_openai_key',    msg: 'OpenAI API 키가 설정되지 않았습니다' },
+    anthropic: { key: env.ANTHROPIC_API_KEY, code: 'no_anthropic_key', msg: 'Anthropic API 키가 설정되지 않았습니다' },
+    xai:       { key: env.XAI_API_KEY,       code: 'no_xai_key',       msg: 'xAI API 키가 설정되지 않았습니다' },
+  };
+  const { key: providerKey, code: keyErrorCode, msg: keyErrorMsg } = keyCheck[provider];
+  if (!providerKey) {
+    return jsonResponse({ error: keyErrorCode, message: keyErrorMsg }, 503, cors);
+  }
+
+  const resolvedModel = (typeof body?.model === 'string' && body.model.trim())
+    ? body.model.trim()
+    : PROVIDER_DEFAULT_MODEL[provider];
+
+  // place_review_labels에 라벨된 리뷰 + 본문 로드
+  let labeledRows;
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT prl.review_id, pr.body
+      FROM place_review_labels prl
+      LEFT JOIN place_reviews pr ON pr.id = prl.review_id
+      WHERE prl.human_label IS NOT NULL
+    `).all();
+    labeledRows = results ?? [];
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (labeledRows.length === 0) {
+    return jsonResponse({ ok: true, classified: 0, usage: { prompt_tokens: 0, completion_tokens: 0 }, cost_usd: 0 }, 200, cors);
+  }
+
+  // 배치 처리 (25건씩)
+  const BATCH_SIZE = 25;
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  const classifyResultMap = new Map();
+
+  try {
+    for (let i = 0; i < labeledRows.length; i += BATCH_SIZE) {
+      const batch = labeledRows.slice(i, i + BATCH_SIZE).map(r => ({
+        review_id: r.review_id,
+        body:      r.body ?? '',
+      }));
+      const { results, usage } = await classifyReviewLLM(env, provider, resolvedModel, batch);
+      totalPromptTokens     += usage.prompt_tokens;
+      totalCompletionTokens += usage.completion_tokens;
+      for (const r of results) {
+        classifyResultMap.set(r.review_id, r);
+      }
+    }
+  } catch (err) {
+    return jsonResponse({ error: 'llm_error', message: err.message }, 502, cors);
+  }
+
+  // review_llm_classifications에 upsert
+  const VALID_LLM_LABELS = new Set(['genuine', 'ad', 'ai', 'unsure']);
+  const now = new Date().toISOString();
+  let classified = 0;
+
+  try {
+    for (const row of labeledRows) {
+      const res = classifyResultMap.get(row.review_id);
+      if (!res) continue;
+      const llmLabel = VALID_LLM_LABELS.has(res.llm_label) ? res.llm_label : 'unsure';
+      const reason = typeof res.reason === 'string' ? res.reason.slice(0, 200) : null;
+
+      await env.DB.prepare(`
+        INSERT INTO review_llm_classifications (review_id, model, llm_label, reason, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(review_id, model) DO UPDATE SET
+          llm_label  = excluded.llm_label,
+          reason     = excluded.reason,
+          created_at = excluded.created_at
+      `).bind(row.review_id, resolvedModel, llmLabel, reason, now).run();
+
+      classified++;
+    }
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  const costUsd = computeCostUsd(resolvedModel, totalPromptTokens, totalCompletionTokens);
+
+  return jsonResponse({
+    ok: true,
+    classified,
+    model: resolvedModel,
+    // 결과는 잠정(단일 평가자 대비) — IAA 검증 전
+    note: '잠정(단일 평가자 대비) — IAA 검증 전',
+    usage: { prompt_tokens: totalPromptTokens, completion_tokens: totalCompletionTokens },
+    cost_usd: costUsd,
+  }, 200, cors);
 }
 
 /**
