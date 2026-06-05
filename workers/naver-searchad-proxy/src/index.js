@@ -3096,6 +3096,20 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
     '너무나','좀더','더욱','매번','항상','자주','가끔','이미','벌써','항상','절대','역시',
   ]);
 
+  // 일반 칭찬어·필러 — 어느 가게든 쓸 수 있는 흔한 어휘. fact pool에서 제거.
+  // 가게 고유 시술명·메뉴명·사람 이름처럼 구체적인 단어는 여기에 없으므로 통과된다.
+  const GENERIC_FILLER = new Set([
+    '친절','깔끔','청결','만족','추천','최고','정성','꼼꼼','편안','훌륭','완벽','탁월','감동',
+    '좋아요','좋았','좋습니다','좋네요','굿','좋아','좋은','좋고','좋게',
+    '상담','원장','원장님','직원','선생님','실장님','선생','담당','담당자',
+    '시설','분위기','가격','효과','깨끗','방문','예약','진료','병원','의원',
+    '여기','이곳','시술','관리','받았','받고','받아','받은','관리받','받았어요',
+    '서비스','이용','가봤','다녀','다녀왔','왔어요','갔어요','했어요','했습니다',
+    '강추','극추','마음에','마음에들','만족스','만족했','재방문','또왔','또방문',
+    '추천합니다','추천해요','강력추천','항상','계속','앞으로','다음에','또올게요',
+    '처음','오늘','저번','지난','이번에',
+  ]);
+
   const wordFreq = new Map();
   for (const row of bodyRows) {
     if (!row.body) continue;
@@ -3105,6 +3119,7 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
       if (word.length < 2) continue;
       if (/^\d+$/.test(word)) continue;
       if (STOPWORDS.has(word)) continue;
+      if (GENERIC_FILLER.has(word)) continue;
       wordFreq.set(word, (wordFreq.get(word) ?? 0) + 1);
     }
   }
@@ -3134,7 +3149,7 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: userPrompt },
       ],
-      temperature: 0.9,
+      temperature: 0.8,
       max_completion_tokens: maxTokens,
     };
 
@@ -3183,7 +3198,7 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: userPrompt },
       ],
-      temperature: 0.9,
+      temperature: 0.8,
       max_completion_tokens: maxTokens,
     };
 
@@ -3256,7 +3271,7 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
         },
       ],
       tool_choice: { type: 'tool', name: 'emit_samples' },
-      temperature: 0.9,
+      temperature: 0.8,
     };
 
     async function fetchOnceAnthropic() {
@@ -4880,183 +4895,127 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
-  // few-shot 표본 선정: 최신순 절반 + 랜덤 분산 절반 → 호평 편향 완화
-  // AI/광고 추정 리뷰 배제 (ai_suspect >= 60 또는 human_label = 'ad' 제외)
-  let fewShotReviews;
+  // ── 씨앗(seed) 풀: 사람이 쓴 것으로 검증된 리뷰를 변형 뼈대로 선택 ──
+  // 우선순위: (a) human_label='human' → (b) ai_suspect IS NULL 또는 < 40, ad 아님 → (c) length>=15 전체
+  let seedReviews;
   try {
-    const halfSize  = Math.ceil(SAMPLE_FEW_SHOT_SIZE / 2);
-    const otherHalf = SAMPLE_FEW_SHOT_SIZE - halfSize;
-
-    // 정제 쿼리 (AI/광고 추정 배제)
-    // length >= 12: 짧고 자연스러운 실제 리뷰(실측 29%)가 few-shot에 포함되도록 완화
-    // ("굿", "좋아요" 같은 2~11자 극초단문은 여전히 제외)
-    const { results: recentRows } = await env.DB.prepare(`
+    // (a) 사람 라벨 확정 리뷰
+    const { results: humanRows } = await env.DB.prepare(`
       SELECT r.body
       FROM place_reviews r
-      LEFT JOIN place_review_analysis a ON a.review_id = r.id
-      LEFT JOIN place_review_labels   l ON l.review_id = r.id
+      LEFT JOIN place_review_labels l ON l.review_id = r.id
       WHERE r.place_row_id = ?
         AND r.body IS NOT NULL
-        AND length(r.body) >= 12
-        AND COALESCE(l.human_label, '') != 'ad'
-        AND (a.ai_suspect IS NULL OR a.ai_suspect < 60)
-      ORDER BY r.review_date DESC
-      LIMIT ?
-    `).bind(placeRowId, halfSize).all();
-
-    // 나머지 절반: 전체 pool에서 랜덤 선택 (시점·길이 분산)
-    // RANDOM()은 SQLite에서 지원되며 Cloudflare D1에서도 동작
-    const { results: randomRows } = await env.DB.prepare(`
-      SELECT r.body
-      FROM place_reviews r
-      LEFT JOIN place_review_analysis a ON a.review_id = r.id
-      LEFT JOIN place_review_labels   l ON l.review_id = r.id
-      WHERE r.place_row_id = ?
-        AND r.body IS NOT NULL
-        AND length(r.body) >= 12
-        AND COALESCE(l.human_label, '') != 'ad'
-        AND (a.ai_suspect IS NULL OR a.ai_suspect < 60)
+        AND length(r.body) >= 15
+        AND l.human_label = 'human'
       ORDER BY RANDOM()
       LIMIT ?
-    `).bind(placeRowId, otherHalf).all();
+    `).bind(placeRowId, count * 3).all();
 
-    // 중복 제거 (랜덤 절반에서 최신절반이 이미 포함된 경우)
-    const seenBodies = new Set((recentRows ?? []).map(r => r.body));
-    const uniqueRandom = (randomRows ?? []).filter(r => !seenBodies.has(r.body));
+    seedReviews = humanRows ?? [];
 
-    fewShotReviews = [...(recentRows ?? []), ...uniqueRandom];
-
-    // fallback: 정제 쿼리 결과가 0건이면 기존 방식(length >= 12만)으로 재조회
-    // 미분석 지점(분석 결과 없음)에서 예시 생성이 깨지지 않도록 안전장치
-    if (fewShotReviews.length === 0) {
-      const { results: fallbackRecent } = await env.DB.prepare(`
-        SELECT body
-        FROM place_reviews
-        WHERE place_row_id = ?
-          AND body IS NOT NULL
-          AND length(body) >= 12
-        ORDER BY review_date DESC
-        LIMIT ?
-      `).bind(placeRowId, halfSize).all();
-
-      const { results: fallbackRandom } = await env.DB.prepare(`
-        SELECT body
-        FROM place_reviews
-        WHERE place_row_id = ?
-          AND body IS NOT NULL
-          AND length(body) >= 12
+    // (b) 분석 결과상 낮은 의심도 리뷰로 보충
+    if (seedReviews.length < count) {
+      const needed = count * 3 - seedReviews.length;
+      const seenA = new Set(seedReviews.map(r => r.body));
+      const { results: cleanRows } = await env.DB.prepare(`
+        SELECT r.body
+        FROM place_reviews r
+        LEFT JOIN place_review_analysis a ON a.review_id = r.id
+        LEFT JOIN place_review_labels   l ON l.review_id = r.id
+        WHERE r.place_row_id = ?
+          AND r.body IS NOT NULL
+          AND length(r.body) >= 15
+          AND COALESCE(l.human_label, '') != 'ad'
+          AND COALESCE(l.human_label, '') != 'human'
+          AND (a.ai_suspect IS NULL OR a.ai_suspect < 40)
         ORDER BY RANDOM()
         LIMIT ?
-      `).bind(placeRowId, otherHalf).all();
+      `).bind(placeRowId, needed).all();
+      seedReviews = [...seedReviews, ...(cleanRows ?? []).filter(r => !seenA.has(r.body))];
+    }
 
-      const fallbackSeen = new Set((fallbackRecent ?? []).map(r => r.body));
-      const fallbackUniqueRandom = (fallbackRandom ?? []).filter(r => !fallbackSeen.has(r.body));
-      fewShotReviews = [...(fallbackRecent ?? []), ...fallbackUniqueRandom];
+    // (c) fallback: 그래도 부족하면 length>=15 아무거나
+    if (seedReviews.length < count) {
+      const needed = count * 2 - seedReviews.length;
+      const seenB = new Set(seedReviews.map(r => r.body));
+      const { results: anyRows } = await env.DB.prepare(`
+        SELECT body
+        FROM place_reviews
+        WHERE place_row_id = ?
+          AND body IS NOT NULL
+          AND length(body) >= 15
+        ORDER BY RANDOM()
+        LIMIT ?
+      `).bind(placeRowId, needed).all();
+      seedReviews = [...seedReviews, ...(anyRows ?? []).filter(r => !seenB.has(r.body))];
     }
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
-  if (fewShotReviews.length === 0) {
+  if (seedReviews.length === 0) {
     return jsonResponse(
-      { error: 'no_sample', message: '분석할 12자 이상 리뷰가 없습니다' },
+      { error: 'no_sample', message: '변형에 쓸 15자 이상 리뷰가 없습니다' },
       400,
       cors
     );
   }
 
+  // 씨앗 배열을 count 개 순환 할당 (다양성 위해 셔플)
+  const shuffledSeeds = [...seedReviews].sort(() => Math.random() - 0.5);
+
   // 스타일 조합 생성
   const styleAssignments = buildStyleAssignments(count, includeLong);
 
-  // 공용 프롬프트 구성
-  const styleLine = (s, i) =>
-    `${i + 1}번: length=${s.length} / tone=${s.tone} / focus=${s.focus}`;
-
-  const systemPrompt = `너는 실제 방문자가 직접 쓴 것 같은 한국어 리뷰를 생성한다. 광고스럽거나 AI가 쓴 티가 나면 실패다. 연구용 합성 데이터이며 관리자 전용이다.
+  // ── 변형 기반 프롬프트 구성 ──
+  const systemPrompt = `너는 진짜 사람이 쓴 한국어 리뷰를 받아, 그 사람의 말투·길이·문장 호흡·오타·미완결을 그대로 유지한 채 '사실(시술명·메뉴·구체 경험)'만 바꿔 새 리뷰를 만든다.
 
 [절대 금지]
-- 본문에 업체 이름·지점명을 절대 쓰지 마라. 실제 방문자는 자기 리뷰에 가게 풀네임을 안 쓴다. 지칭이 필요하면 "여기", "이곳", "이 병원", "이 집" 정도만 사용.
-- "친절했습니다", "꼼꼼하게", "안심이 됐습니다", "만족스러웠습니다" 같은 추상 칭찬만 나열 금지. 반드시 아래 fact pool의 구체 항목 1~2개를 자연스럽게 녹여라.
-- 광고체·홍보체 문장("강력 추천!", "최고의 선택!") 금지.
-- 별점·평점 언급 금지(네이버 별점 폐지됨).
-- 모든 예시가 동일한 구조나 문장 패턴으로 시작/끝나지 않게 다양하게.
-- 장점을 줄줄이 나열하지 마라. 한두 가지 경험·한 장면에만 집중해서 풀어써라. 실제 사람은 인상 깊었던 한두 가지만 말하지, 모든 걸 평가하지 않는다.
-  나쁜 예(AI 티): "깨끗하고 친절하고 상담도 잘해주고 시설도 좋았어요" (장점 나열)
-  좋은 예(사람): "상담받을 때 부담 안 주셔서 좋았어요" (한 가지 집중)
-- "전체적으로 만족", "추천합니다", "또 가고 싶어요" 같은 정리·총평 문장으로 끝맺지 마라. 실제 리뷰는 결론 없이 끝나기도 한다.
-- "정말", "너무", "완벽", "최고" 같은 과장 형용사와 "~해서 좋았어요"의 반복 패턴을 피하라.
+- 원본보다 더 매끄럽게·길게·완결되게 다듬지 마라.
+- "추천합니다", "또 가고 싶어요", "전체적으로 만족" 같은 총평·결론 붙이지 마라.
+- 업체명·지점명을 쓰지 마라.
+- [검증된 사실] 목록에 없는 시술명·메뉴명·이름을 지어내지 마라.
+- 격식체("~습니다", "~됩니다") 금지 — 원본이 구어체면 구어체 유지.
+- 원본과 내용이 충분히 달라야 한다. 단어만 살짝 바꾸거나 거의 동일한 문장은 실패다.
 
-[격식체 절대 금지 — 가장 흔한 AI 실수]
-"~습니다 / ~였습니다 / ~됩니다" 같은 격식체 종결을 절대 쓰지 마라. 실제 모바일 리뷰는 거의 다 해요체·구어체다.
-  나쁜 예(AI 티): "상담을 꼼꼼하게 해주셔서 신뢰가 갔습니다."
-  좋은 예(사람): "상담 꼼꼼하게 해주셔서 믿음 갔어요"
-
-[감정 다양성 — 호평 일색 금지]
-생성하는 묶음 전체를 호평으로만 채우지 마라. 일부는 중립적이거나 사소한 아쉬움(예: "대기가 조금 있었다", "주차가 애매하다" 등)을 자연스럽게 담아라. 단, fact pool이나 실제 리뷰 표본에 근거가 있을 때만 아쉬움을 넣을 것 — 근거 없는 가짜 불만은 금지. 전부 칭찬 일색이면 광고처럼 보여 실패다.
-
-[구체성 필수]
-fact pool(허용 소재)에 있는 구체 항목(시술명, 메뉴명, 직원 호칭, 특징어 등)을 1~2개 자연스럽게 녹여라. fact pool에 없는 메뉴·상품·시술명을 지어내지 말 것.
-
-[실제 말투 모사 — 핵심]
-아래 제공되는 실제 리뷰 예시들의 어투·문장 호흡·구어체를 모사하라. 실제 사람은:
-- 한두 가지에 집중하고 나머지는 생략한다
-- 해요체·구어체를 쓴다 ("~했어요", "~좋아요", "~더라구요", "~인 것 같아요", "~거 같음", "~해주세요")
-- 가끔 짧게 끊거나 말이 완결되지 않기도 한다
-- 문장이 너무 매끄럽지 않고 날것이다
-
-[너무 완벽하게 쓰지 마라 — 정갈함의 역설]
-아래 참고로 주는 실제 리뷰들을 봐라. 띄어쓰기도 가끔 틀리고, 문장이 매끄럽지 않고, 끝이 안 정리된 채 끊기기도 한다. 너도 그렇게 써라:
-- 모든 문장을 완결하지 마라. 주어를 생략하거나 중간에 툭 끊겨도 된다.
-- 띄어쓰기·맞춤법이 완벽할 필요 없다. 모바일로 가볍게 흘려 쓴 느낌.
-- 접속사로 매끄럽게 잇지 말고, 그냥 나열하듯 이어 써도 된다.
-너무 정갈하고 매끄러우면 그게 바로 AI 티다.
-
-[이모지·기호 — 거의 쓰지 마라]
-대부분의 리뷰엔 이모지·기호를 넣지 마라. 정말 감정이 격할 때(아주 만족했거나 아쉬웠을 때)만 드물게 ㅋㅋ, ㅎㅎ, ! 정도가 나올 수 있다. 담백한 만족 문장 끝에 ㅋㅋ나 !를 장식처럼 붙이지 마라 — 그게 가장 AI 같다. 예를 들어 "피부톤이 밝아졌어요 ㅋㅋ"나 "밝아졌어요!"처럼 차분한 만족에 기호를 붙이면 어색하다.
-
-[길이 엄수]
-- short: 1문장, ~30자. 딱 한 마디. 더 길게 쓰지 마라.
-- medium: 1~2문장, 30~70자 정도. 핵심 + 짧은 부연 (끝을 정리 안 해도 됨).
-
-[불완전성 허용]
-끝을 정리하지 않고 끝나도 된다. 모든 문장이 완결될 필요 없다. 실제 리뷰는 결론 없이 뚝 끊기기도 한다.
-
-[focus 정의 — 지정된 focus 측면을 중심으로 작성]
-- outcome: 핵심 경험·결과. 식당=음식 맛, 병원=시술 결과·효과, 카페=음료·디저트
-- service: 직원 응대·상담·친절
-- space: 시설·청결·분위기·인테리어
-- price: 가격·가성비·이벤트·혜택
-- revisit: 재방문 의사·주변 추천
-
-[업종 맥락 유지]
-업종(business_type) 맥락을 지킬 것. 병원 리뷰에 음식 맛 언급, 식당 리뷰에 시술 언급 같은 소재 혼입 금지.
+[허용]
+- 상황·기분·군말 같은 '사람 냄새' 표현은 원본 느낌을 살려 자유롭게 유지.
+- [검증된 사실] 목록 안의 항목(시술명·메뉴명·특징어)은 자유롭게 사용.
+- 목록이 비어 있으면 사실을 교체하지 말고 원본 말투·구조만 살짝 변형해서 새 리뷰 생성.
 
 [출력 형식]
-반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }
-표본 리뷰와 완전히 동일한 문장 복사 금지. 소재·톤·맥락은 참고 가능.`;
+반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }`;
 
   const factPoolText = factPool.length > 0
-    ? `[허용 소재(fact pool) — 본문에 자연스럽게 녹일 수 있는 실제 소재 목록]\n${factPool.join(', ')}`
-    : '[허용 소재(fact pool)]\n(리뷰 본문 없음 — 업종 일반 상식 범위 내에서만 작성)';
+    ? `[검증된 사실 — 시술명·메뉴·특징어. 이 목록 안에서만 사실을 교체할 것]\n${factPool.join(', ')}`
+    : '[검증된 사실: 없음 — 사실 교체 없이 말투·구조만 변형할 것]';
 
-  const fewShotText = fewShotReviews.length > 0
-    ? `[실제 리뷰 예시 — 어투·문장 호흡·구어체 참고용. 문장 그대로 복사 금지]\n${fewShotReviews.map((r, i) => `(${i + 1}) ${r.body}`).join('\n')}`
-    : '[실제 리뷰 예시: 없음]';
+  // 리뷰별 씨앗 1개 + 바꿔 넣을 사실 1~2개 지정
+  const itemLines = styleAssignments.map((style, i) => {
+    const seed = shuffledSeeds[i % shuffledSeeds.length];
+    // 씨앗에 없는 fact를 우선 골라서 교체 소재로 제공
+    const seedText = seed.body;
+    const unusedFacts = factPool.filter(f => !seedText.includes(f));
+    const pickedFacts = unusedFacts.length >= 2
+      ? [unusedFacts[Math.floor(Math.random() * unusedFacts.length)], unusedFacts[Math.floor(Math.random() * unusedFacts.length)]]
+      : unusedFacts.length === 1
+        ? [unusedFacts[0]]
+        : factPool.slice(0, 2);  // fallback
+    const factsStr = pickedFacts.length > 0 ? pickedFacts.join(', ') : '(없음 — 말투만 변형)';
+    return `[${i + 1}] 원본 리뷰: "${seedText}" / 바꿀 사실: ${factsStr} → 이 사람 말투·길이 그대로, 사실만 바꿔 새 리뷰 1개`;
+  }).join('\n\n');
 
-  const stylesText = styleAssignments.map(styleLine).join('\n');
-
-  const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 직접 쓰지 말 것]
+  const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 쓰지 말 것]
 업체명: ${placeRow.name ?? ''}
 업종: ${placeRow.business_type || '미분류'}
 
 ${factPoolText}
 
-${fewShotText}
+[변형 요청 목록 — 각 원본의 말투·길이 유지, 사실만 교체]
+${itemLines}
 
-[생성할 리뷰 목록]
-${stylesText}
-
-위 ${styleAssignments.length}개 리뷰를 생성해서 JSON으로 응답하시오.`;
+위 ${styleAssignments.length}개 리뷰를 변형해서 JSON으로 응답하시오.`;
 
   // LLM 호출 (provider 분기)
   let gptSamples;
