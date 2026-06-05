@@ -3072,6 +3072,82 @@ const SAMPLE_FACT_POOL_SIZE = 25;
  */
 const STAFF_NAME_RATE = 0.3;
 
+// ── 모드붕괴 방지 상수 ─────────────────────────────────────────────────────────
+/** lengthParam 지정 시 본보기 풀이 이 수보다 작으면 인접 길이→전체로 확장 */
+const MIN_EXEMPLAR_POOL = 8;
+/** 이 Jaccard 유사도를 초과하는 샘플 쌍을 '붕괴'로 간주 */
+const SIMILARITY_THRESHOLD = 0.55;
+/** 붕괴 샘플 재생성 최대 패스 수 */
+const MAX_REGEN_PASSES = 1;
+
+/**
+ * 텍스트를 정규화한다 (공백·문장부호·이모티콘 제거, 소문자화).
+ * 유사도 비교용 전처리에 사용.
+ * @param {string} text
+ * @returns {string}
+ */
+function normalizeForSimilarity(text) {
+  return text
+    .replace(/[\s.,!?;:·""''()\[\]{}<>/\\|@#$%^&*+=~`\-—–…♡♥ㅋㅎ^.~]+/gu, '')
+    .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{FE0F}\u{1F000}-\u{1FFFF}]/gu, '')
+    .toLowerCase();
+}
+
+/**
+ * 문자 trigram 집합을 반환한다.
+ * @param {string} s 정규화된 문자열
+ * @returns {Set<string>}
+ */
+function trigramSet(s) {
+  const set = new Set();
+  for (let i = 0; i + 3 <= s.length; i++) {
+    set.add(s.slice(i, i + 3));
+  }
+  return set;
+}
+
+/**
+ * 문자 trigram Jaccard 유사도 계산 (0~1).
+ * 문자열이 너무 짧으면(trigram 없음) 0 반환.
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function trigramJaccard(a, b) {
+  const na = normalizeForSimilarity(a);
+  const nb = normalizeForSimilarity(b);
+  const sa = trigramSet(na);
+  const sb = trigramSet(nb);
+  if (sa.size === 0 && sb.size === 0) return 1; // 둘 다 빈 문자열 → 동일
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let intersection = 0;
+  for (const t of sa) {
+    if (sb.has(t)) intersection++;
+  }
+  const union = sa.size + sb.size - intersection;
+  return intersection / union;
+}
+
+/**
+ * 배치 내 붕괴 샘플 인덱스를 반환한다.
+ * 앞서 등장한 샘플과 유사도 > threshold 인 것을 '붕괴'로 표시.
+ * @param {string[]} bodies 본문 배열
+ * @param {number} threshold
+ * @returns {Set<number>} 붕괴 샘플의 인덱스 집합
+ */
+function detectCollapsedSamples(bodies, threshold) {
+  const collapsed = new Set();
+  for (let i = 1; i < bodies.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (trigramJaccard(bodies[i], bodies[j]) > threshold) {
+        collapsed.add(i);
+        break; // i는 붕괴 확정, 더 비교 불필요
+      }
+    }
+  }
+  return collapsed;
+}
+
 /**
  * count 개의 스타일 조합을 실측 길이 분포 가중치로 분산 생성.
  * length 축:
@@ -5212,19 +5288,46 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     );
   }
 
-  // ── length 파라미터에 따른 본보기 필터 ──────────────────────────────────
-  // 'auto': 자연 분포 / 그 외: 해당 구간 본보기 우선 필터링
+  // ── (a-1) length 파라미터에 따른 본보기 필터 + 풀 자동 확장 ────────────────
+  // 'auto': 자연 분포 / 그 외: 해당 구간 본보기 우선 필터링.
+  // 필터 후 풀이 MIN_EXEMPLAR_POOL 미만이면 인접 길이 → 전체로 단계적 확장.
+  // 목표: 한 본보기가 배치를 지배하는 씨앗 독점 차단.
   const LENGTH_CHAR_RANGES = { short: [0, 29], medium: [30, 80], long: [81, Infinity] };
   let filteredExamples = styleExamples;
   if (lengthParam !== 'auto') {
     const [lo, hi] = LENGTH_CHAR_RANGES[lengthParam];
     const rangeFiltered = styleExamples.filter(r => r.body.length >= lo && r.body.length <= hi);
-    // 해당 구간 본보기가 없으면 전체 풀로 폴백
-    filteredExamples = rangeFiltered.length > 0 ? rangeFiltered : styleExamples;
+    if (rangeFiltered.length >= MIN_EXEMPLAR_POOL) {
+      filteredExamples = rangeFiltered;
+    } else if (rangeFiltered.length > 0) {
+      // 인접 길이까지 확장: 대상 길이 ±1단계 포함
+      const LENGTH_ORDER = ['short', 'medium', 'long'];
+      const targetIdx = LENGTH_ORDER.indexOf(lengthParam);
+      const adjacentKeys = LENGTH_ORDER.filter((_, i) => Math.abs(i - targetIdx) <= 1);
+      const adjFiltered = styleExamples.filter(r => {
+        return adjacentKeys.some(k => {
+          const [al, ah] = LENGTH_CHAR_RANGES[k];
+          return r.body.length >= al && r.body.length <= ah;
+        });
+      });
+      filteredExamples = adjFiltered.length >= MIN_EXEMPLAR_POOL ? adjFiltered : styleExamples;
+    } else {
+      // 해당 길이 본보기 전혀 없으면 전체 풀 사용
+      filteredExamples = styleExamples;
+    }
   }
 
-  // 스타일 본보기 배열을 셔플해서 각 샘플마다 서로 다른 본보기 1개 배정
+  // ── (a-2) 배치 내 distinct 본보기 배정 ──────────────────────────────────────
+  // 풀≥count: modulo 재사용 없이 distinct 배정 (피셔-예이츠 셔플 후 순서대로).
+  // 풀<count: 어쩔 수 없이 모듈로 재사용. facts로 차별화.
   const shuffledExamples = [...filteredExamples].sort(() => Math.random() - 0.5);
+  // 각 샘플 i에 배정할 본보기: 풀이 충분하면 distinct, 아니면 modulo.
+  function getExemplarForIdx(i) {
+    if (shuffledExamples.length >= count) {
+      return shuffledExamples[i]; // distinct
+    }
+    return shuffledExamples[i % shuffledExamples.length]; // modulo 재사용
+  }
 
   // 스타일 조합은 길이 배정 목적으로만 생성 (tone/focus는 n/a 처리)
   // lengthParam이 'auto'가 아니면 해당 길이로 모든 styleAssignment.length를 고정
@@ -5232,6 +5335,9 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   if (lengthParam !== 'auto') {
     styleAssignments.forEach(a => { a.length = lengthParam; });
   }
+
+  // length 힌트 문자열 (프롬프트 각 항목에 삽입 — 출력 길이 목표 유지용)
+  const LENGTH_HINTS = { short: '짧게 한 줄(~30자)', medium: '중간 길이(30~80자)', long: '장문(80~150자)' };
 
   // ── 변형 기반 프롬프트 구성 (가드레일 2개 포함) ──
   const systemPrompt = `너는 한국어 리뷰 작성 보조 도구다. 아래 규칙을 엄격히 따른다.
@@ -5270,9 +5376,10 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     ? `[허용 사실 — 시술명·메뉴·담당자명·특징어. 이 목록 안에서만 구체적 사실을 사용할 것]\n${factPool.join(', ')}`
     : '[허용 사실: 없음 — 구체적 사실을 새로 지어내지 말 것]';
 
-  // ── 담당자명 희소 배정 ──
+  // ── (a-3) 담당자명 희소 배정 + 주 fact 중복 방지 ──────────────────────────
   // factPool을 담당자명(staffNames)과 그 외 사실(otherFacts)로 분리.
   // 담당자명은 전체 샘플의 STAFF_NAME_RATE(≈30%)에만, 이름마다 최대 1회 배정.
+  // otherFacts는 샘플 간 주 fact(첫 번째로 배정되는 fact)를 공유하지 않도록 강제.
   const STAFF_NAME_RE = /(실장님|원장님|선생님|쌤|대표님|상담실장)$/;
   const staffNames = factPool.filter(f => STAFF_NAME_RE.test(f));
   const otherFacts = factPool.filter(f => !STAFF_NAME_RE.test(f));
@@ -5293,38 +5400,73 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   // otherFacts 배정용: 샘플 간 겹침 최소화
   const shuffledOtherFacts = [...otherFacts].sort(() => Math.random() - 0.5);
   const assignedFactSet = new Set(); // 배치 내 이미 배정된 fact 추적
+  const assignedPrimaryFacts = new Set(); // 주 fact(첫 번째 배정 fact) 중복 방지
 
   let namedCount = 0; // 이름 배정 카운터
 
-  const itemLines = styleAssignments.map((style, i) => {
-    const example = shuffledExamples[i % shuffledExamples.length];
-    const exampleText = example.body;
-
-    // otherFacts 중 이 본보기에 없고, 아직 배정 안 된 것 우선
+  /**
+   * 샘플 i에 대한 itemLine 문자열을 생성하는 내부 헬퍼.
+   * @param {number} i 샘플 인덱스 (0-based)
+   * @param {object} style styleAssignments[i]
+   * @param {string} exampleText 본보기 본문
+   * @param {string|null} conflictHint 재생성 시 충돌 본문 힌트 (null이면 최초 생성)
+   * @param {boolean} resetAssigned 재생성 시 assigned 추적 무시 여부
+   */
+  function buildItemLine(i, style, exampleText, conflictHint = null, resetAssigned = false) {
+    // otherFacts 중 이 본보기에 없고, 주 fact 중복 아닌 것 우선
     const notInExample = shuffledOtherFacts.filter(f => !exampleText.includes(f));
-    const freshOther = notInExample.filter(f => !assignedFactSet.has(f));
+    const freshOther = notInExample.filter(f =>
+      !assignedFactSet.has(f) && !assignedPrimaryFacts.has(f)
+    );
+    const usedButNotPrimary = notInExample.filter(f =>
+      assignedFactSet.has(f) && !assignedPrimaryFacts.has(f)
+    );
     const fallbackOther = notInExample.filter(f => assignedFactSet.has(f));
-    const candidateOther = [...freshOther, ...fallbackOther];
+    // 주 fact 선택 우선순위: 완전히 새 것 > 이미 쓰였지만 주 fact는 아닌 것 > 전체 폴백
+    const primaryCandidates = [...freshOther, ...usedButNotPrimary, ...fallbackOther];
 
     let pickedFacts;
     if (nameSampleIdx.has(i) && namedCount < shuffledStaffNames.length) {
       // named 샘플: 이름 1개 + otherFacts 1개(있으면)
       const assignedName = shuffledStaffNames[namedCount++];
-      const otherPick = candidateOther.slice(0, 1);
-      pickedFacts = [assignedName, ...otherPick];
+      const primaryPick = primaryCandidates.slice(0, 1);
+      pickedFacts = [assignedName, ...primaryPick];
+      if (primaryPick.length > 0) assignedPrimaryFacts.add(primaryPick[0]);
     } else {
       // 일반 샘플: otherFacts 1~2개(이름 없음)
-      const pickCount = Math.min(2, Math.max(1, candidateOther.length));
-      pickedFacts = candidateOther.slice(0, pickCount);
+      const primaryPick = primaryCandidates.slice(0, 1);
+      const secondaryCandidates = notInExample.filter(f =>
+        !assignedFactSet.has(f) && f !== primaryPick[0]
+      );
+      const secondaryPick = secondaryCandidates.slice(0, 1);
+      pickedFacts = [...primaryPick, ...secondaryPick];
+      if (primaryPick.length > 0) assignedPrimaryFacts.add(primaryPick[0]);
     }
 
-    pickedFacts.forEach(f => assignedFactSet.add(f));
+    if (!resetAssigned) {
+      pickedFacts.forEach(f => assignedFactSet.add(f));
+    }
 
     const factsStr = pickedFacts.length > 0
       ? pickedFacts.filter(Boolean).join(', ')
       : '(없음 — 본보기 말투·구조만 살려 변형)';
 
-    return `[${i + 1}] 말투 본보기: "${exampleText}" / 이번 리뷰에 담을 사실(구체 내용만, 칭찬어 금지): ${factsStr} → 본보기 말투·길이 유지, 내용은 완전히 새로`;
+    // 길이 힌트: lengthParam 지정 시 목표 길이 명시 (본보기가 달라도 길이 목표 유지)
+    const lengthHint = (lengthParam !== 'auto' && LENGTH_HINTS[lengthParam])
+      ? ` [목표 길이: ${LENGTH_HINTS[lengthParam]}]`
+      : '';
+
+    // 재생성 시 충돌 힌트 추가
+    const conflictNote = conflictHint
+      ? ` [주의: 아래 문장들과 도입·문장구조를 반드시 다르게 써라: ${conflictHint}]`
+      : '';
+
+    return `[${i + 1}] 말투 본보기: "${exampleText}" / 이번 리뷰에 담을 사실(구체 내용만, 칭찬어 금지): ${factsStr}${lengthHint} → 본보기 말투·길이 유지, 내용은 완전히 새로${conflictNote}`;
+  }
+
+  const itemLines = styleAssignments.map((style, i) => {
+    const example = getExemplarForIdx(i);
+    return buildItemLine(i, style, example.body);
   }).join('\n\n');
 
   const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 절대 쓰지 말 것]
@@ -5339,7 +5481,7 @@ ${itemLines}
 
 위 ${styleAssignments.length}개 리뷰를 생성해서 JSON으로 응답하시오.`;
 
-  // LLM 호출 (provider 분기)
+  // LLM 호출 (provider 분기) — 1차 생성
   let gptSamples;
   let samplesUsage = { prompt_tokens: 0, completion_tokens: 0 };
   try {
@@ -5356,6 +5498,68 @@ ${itemLines}
       return jsonResponse({ error: err.code, message: err.message }, 503, cors);
     }
     return jsonResponse({ error: 'llm_error', message: err.message }, 502, cors);
+  }
+
+  // ── (b) 배치 다양성 측정 + 붕괴 샘플 1회 재생성 ────────────────────────────
+  // 1차 생성 본문 배열 추출 (index 순서 기준)
+  const orderedBodies = styleAssignments.map((_, i) => {
+    const item = gptSamples.find(s => s.index === i + 1) ?? gptSamples[i];
+    return item?.body ?? '';
+  });
+
+  // trigram Jaccard로 붕괴 감지
+  const collapsedIndices = detectCollapsedSamples(orderedBodies, SIMILARITY_THRESHOLD);
+
+  if (collapsedIndices.size > 0) {
+    // 붕괴 샘플에 대해 재생성 프롬프트 구성
+    const regenLines = [];
+    for (const ci of collapsedIndices) {
+      // 앞선 정상 샘플들 중 이 샘플과 유사한 것들 힌트로 제공
+      const conflictBodies = [];
+      for (let j = 0; j < ci; j++) {
+        if (trigramJaccard(orderedBodies[ci], orderedBodies[j]) > SIMILARITY_THRESHOLD) {
+          conflictBodies.push(`"${orderedBodies[j].slice(0, 40)}..."`);
+        }
+      }
+      const conflictHint = conflictBodies.join(' / ');
+      // 다른 본보기 선택 (풀에서 가능한 한 기존과 다른 것)
+      const altExemplarIdx = (ci + Math.floor(shuffledExamples.length / 2)) % shuffledExamples.length;
+      const altExemplar = shuffledExamples[altExemplarIdx] ?? getExemplarForIdx(ci);
+      regenLines.push(buildItemLine(ci, styleAssignments[ci], altExemplar.body, conflictHint, true));
+    }
+
+    const regenUserPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 절대 쓰지 말 것]
+업체명: ${placeRow.name ?? ''}
+업종: ${placeRow.business_type || '미분류'}
+
+${factPoolText}
+
+[재생성 요청 — 기존 생성 결과와 너무 유사해 다시 작성이 필요한 번호만]
+주의: 상투적 칭찬어(친절·꼼꼼·깔끔·가성비 등) 반복 금지. 각 후기는 서로 다른 시술·소재. 본보기가 짧으면 짧게.
+${regenLines.join('\n\n')}
+
+위 번호의 리뷰만 새로 생성해서 JSON으로 응답하시오. (응답 형식 동일: { "samples": [ { "index": 번호, "body": "..." } ] })`;
+
+    try {
+      const regenResult = await callLLMForSamples(env, provider, model, {
+        systemPrompt,
+        userPrompt: regenUserPrompt,
+        count: collapsedIndices.size,
+      });
+      // 재생성분으로 교체 (index 매칭)
+      for (const regenItem of regenResult.gptSamples) {
+        const origIdx = gptSamples.findIndex(s => s.index === regenItem.index);
+        if (origIdx !== -1) {
+          gptSamples[origIdx] = regenItem;
+        }
+      }
+      samplesUsage = {
+        prompt_tokens:     samplesUsage.prompt_tokens     + regenResult.usage.prompt_tokens,
+        completion_tokens: samplesUsage.completion_tokens + regenResult.usage.completion_tokens,
+      };
+    } catch {
+      // 재생성 실패는 best-effort — 1차 결과 그대로 사용
+    }
   }
 
   const generatedAt = new Date().toISOString();
