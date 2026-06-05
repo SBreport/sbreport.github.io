@@ -244,12 +244,20 @@ interface ReviewSample {
   created_at?: string
 }
 
+interface BatchDiversity {
+  distinct2: number
+  avgSimilarity: number
+  maxSimilarity: number
+  count: number
+}
+
 interface GenerateSamplesResponse {
   place_name: string
   provider: string
   model: string
   generated_at: string
   samples: ReviewSample[]
+  diversity?: BatchDiversity | null
 }
 
 // 리뷰 예시 생성 상태
@@ -267,6 +275,8 @@ const samplesGenerating = ref(false)
 
 // 마지막 생성 배치 provider/model 기록 (결과 헤더 표시용)
 const lastGenerationInfo = ref<{ provider: string; model: string } | null>(null)
+// 마지막 생성 배치 다양성 지표
+const lastDiversity = ref<BatchDiversity | null>(null)
 
 // 제공자 표시명 매핑
 const providerLabel: Record<string, string> = {
@@ -1235,6 +1245,7 @@ async function generateSamples(placeId: number) {
     samples.value = [...newItems, ...samples.value]
     samplesUsage.value = data.usage ?? null
     lastGenerationInfo.value = { provider: batchProvider, model: batchModel }
+    lastDiversity.value = data.diversity ?? null
     samplesStatus.value = samples.value.length > 0 ? 'done' : 'empty'
   } catch (e: unknown) {
     samplesError.value = e instanceof Error ? e.message : '알 수 없는 오류'
@@ -1468,6 +1479,7 @@ function selectPlace(place: Place) {
   checkedSampleIds.value = new Set()
   sampleDeleteLoading.value = false
   lastGenerationInfo.value = null
+  lastDiversity.value = null
   aiDiagnosis.value = null
   aiDiagnosisStatus.value = 'idle'
   aiDiagnosisError.value = null
@@ -3205,6 +3217,24 @@ onUnmounted(() => {
                   이번 생성: {{ providerLabel[lastGenerationInfo.provider] ?? lastGenerationInfo.provider }}
                   <span v-if="lastGenerationInfo.model" class="font-normal text-indigo-500 dark:text-indigo-400">{{ lastGenerationInfo.model }}</span>
                 </span>
+                <!-- 배치 다양성 지표 -->
+                <UTooltip
+                  v-if="lastDiversity"
+                  text="낮은 유사도 = 다양한 표현. 최대유사도 55% 이상이면 모드붕괴 주의."
+                  :popper="{ placement: 'top' }"
+                >
+                  <span
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium tabular-nums cursor-default whitespace-nowrap"
+                    :class="lastDiversity.maxSimilarity >= 0.55
+                      ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                      : 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300'"
+                  >
+                    <UIcon name="i-heroicons-chart-bar" class="w-3 h-3 shrink-0" />
+                    다양성 distinct-2 {{ (lastDiversity.distinct2 * 100).toFixed(0) }}%
+                    · 평균유사도 {{ (lastDiversity.avgSimilarity * 100).toFixed(0) }}%
+                    · 최대 {{ (lastDiversity.maxSimilarity * 100).toFixed(0) }}%
+                  </span>
+                </UTooltip>
                 <span v-if="samplesUsage" class="text-[10px] text-gray-400 dark:text-slate-500 tabular-nums">
                   ≈ ${{ samplesUsage.cost_usd.toFixed(4) }} (입력 {{ (samplesUsage.prompt_tokens / 1000).toFixed(1) }}k · 출력 {{ (samplesUsage.completion_tokens / 1000).toFixed(1) }}k)
                 </span>

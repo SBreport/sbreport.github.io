@@ -3172,6 +3172,54 @@ function detectCollapsedSamples(bodies, threshold) {
 }
 
 /**
+ * 최종 본문 배열의 배치 다양성 지표를 계산한다.
+ * - distinct2: 정규화된 전체 본문의 문자 bigram 중 고유 비율 (0~1, 높을수록 다양)
+ * - avgSimilarity: 모든 쌍의 trigramJaccard 평균 (0~1, 낮을수록 다양)
+ * - maxSimilarity: 모든 쌍의 trigramJaccard 최대 (0~1, 낮을수록 다양)
+ * count < 2면 null 반환.
+ * @param {string[]} bodies 최종 본문 배열
+ * @returns {{ distinct2: number, avgSimilarity: number, maxSimilarity: number, count: number } | null}
+ */
+function computeBatchDiversity(bodies) {
+  const n = bodies.length;
+  if (n < 2) return null;
+
+  // distinct-2: 전체 본문 합산의 문자 bigram 고유 비율
+  const allBigrams = [];
+  const distinctBigrams = new Set();
+  for (const body of bodies) {
+    const norm = normalizeForSimilarity(body);
+    for (let i = 0; i + 2 <= norm.length; i++) {
+      const bg = norm.slice(i, i + 2);
+      allBigrams.push(bg);
+      distinctBigrams.add(bg);
+    }
+  }
+  const distinct2 = allBigrams.length > 0 ? distinctBigrams.size / allBigrams.length : 0;
+
+  // avgSimilarity / maxSimilarity: 모든 쌍의 trigramJaccard
+  let sumSim = 0;
+  let maxSim = 0;
+  let pairCount = 0;
+  for (let i = 1; i < n; i++) {
+    for (let j = 0; j < i; j++) {
+      const sim = trigramJaccard(bodies[i], bodies[j]);
+      sumSim += sim;
+      if (sim > maxSim) maxSim = sim;
+      pairCount++;
+    }
+  }
+  const avgSimilarity = pairCount > 0 ? sumSim / pairCount : 0;
+
+  return {
+    distinct2:     Math.round(distinct2 * 1000) / 1000,
+    avgSimilarity: Math.round(avgSimilarity * 1000) / 1000,
+    maxSimilarity: Math.round(maxSim * 1000) / 1000,
+    count:         n,
+  };
+}
+
+/**
  * count 개의 스타일 조합을 실측 길이 분포 가중치로 분산 생성.
  * length 축:
  *   includeLong=false(기본): short 45% · medium 55% (long 제외)
@@ -6021,12 +6069,17 @@ ${regenLines.join('\n\n')}
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
+  // 최종 본문 배열로 배치 다양성 계산 (모드붕괴 재생성 후 확정된 본문 기준)
+  const finalBodies = samples.map(s => s.body);
+  const diversity = computeBatchDiversity(finalBodies);
+
   return jsonResponse({
     place_name:   placeRow.name ?? '',
     provider,
     model,
     generated_at: generatedAt,
     samples,
+    diversity,
     usage: {
       prompt_tokens:     samplesUsage.prompt_tokens,
       completion_tokens: samplesUsage.completion_tokens,
