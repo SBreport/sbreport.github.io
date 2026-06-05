@@ -1441,7 +1441,8 @@ function selectPlace(place: Place) {
   fetchPlaceStats(place.id)
   fetchPlaceReport(place.id)
   fetchPlaceUsage(place.id)
-  if (authStore.isResearcher) fetchSamples(place.id)
+  // tester도 예시 생성 접근 허용
+  if (authStore.isResearcher || authStore.isTester) fetchSamples(place.id)
   if (authStore.isResearcher) {
     fetchAiDiagnosis(place.id)
     fetchAiReviews(place.id)
@@ -2125,8 +2126,8 @@ onUnmounted(() => {
   -->
   <div class="h-full flex flex-col gap-3">
 
-    <!-- ── 등록 폼 (shrink-0) ──────────────────────────────────────── -->
-    <div class="shrink-0 flex flex-col gap-1.5">
+    <!-- ── 등록 폼 (shrink-0) — tester는 지점 등록 불가 ──────────────── -->
+    <div v-if="!authStore.isTester" class="shrink-0 flex flex-col gap-1.5">
       <div class="flex items-center gap-2">
         <UInput
           v-model="urlInput"
@@ -2226,31 +2227,35 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 선택 지점 전체 수집 버튼 + 삭제 버튼 -->
+        <!-- 선택 지점 전체 수집 버튼 + 삭제 버튼 — tester는 수집/삭제 숨김 -->
         <div
           v-if="checkedPlaces.length > 0"
           class="shrink-0 px-2 py-1.5 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 flex flex-col gap-1"
         >
-          <UButton
-            v-if="!multiBackfillRunning"
-            :label="`선택 지점 전체 수집 (${checkedPlaces.length})`"
-            size="xs"
-            color="primary"
-            variant="soft"
-            icon="i-heroicons-archive-box-arrow-down"
-            class="w-full"
-            @click="startMultiBackfill"
-          />
-          <UButton
-            v-else
-            label="수집 중... (멈춤)"
-            size="xs"
-            color="warning"
-            variant="soft"
-            icon="i-heroicons-pause-circle"
-            class="w-full"
-            @click="stopMultiBackfill"
-          />
+          <!-- 수집 버튼: tester 차단 -->
+          <template v-if="!authStore.isTester">
+            <UButton
+              v-if="!multiBackfillRunning"
+              :label="`선택 지점 전체 수집 (${checkedPlaces.length})`"
+              size="xs"
+              color="primary"
+              variant="soft"
+              icon="i-heroicons-archive-box-arrow-down"
+              class="w-full"
+              @click="startMultiBackfill"
+            />
+            <UButton
+              v-else
+              label="수집 중... (멈춤)"
+              size="xs"
+              color="warning"
+              variant="soft"
+              icon="i-heroicons-pause-circle"
+              class="w-full"
+              @click="stopMultiBackfill"
+            />
+          </template>
+          <!-- CSV: tester 허용 -->
           <UButton
             :label="multiCsvLoading
               ? (multiCsvProgress ? `받는 중... (지점 ${multiCsvProgress.placeIndex}/${multiCsvProgress.placeTotal})` : '받는 중...')
@@ -2264,7 +2269,9 @@ onUnmounted(() => {
             :loading="multiCsvLoading"
             @click="exportMultiCsv"
           />
+          <!-- 삭제 버튼: tester 차단 -->
           <UButton
+            v-if="!authStore.isTester"
             :label="`선택 삭제 (${checkedPlaces.length})`"
             size="xs"
             color="error"
@@ -2384,9 +2391,9 @@ onUnmounted(() => {
               <template v-else>리뷰</template>
             </span>
             <div class="flex items-center gap-2 shrink-0">
-              <!-- 지금 수집 버튼 -->
+              <!-- 지금 수집 버튼 — tester 차단 -->
               <UButton
-                v-if="selectedPlace"
+                v-if="selectedPlace && !authStore.isTester"
                 label="지금 수집"
                 size="xs"
                 color="primary"
@@ -2396,8 +2403,8 @@ onUnmounted(() => {
                 :disabled="backfillRunning"
                 @click="collectNow"
               />
-              <!-- 전체 수집(백필) 버튼 -->
-              <template v-if="selectedPlace">
+              <!-- 전체 수집(백필) 버튼 — tester 차단 -->
+              <template v-if="selectedPlace && !authStore.isTester">
                 <UButton
                   v-if="backfillStatus === 'done'"
                   label="전체 수집 완료"
@@ -2427,7 +2434,7 @@ onUnmounted(() => {
                   @click="backfillAll"
                 />
               </template>
-              <!-- CSV 다운로드 버튼 -->
+              <!-- CSV 다운로드 버튼 — tester 허용 -->
               <UButton
                 v-if="reviewsStatus === 'done' && reviewsTotal > 0"
                 :label="csvLoading ? (csvProgress ? `${csvProgress.current}/${csvProgress.total}` : '받는 중...') : 'CSV'"
@@ -2531,7 +2538,9 @@ onUnmounted(() => {
         <template v-if="selectedPlace || activeTab === 'sprint'">
 
           <!-- ── 탭 바 (shrink-0) ─────────────────────────────────── -->
+          <!-- tester: 리뷰 + 예시 생성만 표시 / researcher·admin: 전체 표시 -->
           <div class="shrink-0 flex border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-x-auto">
+            <!-- 리뷰 탭: 모두 허용 -->
             <button
               v-if="selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
@@ -2542,8 +2551,9 @@ onUnmounted(() => {
             >
               리뷰
             </button>
+            <!-- 통계 탭: tester 차단 -->
             <button
-              v-if="selectedPlace"
+              v-if="selectedPlace && !authStore.isTester"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'stats'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2552,6 +2562,7 @@ onUnmounted(() => {
             >
               통계
             </button>
+            <!-- AI 진단 탭: researcher/admin만 -->
             <button
               v-if="authStore.isResearcher && selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
@@ -2562,8 +2573,9 @@ onUnmounted(() => {
             >
               AI 진단
             </button>
+            <!-- 예시 생성 탭: researcher/admin/tester 허용 -->
             <button
-              v-if="authStore.isResearcher && selectedPlace"
+              v-if="(authStore.isResearcher || authStore.isTester) && selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'samples'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2572,8 +2584,9 @@ onUnmounted(() => {
             >
               예시 생성
             </button>
+            <!-- 수집 이력 탭: tester 차단 -->
             <button
-              v-if="selectedPlace"
+              v-if="selectedPlace && !authStore.isTester"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'collections'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2582,6 +2595,7 @@ onUnmounted(() => {
             >
               수집 이력
             </button>
+            <!-- 라벨링 스프린트 탭: researcher/admin만 -->
             <button
               v-if="authStore.isResearcher"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"

@@ -904,8 +904,8 @@ async function getUserFromDB(env, googleSub) {
   const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
   if (adminEmails.includes(row.email)) {
     row.role = 'admin';
-  } else if (row.role === 'admin' || row.role === 'researcher') {
-    // DB에 admin/researcher로 명시된 role 그대로 유지
+  } else if (row.role === 'admin' || row.role === 'researcher' || row.role === 'tester') {
+    // DB에 admin/researcher/tester로 명시된 role 그대로 유지
   } else {
     row.role = 'user';
   }
@@ -1205,6 +1205,11 @@ async function handleCreatePlace(request, env, corsHeaders) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
+  // tester는 지점 등록 불가 (읽기·예시 생성만 허용)
+  if (authResult.user.role === 'tester') {
+    return jsonResponse({ error: 'forbidden', message: '테스터는 지점 등록을 할 수 없습니다' }, 403, cors);
+  }
+
   let body;
   try {
     body = await request.json();
@@ -1303,6 +1308,7 @@ async function handleCreatePlace(request, env, corsHeaders) {
 
 /**
  * GET /api/places — 등록된 플레이스 목록 조회
+ * tester/admin은 모든 지점 반환, 그 외 자기 소유만 반환.
  */
 async function handleListPlaces(request, env, corsHeaders) {
   const cors = corsHeaders || {};
@@ -1312,13 +1318,28 @@ async function handleListPlaces(request, env, corsHeaders) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
+  const role = authResult.user.role;
+  const isUnrestricted = role === 'admin' || role === 'tester';
+
   try {
-    const { results } = await env.DB.prepare(
-      `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect
-       FROM review_places
-       WHERE user_id = ?
-       ORDER BY created_at DESC`
-    ).bind(authResult.user.id).all();
+    let results;
+    if (isUnrestricted) {
+      // tester/admin: 모든 지점 반환 (소유 필터 미적용)
+      const res = await env.DB.prepare(
+        `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect
+         FROM review_places
+         ORDER BY created_at DESC`
+      ).all();
+      results = res.results;
+    } else {
+      const res = await env.DB.prepare(
+        `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect
+         FROM review_places
+         WHERE user_id = ?
+         ORDER BY created_at DESC`
+      ).bind(authResult.user.id).all();
+      results = res.results;
+    }
 
     return jsonResponse({ places: results ?? [] }, 200, cors);
   } catch (err) {
@@ -1424,6 +1445,7 @@ async function handlePostReviews(request, env, corsHeaders, placeRowId) {
 
 /**
  * GET /api/places/:id/reviews — 리뷰 목록 열람 (페이지네이션)
+ * tester/admin은 소유 불문 전 지점 접근 가능.
  */
 async function handleGetReviews(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
@@ -1433,7 +1455,7 @@ async function handleGetReviews(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
-  // 플레이스 소유 확인
+  // 플레이스 소유 확인 (tester/admin은 소유 우회)
   let placeRow;
   try {
     placeRow = await env.DB.prepare(
@@ -1446,7 +1468,9 @@ async function handleGetReviews(request, env, corsHeaders, placeRowId) {
   if (!placeRow) {
     return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
   }
-  if (placeRow.user_id !== authResult.user.id) {
+  const role = authResult.user.role;
+  const isUnrestricted = role === 'admin' || role === 'tester';
+  if (!isUnrestricted && placeRow.user_id !== authResult.user.id) {
     return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
   }
 
@@ -2205,6 +2229,11 @@ async function handleBackfillPlace(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
+  // tester는 백필(전체 수집) 불가
+  if (authResult.user.role === 'tester') {
+    return jsonResponse({ error: 'forbidden', message: '테스터는 수집 기능을 사용할 수 없습니다' }, 403, cors);
+  }
+
   // 플레이스 소유 확인 + backfill 관련 컬럼 포함
   let placeRow;
   try {
@@ -2260,6 +2289,11 @@ async function handleCollectPlace(request, env, corsHeaders, placeRowId) {
   const authResult = await requireApprovedUser(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // tester는 수집 불가
+  if (authResult.user.role === 'tester') {
+    return jsonResponse({ error: 'forbidden', message: '테스터는 수집 기능을 사용할 수 없습니다' }, 403, cors);
   }
 
   // 플레이스 소유 확인 (handleGetReviews 와 동일 패턴)
@@ -2562,6 +2596,11 @@ async function handleDeletePlace(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
+  // tester는 삭제 불가
+  if (authResult.user.role === 'tester') {
+    return jsonResponse({ error: 'forbidden', message: '테스터는 지점 삭제를 할 수 없습니다' }, 403, cors);
+  }
+
   // 소유 확인 (handleCollectPlace 패턴과 동일)
   let placeRow;
   try {
@@ -2621,6 +2660,7 @@ async function requireAdmin(request, env) {
 }
 
 // 연구원 게이트: requireApprovedUser 통과 + user.role이 'admin' 또는 'researcher'면 통과.
+// tester는 의도적으로 제외 — tester는 requireTester 게이트를 사용.
 // 통과 시 { user } / 실패 시 { error, status, message }.
 async function requireResearcher(request, env) {
   const authResult = await requireApprovedUser(request, env);
@@ -2628,6 +2668,19 @@ async function requireResearcher(request, env) {
   const role = authResult.user.role;
   if (role !== 'admin' && role !== 'researcher') {
     return { error: 'forbidden', status: 403, message: '연구원(researcher) 이상 권한이 필요합니다' };
+  }
+  return authResult;
+}
+
+// 테스터 게이트: requireApprovedUser 통과 + user.role이 'admin', 'researcher', 'tester'면 통과.
+// 테스터는 소유권 우회가 별도 로직으로 처리됨 (isAdmin || isTester 패턴).
+// 통과 시 { user } / 실패 시 { error, status, message }.
+async function requireTester(request, env) {
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) return authResult;
+  const role = authResult.user.role;
+  if (role !== 'admin' && role !== 'researcher' && role !== 'tester') {
+    return { error: 'forbidden', status: 403, message: '테스터(tester) 이상 권한이 필요합니다' };
   }
   return authResult;
 }
@@ -2653,7 +2706,7 @@ async function handleAdminListUsers(request, env, corsHeaders) {
       ...u,
       role: adminEmails.includes(u.email)
         ? 'admin'
-        : (u.role === 'admin' || u.role === 'researcher' ? u.role : 'user'),
+        : (u.role === 'admin' || u.role === 'researcher' || u.role === 'tester' ? u.role : 'user'),
     }));
 
     return jsonResponse({ users }, 200, cors);
@@ -2791,7 +2844,7 @@ async function handleAdminSetRole(request, env, corsHeaders, targetUserId) {
   }
 
   const newRole = body?.role;
-  const ALLOWED_ROLES = ['user', 'researcher', 'admin'];
+  const ALLOWED_ROLES = ['user', 'researcher', 'admin', 'tester'];
   if (!ALLOWED_ROLES.includes(newRole)) {
     return jsonResponse(
       { error: 'invalid_role', message: `role은 ${ALLOWED_ROLES.join(' | ')} 중 하나여야 합니다` },
@@ -4861,14 +4914,15 @@ async function handleSetReviewLabel(request, env, corsHeaders, placeRowId, revie
 }
 
 /**
- * POST /api/places/:id/generate-samples  (researcher 이상)
+ * POST /api/places/:id/generate-samples  (researcher/tester 이상)
  * fact pool 추출 → few-shot 표본 선정 → 스타일 조합 → GPT 생성 → DB 저장 → 반환.
+ * tester는 소유권 우회(전 지점 접근).
  */
 async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
 
-  // researcher 이상 (admin 포함)
-  const authResult = await requireResearcher(request, env);
+  // researcher/tester 이상 (admin 포함)
+  const authResult = await requireTester(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
@@ -4919,7 +4973,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   // includeLong 파싱 (기본 false — long 길이 제외)
   const includeLong = body?.includeLong === true;
 
-  // 플레이스 소유 확인 (admin은 전체 접근, researcher는 자기 지점만)
+  // 플레이스 소유 확인 (admin/tester는 전체 접근, researcher는 자기 지점만)
   let placeRow;
   try {
     placeRow = await env.DB.prepare(
@@ -4934,7 +4988,8 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   }
 
   const isAdmin = authResult.user.role === 'admin';
-  if (!isAdmin && placeRow.user_id !== authResult.user.id) {
+  const isTester = authResult.user.role === 'tester';
+  if (!isAdmin && !isTester && placeRow.user_id !== authResult.user.id) {
     return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
   }
 
@@ -5172,19 +5227,20 @@ ${itemLines}
 }
 
 /**
- * GET /api/places/:id/samples  (researcher 이상)
+ * GET /api/places/:id/samples  (researcher/tester 이상)
  * 저장된 생성 예시 최근순 반환.
+ * tester는 소유권 우회(전 지점 접근).
  */
 async function handleGetSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
 
-  // researcher 이상 (admin 포함)
-  const authResult = await requireResearcher(request, env);
+  // researcher/tester 이상 (admin 포함)
+  const authResult = await requireTester(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
-  // 플레이스 존재 + 소유 확인 (admin은 전체, researcher는 자기 지점만)
+  // 플레이스 존재 + 소유 확인 (admin/tester는 전체, researcher는 자기 지점만)
   let placeRow;
   try {
     placeRow = await env.DB.prepare(
@@ -5200,7 +5256,8 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
 
   {
     const isAdmin = authResult.user.role === 'admin';
-    if (!isAdmin && placeRow.user_id !== authResult.user.id) {
+    const isTester = authResult.user.role === 'tester';
+    if (!isAdmin && !isTester && placeRow.user_id !== authResult.user.id) {
       return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
     }
   }
@@ -5239,13 +5296,14 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
 }
 
 /**
- * POST /api/places/:id/samples/:sampleId/status  (researcher 이상)
+ * POST /api/places/:id/samples/:sampleId/status  (researcher/tester 이상)
  * 생성 예시 평가 라벨 변경: active | kept | archived
+ * tester는 소유권 우회(전 지점 접근).
  */
 async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, sampleId) {
   const cors = corsHeaders || {};
 
-  const authResult = await requireResearcher(request, env);
+  const authResult = await requireTester(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
@@ -5263,7 +5321,7 @@ async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, s
     return jsonResponse({ error: 'invalid_status', message: 'status는 active | kept | archived 중 하나여야 합니다' }, 400, cors);
   }
 
-  // 플레이스 소유 확인 (admin은 전체, researcher는 자기 지점만)
+  // 플레이스 소유 확인 (admin/tester는 전체, researcher는 자기 지점만)
   let placeOwnerRow;
   try {
     placeOwnerRow = await env.DB.prepare(
@@ -5279,7 +5337,8 @@ async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, s
 
   {
     const isAdmin = authResult.user.role === 'admin';
-    if (!isAdmin && placeOwnerRow.user_id !== authResult.user.id) {
+    const isTester = authResult.user.role === 'tester';
+    if (!isAdmin && !isTester && placeOwnerRow.user_id !== authResult.user.id) {
       return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
     }
   }
@@ -5310,13 +5369,14 @@ async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, s
 }
 
 /**
- * POST /api/places/:id/samples/delete  (researcher 이상)
+ * POST /api/places/:id/samples/delete  (researcher/tester 이상)
  * 생성 예시 다중 삭제. body: { "ids": ["uuid1", ...] }
+ * tester는 소유권 우회(전 지점 접근).
  */
 async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
 
-  const authResult = await requireResearcher(request, env);
+  const authResult = await requireTester(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
@@ -5338,7 +5398,7 @@ async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'too_many_ids', message: '한 번에 최대 100개까지 삭제 가능합니다' }, 400, cors);
   }
 
-  // 플레이스 소유 확인 (admin은 전체, researcher는 자기 지점만)
+  // 플레이스 소유 확인 (admin/tester는 전체, researcher는 자기 지점만)
   let placeOwnerRow;
   try {
     placeOwnerRow = await env.DB.prepare(
@@ -5354,7 +5414,8 @@ async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
 
   {
     const isAdmin = authResult.user.role === 'admin';
-    if (!isAdmin && placeOwnerRow.user_id !== authResult.user.id) {
+    const isTester = authResult.user.role === 'tester';
+    if (!isAdmin && !isTester && placeOwnerRow.user_id !== authResult.user.id) {
       return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
     }
   }

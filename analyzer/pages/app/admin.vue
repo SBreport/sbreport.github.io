@@ -16,7 +16,7 @@ interface AdminUser {
   created_at: string
   last_login_at: string | null
   approved_at: string | null
-  role: 'user' | 'researcher' | 'admin'
+  role: 'user' | 'researcher' | 'admin' | 'tester'
   admin_memo: string | null
 }
 
@@ -114,7 +114,7 @@ const filteredRows = computed<MergedRow[]>(() => {
       va = (a.name || a.email).toLowerCase()
       vb = (b.name || b.email).toLowerCase()
     } else if (k === 'role') {
-      const order = { admin: 0, researcher: 1, user: 2 }
+      const order: Record<string, number> = { admin: 0, researcher: 1, tester: 2, user: 3 }
       va = order[a.role] ?? 99
       vb = order[b.role] ?? 99
     } else if (k === 'status') {
@@ -325,7 +325,7 @@ async function changeStatus(user: AdminUser, newStatus: 'approved' | 'suspended'
   }
 }
 
-async function changeRole(user: AdminUser, newRole: 'user' | 'researcher' | 'admin') {
+async function changeRole(user: AdminUser, newRole: 'user' | 'researcher' | 'admin' | 'tester') {
   if (roleLoading.value[user.id]) return
   if (newRole === user.role) return
 
@@ -355,10 +355,10 @@ async function changeRole(user: AdminUser, newRole: 'user' | 'researcher' | 'adm
       return
     }
 
-    const updated = await res.json() as { id: string; role: 'user' | 'researcher' | 'admin' }
+    const updated = await res.json() as { id: string; role: 'user' | 'researcher' | 'admin' | 'tester' }
     users.value = users.value.map(u => u.id === updated.id ? { ...u, role: updated.role } : u)
 
-    const roleLabel: Record<string, string> = { user: '일반', researcher: '연구원', admin: '관리자' }
+    const roleLabel: Record<string, string> = { user: '일반', researcher: '연구원', admin: '관리자', tester: '테스터' }
     toast.add({
       title: '역할 변경 완료',
       description: `${user.name || user.email} → ${roleLabel[updated.role] ?? updated.role}`,
@@ -649,9 +649,10 @@ onMounted(() => {
                       :value="row.role"
                       :disabled="roleLoading[row.id]"
                       class="h-7 w-full rounded border text-[11px] px-1.5 pr-5 appearance-none cursor-pointer bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-slate-300 hover:border-gray-400 dark:hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
-                      @change="(e) => changeRole(row, (e.target as HTMLSelectElement).value as 'user' | 'researcher' | 'admin')"
+                      @change="(e) => changeRole(row, (e.target as HTMLSelectElement).value as 'user' | 'researcher' | 'admin' | 'tester')"
                     >
                       <option value="user">일반</option>
+                      <option value="tester">테스터</option>
                       <option value="researcher">연구원</option>
                       <option value="admin">관리자</option>
                     </select>

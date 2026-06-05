@@ -59,6 +59,7 @@ const userInitial = computed(() => {
 })
 
 const isAdmin = computed(() => authStore.isAdmin)
+const isTester = computed(() => authStore.isTester)
 const isPending = computed(() => authStore.user?.status === 'pending')
 
 function handleLogout() {
@@ -251,6 +252,10 @@ onMounted(() => {
               v-if="isAdmin"
               class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-primary-100 text-primary-700 leading-none"
             >Admin</span>
+            <span
+              v-else-if="isTester"
+              class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-700 leading-none"
+            >테스터</span>
             <span
               v-else-if="isPending"
               class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 leading-none"
