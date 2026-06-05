@@ -1,22 +1,45 @@
-interface WorkerVersion {
+import { WORKER_BASE } from '~/composables/useWorkerBase'
+
+interface VersionInfo {
   id: string | null
   tag: string | null
   timestamp: string | null
 }
 
-export const useWorkerVersion = () => useState<WorkerVersion | null>('worker-version', () => null)
+interface DeployVersions {
+  front: VersionInfo | null
+  back: VersionInfo | null
+}
+
+export const useDeployVersions = () =>
+  useState<DeployVersions>('deploy-versions', () => ({ front: null, back: null }))
 
 /**
- * 프론트엔드 배포 버전 정보를 로컬 /api/version에서 가져옴.
- * (빌드 시 nuxt.config.ts에서 주입된 git commit hash & buildTime 반환)
+ * @deprecated useDeployVersions() を使用してください
+ * 後方互換用エイリアス — 既存コードが参照する場合に備えて残す
+ */
+export const useWorkerVersion = () => {
+  const state = useDeployVersions()
+  return computed(() => state.value.front)
+}
+
+/**
+ * 프런트(로컬 /api/version)와 백엔드(Worker /api/worker-version)를 동시에 fetch.
  */
 export async function fetchWorkerVersion() {
-  const state = useWorkerVersion()
-  try {
-    const res = await fetch('/api/version')
-    if (!res.ok) return
-    state.value = await res.json() as WorkerVersion
-  } catch {
-    state.value = null
+  const state = useDeployVersions()
+
+  const [frontRes, backRes] = await Promise.allSettled([
+    fetch('/api/version'),
+    fetch(`${WORKER_BASE}/api/worker-version`),
+  ])
+
+  state.value = {
+    front: frontRes.status === 'fulfilled' && frontRes.value.ok
+      ? (await frontRes.value.json() as VersionInfo)
+      : null,
+    back: backRes.status === 'fulfilled' && backRes.value.ok
+      ? (await backRes.value.json() as VersionInfo)
+      : null,
   }
 }

@@ -79,6 +79,10 @@ export default {
       return handleVersion(request, env, corsHeaders);
     }
 
+    if (url.pathname === '/api/worker-version' && request.method === 'GET') {
+      return handleWorkerVersion(request, env, corsHeaders);
+    }
+
     if (url.pathname === '/api/expand' && request.method === 'POST') {
       return handleApiExpand(request, env, ctx, corsHeaders);
     }
@@ -992,6 +996,18 @@ async function handleApiHistory(request, env, corsHeaders) {
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, corsHeaders);
   }
+}
+
+// --- GET /api/worker-version 핸들러 (무인증, CF 배포 메타데이터 반환) ---
+
+function handleWorkerVersion(request, env, corsHeaders) {
+  // CORS 미허용 오리진도 정보 조회 가능하도록 null corsHeaders 허용
+  const headers = corsHeaders ?? {};
+  return jsonResponse({
+    id: env.CF_VERSION_METADATA?.id ?? null,
+    tag: env.CF_VERSION_METADATA?.tag ?? null,
+    timestamp: env.CF_VERSION_METADATA?.timestamp ?? null,
+  }, 200, headers);
 }
 
 // --- GET /api/version 핸들러 ---
