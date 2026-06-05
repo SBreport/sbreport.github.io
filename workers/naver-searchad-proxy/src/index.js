@@ -2614,7 +2614,8 @@ async function handleDeletePlace(request, env, corsHeaders, placeRowId) {
   if (!placeRow) {
     return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
   }
-  if (placeRow.user_id !== authResult.user.id) {
+  const isAdmin = authResult.user.role === 'admin';
+  if (!isAdmin && placeRow.user_id !== authResult.user.id) {
     return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
   }
 
@@ -2628,8 +2629,8 @@ async function handleDeletePlace(request, env, corsHeaders, placeRowId) {
       env.DB.prepare('DELETE FROM place_insights WHERE place_row_id = ?').bind(placeRowId),
       env.DB.prepare('DELETE FROM place_generated_samples WHERE place_row_id = ?').bind(placeRowId),
       env.DB.prepare('DELETE FROM llm_usage WHERE place_row_id = ?').bind(placeRowId),
-      // user_id 조건 이중 방어 (소유 확인을 이미 했지만 파괴적 작업이므로 한 번 더)
-      env.DB.prepare('DELETE FROM review_places WHERE id = ? AND user_id = ?').bind(placeRowId, authResult.user.id),
+      // 소유자 기준 삭제 (소유 확인 통과 후). admin이 타 계정 지점도 지울 수 있게 실제 소유자 user_id 사용.
+      env.DB.prepare('DELETE FROM review_places WHERE id = ? AND user_id = ?').bind(placeRowId, placeRow.user_id),
     ]);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
