@@ -255,6 +255,7 @@ interface GenerateSamplesResponse {
 // 리뷰 예시 생성 상태
 const sampleCount = ref(10)
 const sampleProvider = ref<'openai' | 'anthropic' | 'xai'>('openai')
+const sampleModel = ref<string>('gpt-5.4-mini')
 const samples = ref<ReviewSample[]>([])
 const samplesStatus = ref<'idle' | 'loading' | 'generating' | 'empty' | 'error' | 'done'>('idle')
 const samplesError = ref<string | null>(null)
@@ -271,11 +272,22 @@ const providerLabel: Record<string, string> = {
   xai: 'Grok',
 }
 
-const PROVIDER_OPTIONS = [
-  { value: 'openai' as const, label: 'OpenAI (gpt-5.4-mini)' },
-  { value: 'anthropic' as const, label: 'Claude (haiku-4.5)' },
-  { value: 'xai' as const, label: 'Grok (grok-4.3)' },
+type ModelOption = { provider: 'openai' | 'anthropic' | 'xai'; model: string; label: string }
+const PROVIDER_OPTIONS: ModelOption[] = [
+  { provider: 'openai',    model: 'gpt-5.4-mini',            label: 'OpenAI · gpt-5.4-mini' },
+  { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', label: 'Claude · Haiku 4.5' },
+  { provider: 'anthropic', model: 'claude-sonnet-4-6',         label: 'Claude · Sonnet 4.6' },
+  { provider: 'anthropic', model: 'claude-opus-4-8',           label: 'Claude · Opus 4.8 (느림·고비용)' },
+  { provider: 'xai',       model: 'grok-4.3',                  label: 'Grok 4.3' },
 ]
+
+function onModelSelect(modelValue: string) {
+  const opt = PROVIDER_OPTIONS.find(o => o.model === modelValue)
+  if (opt) {
+    sampleModel.value = opt.model
+    sampleProvider.value = opt.provider
+  }
+}
 
 // 예시 관리 상태
 type SampleFilter = 'all' | 'kept' | 'active'
@@ -1136,7 +1148,7 @@ async function generateSamples(placeId: number) {
     const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/generate-samples`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ count: sampleCount.value, provider: sampleProvider.value }),
+      body: JSON.stringify({ count: sampleCount.value, provider: sampleProvider.value, model: sampleModel.value }),
     })
     if (!res.ok) {
       let code = ''
@@ -2829,16 +2841,17 @@ onUnmounted(() => {
                   <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 whitespace-nowrap">AI 합성·연구용</span>
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
-                  <!-- 제공자 선택 드롭다운 -->
+                  <!-- 모델 선택 드롭다운 -->
                   <select
-                    v-model="sampleProvider"
+                    :value="sampleModel"
                     class="h-7 px-2 py-0 text-xs border border-gray-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 focus:outline-none focus:border-primary-400 cursor-pointer"
                     :disabled="samplesGenerating"
+                    @change="onModelSelect(($event.target as HTMLSelectElement).value)"
                   >
                     <option
                       v-for="opt in PROVIDER_OPTIONS"
-                      :key="opt.value"
-                      :value="opt.value"
+                      :key="opt.model"
+                      :value="opt.model"
                     >{{ opt.label }}</option>
                   </select>
                   <span class="text-xs text-gray-500 dark:text-slate-400">개수</span>

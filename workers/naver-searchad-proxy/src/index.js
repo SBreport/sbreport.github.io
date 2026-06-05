@@ -4856,9 +4856,13 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: keyErrorCode, message: keyErrorMsg }, 503, cors);
   }
 
-  const model = (typeof body?.model === 'string' && body.model.trim())
-    ? body.model.trim()
-    : PROVIDER_DEFAULT_MODEL[provider];
+  // model 검증: MODEL_PRICING에 등록돼 있고 provider와 짝이 맞아야 함
+  const PROVIDER_MODEL_PREFIX = { openai: 'gpt-', anthropic: 'claude-', xai: 'grok-' };
+  const requestedModel = (typeof body?.model === 'string' && body.model.trim()) ? body.model.trim() : null;
+  const isValidModel = requestedModel
+    && MODEL_PRICING[requestedModel] !== undefined
+    && requestedModel.startsWith(PROVIDER_MODEL_PREFIX[provider]);
+  const model = isValidModel ? requestedModel : PROVIDER_DEFAULT_MODEL[provider];
 
   // count 파싱 (기본 10, clamp 1~30)
   let count = body?.count ?? 10;
@@ -5583,9 +5587,11 @@ async function handleGetReport(request, env, corsHeaders, placeRowId) {
 
 /** USD per 1M tokens. model 키로 확장 가능. */
 const MODEL_PRICING = {
-  'gpt-5.4-mini':               { input: 0.75, output: 4.50 },
-  'grok-4.3':                   { input: 1.25, output: 2.50 },
-  'claude-haiku-4-5-20251001':  { input: 1.00, output: 5.00 },
+  'gpt-5.4-mini':               { input: 0.75, output:  4.50 },
+  'grok-4.3':                   { input: 1.25, output:  2.50 },
+  'claude-haiku-4-5-20251001':  { input: 1.00, output:  5.00 },
+  'claude-sonnet-4-6':          { input: 3.00, output: 15.00 },
+  'claude-opus-4-8':            { input: 5.00, output: 25.00 },
 };
 
 /** provider별 기본 모델 */
