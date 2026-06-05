@@ -3018,13 +3018,13 @@ onUnmounted(() => {
             <!-- 탭 상단 고정 영역 (shrink-0) -->
             <div class="shrink-0 flex flex-col divide-y divide-gray-100 dark:divide-slate-700 border-b border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800">
               <!-- 타이틀 행 + 생성 컨트롤 -->
-              <div class="flex items-center justify-between gap-3 px-3 py-2">
-                <div class="flex items-center gap-1.5 min-w-0">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2">
+                <div class="flex items-center gap-1.5 shrink-0">
                   <UIcon name="i-heroicons-beaker" class="w-3.5 h-3.5 text-gray-500 dark:text-slate-400 shrink-0" />
-                  <span class="text-xs font-medium text-gray-700 dark:text-slate-300">리뷰 예시 생성</span>
+                  <span class="text-xs font-medium text-gray-700 dark:text-slate-300 whitespace-nowrap">리뷰 예시 생성</span>
                   <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 whitespace-nowrap">AI 합성·연구용</span>
                 </div>
-                <div class="flex items-center gap-2 shrink-0 flex-wrap">
+                <div class="flex items-center gap-2 flex-wrap">
                   <!-- 모델 선택 드롭다운 -->
                   <select
                     :value="sampleModel"
