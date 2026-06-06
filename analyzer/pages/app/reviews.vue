@@ -3504,6 +3504,46 @@ onUnmounted(() => {
               <!-- ── 좌측 패널 (320px 고정) ── -->
               <div class="w-[320px] shrink-0 overflow-y-auto border-r border-gray-100 dark:border-slate-700 flex flex-col gap-2 p-3">
 
+                <!-- LLM 판별기 (잠정·검증전) — 항상 표시. 사람 라벨 전체 대비 4분류 일치율 측정용 -->
+                <div class="rounded border border-amber-200 dark:border-amber-900/40 px-3 py-2 flex flex-col gap-1.5 bg-amber-50/50 dark:bg-amber-900/10">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-[11px] font-semibold text-amber-600 dark:text-amber-400 shrink-0">LLM 판별</span>
+                    <span class="text-[10px] text-gray-400 dark:text-slate-500">잠정·검증전 (사람 라벨 전체 대상)</span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <select
+                      v-model="llmClassifyModel"
+                      class="text-[11px] border border-gray-200 dark:border-slate-600 rounded px-1.5 py-0.5 bg-white dark:bg-slate-700 text-gray-700 dark:text-slate-200 flex-1 min-w-0"
+                      :disabled="llmClassifyRunning"
+                    >
+                      <option value="gpt-5.4-mini">gpt-5.4-mini (저가)</option>
+                      <option value="claude-haiku-4-5-20251001">claude-haiku (저가)</option>
+                      <option value="claude-sonnet-4-6">claude-sonnet</option>
+                      <option value="claude-opus-4-8">claude-opus</option>
+                      <option value="grok-4.3">grok-4.3</option>
+                    </select>
+                    <UButton
+                      label="실행"
+                      size="xs"
+                      color="warning"
+                      variant="solid"
+                      icon="i-heroicons-beaker"
+                      :loading="llmClassifyRunning"
+                      :disabled="llmClassifyRunning"
+                      title="사람 라벨된 리뷰를 LLM으로 4분류 — 잠정(단일 평가자 대비), IAA 검증 전"
+                      @click="runLLMClassify"
+                    />
+                  </div>
+                  <div v-if="llmClassifySummary" class="flex items-center gap-1 text-[11px] text-gray-500 dark:text-slate-400">
+                    <UIcon name="i-heroicons-check-circle" class="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    판별 {{ llmClassifySummary.classified }}건
+                    <span v-if="llmClassifySummary.cost_usd !== null"> · ${{ llmClassifySummary.cost_usd?.toFixed(4) }}</span>
+                  </div>
+                  <div v-if="llmClassifyError" class="flex items-center gap-1 text-[11px] text-red-500">
+                    <UIcon name="i-heroicons-exclamation-circle" class="w-3 h-3 shrink-0" />{{ llmClassifyError }}
+                  </div>
+                </div>
+
                 <!-- 진단 로딩 -->
                 <div v-if="aiDiagnosisStatus === 'loading'" class="flex items-center justify-center py-6">
                   <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 dark:text-slate-500 animate-spin" />
@@ -3779,46 +3819,7 @@ onUnmounted(() => {
                     </div>
                   </div>
 
-                  <!-- LLM 판별기 (잠정·검증전) — 사람 라벨 대비 4분류 일치율 측정용 -->
-                  <div class="rounded border border-amber-100 dark:border-amber-900/30 px-3 py-2 flex flex-col gap-1.5 bg-white dark:bg-slate-800">
-                    <div class="flex items-center gap-1.5">
-                      <span class="text-[10px] font-semibold text-amber-600 dark:text-amber-400 shrink-0">LLM 판별</span>
-                      <span class="text-[10px] text-gray-400 dark:text-slate-500">잠정·검증전</span>
-                    </div>
-                    <div class="flex items-center gap-1.5">
-                      <select
-                        v-model="llmClassifyModel"
-                        class="text-[11px] border border-gray-200 dark:border-slate-600 rounded px-1.5 py-0.5 bg-white dark:bg-slate-700 text-gray-700 dark:text-slate-200 flex-1 min-w-0"
-                        :disabled="llmClassifyRunning"
-                      >
-                        <option value="gpt-5.4-mini">gpt-5.4-mini (저가)</option>
-                        <option value="claude-haiku-4-5-20251001">claude-haiku (저가)</option>
-                        <option value="claude-sonnet-4-6">claude-sonnet</option>
-                        <option value="claude-opus-4-8">claude-opus</option>
-                        <option value="grok-4.3">grok-4.3</option>
-                      </select>
-                      <UButton
-                        label="실행"
-                        size="xs"
-                        color="warning"
-                        variant="outline"
-                        icon="i-heroicons-beaker"
-                        :loading="llmClassifyRunning"
-                        :disabled="llmClassifyRunning"
-                        title="사람 라벨된 리뷰를 LLM으로 4분류 — 잠정(단일 평가자 대비), IAA 검증 전"
-                        @click="runLLMClassify"
-                      />
-                    </div>
-                    <!-- 결과 피드백 -->
-                    <div v-if="llmClassifySummary" class="flex items-center gap-1 text-[11px] text-gray-500 dark:text-slate-400">
-                      <UIcon name="i-heroicons-check-circle" class="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                      판별 {{ llmClassifySummary.classified }}건
-                      <span v-if="llmClassifySummary.cost_usd !== null"> · ${{ llmClassifySummary.cost_usd?.toFixed(4) }}</span>
-                    </div>
-                    <div v-if="llmClassifyError" class="flex items-center gap-1 text-[11px] text-red-500">
-                      <UIcon name="i-heroicons-exclamation-circle" class="w-3 h-3 shrink-0" />{{ llmClassifyError }}
-                    </div>
-                  </div>
+                  <!-- (LLM 판별 섹션은 좌측 패널 상단으로 이동 — 항상 표시) -->
 
                   </template><!-- /v-if total_analyzed > 0 -->
 
