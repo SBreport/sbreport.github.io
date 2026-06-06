@@ -1135,11 +1135,16 @@ async function runLLMClassify() {
   llmClassifyRunning.value = true
   llmClassifyError.value = null
   llmClassifySummary.value = null
+  // 모델명 → provider 유도 (워커가 provider별 API 키로 분기)
+  const m = llmClassifyModel.value
+  const provider = m.startsWith('claude') ? 'anthropic'
+    : m.startsWith('grok') ? 'xai'
+    : 'openai'
   try {
     const res = await fetch(`${WORKER_BASE}/api/labels/llm-classify`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ model: llmClassifyModel.value }),
+      body: JSON.stringify({ model: m, provider }),
     })
     if (!res.ok) {
       let msg = `LLM 판별 실패 (${res.status})`
