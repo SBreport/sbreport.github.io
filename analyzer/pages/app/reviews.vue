@@ -242,6 +242,18 @@ interface ReviewSample {
   model?: string
   provider?: string  // 이번 생성 배치의 provider (openai | anthropic | xai)
   created_at?: string
+  // R2: 자연스러움 채점 (배치 추이 감시용 — 개별 합불 판단 아님)
+  naturalness?: number   // 0~100 정수
+  slop_hits?: number     // 감지된 slop n-gram 수
+  slop_top?: string[]    // 상위 slop 표현 최대 3개
+}
+
+interface NaturalnessSummary {
+  count: number
+  mean: number
+  median: number
+  min: number
+  mean_slop_hits: number
 }
 
 interface BatchDiversity {
@@ -272,6 +284,8 @@ const samplesStatus = ref<'idle' | 'loading' | 'generating' | 'empty' | 'error' 
 const samplesError = ref<string | null>(null)
 const samplesErrorCode = ref<string | null>(null)
 const samplesGenerating = ref(false)
+// R2: 배치 자연스러움 요약 (fetchSamples 응답에서)
+const naturalnessSummary = ref<NaturalnessSummary | null>(null)
 
 // 마지막 생성 배치 provider/model 기록 (결과 헤더 표시용)
 const lastGenerationInfo = ref<{ provider: string; model: string } | null>(null)
@@ -1190,8 +1204,9 @@ async function fetchSamples(placeId: number) {
       samplesStatus.value = 'error'
       return
     }
-    const data = await res.json() as { samples: ReviewSample[] }
+    const data = await res.json() as { samples: ReviewSample[]; naturalness_summary?: NaturalnessSummary | null }
     samples.value = data.samples ?? []
+    naturalnessSummary.value = data.naturalness_summary ?? null
     samplesStatus.value = samples.value.length > 0 ? 'done' : 'empty'
   } catch (e: unknown) {
     samplesError.value = e instanceof Error ? e.message : '알 수 없는 오류'
@@ -1485,6 +1500,7 @@ function selectPlace(place: Place) {
   sampleDeleteLoading.value = false
   lastGenerationInfo.value = null
   lastDiversity.value = null
+  naturalnessSummary.value = null
   aiDiagnosis.value = null
   aiDiagnosisStatus.value = 'idle'
   aiDiagnosisError.value = null
@@ -3240,6 +3256,25 @@ onUnmounted(() => {
                     · 최대 {{ (lastDiversity.maxSimilarity * 100).toFixed(0) }}%
                   </span>
                 </UTooltip>
+                <!-- R2: 배치 자연스러움 지표 (배치 평균·추이 감시용, 개별 합불 판단 아님) -->
+                <UTooltip
+                  v-if="naturalnessSummary"
+                  :text="`자연스러움 점수 — 배치 추이 감시용 지표 (잠정). 개별 합불 판단 아님.\n중간값 ${naturalnessSummary.median} · 최소 ${naturalnessSummary.min} · 평균 slop ${naturalnessSummary.mean_slop_hits}개/건`"
+                  :popper="{ placement: 'top' }"
+                >
+                  <span
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium tabular-nums cursor-default whitespace-nowrap"
+                    :class="naturalnessSummary.mean >= 95
+                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                      : naturalnessSummary.mean >= 90
+                        ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                        : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
+                  >
+                    <UIcon name="i-heroicons-beaker" class="w-3 h-3 shrink-0" />
+                    자연스러움 {{ naturalnessSummary.mean }}
+                    <span class="font-normal opacity-70">/ min {{ naturalnessSummary.min }}</span>
+                  </span>
+                </UTooltip>
                 <span v-if="samplesUsage" class="text-[10px] text-gray-400 dark:text-slate-500 tabular-nums">
                   ≈ ${{ samplesUsage.cost_usd.toFixed(4) }} (입력 {{ (samplesUsage.prompt_tokens / 1000).toFixed(1) }}k · 출력 {{ (samplesUsage.completion_tokens / 1000).toFixed(1) }}k)
                 </span>
@@ -3358,6 +3393,12 @@ onUnmounted(() => {
                           </span>
                         </span>
                       </th>
+                      <!-- 자연스러움 (잠정 지표) -->
+                      <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-16">
+                        <UTooltip text="자연스러움 점수 (잠정·배치추이용). 개별 합불 판단 아님." :popper="{ placement: 'top' }">
+                          <span class="cursor-default">자연도</span>
+                        </UTooltip>
+                      </th>
                       <!-- 액션 -->
                       <th class="px-3 border-b border-gray-200 dark:border-slate-700 w-20" />
                     </tr>
@@ -3429,6 +3470,28 @@ onUnmounted(() => {
                           v-else-if="(sample.status ?? 'active') === 'archived'"
                           class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 dark:bg-slate-700 text-[10px] text-gray-500 dark:text-slate-400"
                         >숨김</span>
+                      </td>
+                      <!-- 자연스러움 점수 (R2: 배치 추이 감시용, 개별 합불 아님) -->
+                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                        <template v-if="sample.naturalness != null">
+                          <UTooltip
+                            :text="sample.slop_hits && sample.slop_hits > 0
+                              ? `slop ${sample.slop_hits}개: ${(sample.slop_top ?? []).join(', ')}`
+                              : 'slop 없음'"
+                            :popper="{ placement: 'top' }"
+                          >
+                            <span
+                              class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium tabular-nums cursor-default"
+                              :class="sample.naturalness >= 95
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                : sample.naturalness >= 90
+                                  ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                  : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
+                            >{{ sample.naturalness }}</span>
+                          </UTooltip>
+                          <span v-if="sample.slop_hits && sample.slop_hits > 0" class="ml-1 text-[10px] text-gray-400 dark:text-slate-500 tabular-nums">s{{ sample.slop_hits }}</span>
+                        </template>
+                        <span v-else class="text-gray-300 dark:text-slate-600">—</span>
                       </td>
                       <!-- 액션 버튼 (hover) -->
                       <td class="px-3 py-1.5 whitespace-nowrap align-top">

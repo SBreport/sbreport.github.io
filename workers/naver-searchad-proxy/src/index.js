@@ -1,5 +1,9 @@
 // SBS 확장 + 차세대 키워드 분석 대시보드용 네이버 검색광고 API 프록시
 
+// R2: 자연스러움 채점기 (순수 함수 + 프로파일)
+import { scoreNaturalness } from './naturalness-score.js';
+import naturalnessProfile from './naturalness-profile.json';
+
 // 정확 매칭 + 접두사 매칭 분리: prefix 매칭만 쓰면 도메인 위조에 취약함
 // (예: https://sbreport.github.io.evil.com 이 startsWith로 통과되는 문제)
 const ALLOWED_ORIGINS = [
@@ -6154,7 +6158,41 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
-  return jsonResponse({ samples: results }, 200, cors);
+  // ── R2: 자연스러움 점수 즉석 계산 (저장/마이그 없음) ──────────────────────
+  // 배치 추이 감시용 지표. 개별 합격/불합격 판단에 쓰지 말 것.
+  const scoredSamples = results.map(s => {
+    const scored = scoreNaturalness(s.body ?? '', naturalnessProfile);
+    return {
+      ...s,
+      naturalness:  Math.round(scored.naturalness),
+      slop_hits:    scored.slop.hits.length,
+      slop_top:     scored.slop.hits.slice(0, 3).map(h => h.ngram),
+    };
+  });
+
+  // 배치 요약 (빈 목록 엣지 처리)
+  let naturalness_summary = null;
+  if (scoredSamples.length > 0) {
+    const scores = scoredSamples.map(s => s.naturalness);
+    const slopHits = scoredSamples.map(s => s.slop_hits);
+    const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const sorted = [...scores].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 === 0
+      ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+      : sorted[mid];
+    const min = sorted[0];
+    const meanSlopHits = parseFloat((slopHits.reduce((a, b) => a + b, 0) / slopHits.length).toFixed(2));
+    naturalness_summary = {
+      count:          scoredSamples.length,
+      mean:           Math.round(mean),
+      median,
+      min,
+      mean_slop_hits: meanSlopHits,
+    };
+  }
+
+  return jsonResponse({ samples: scoredSamples, naturalness_summary }, 200, cors);
 }
 
 /**
