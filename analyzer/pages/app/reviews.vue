@@ -166,6 +166,8 @@ const csvProgress = ref<{ current: number; total: number } | null>(null)
 // CSV 다운로드 (다중)
 const multiCsvLoading = ref(false)
 const multiCsvProgress = ref<{ placeIndex: number; placeTotal: number; rowCount: number } | null>(null)
+const multiSamplesCsvLoading = ref(false)
+const multiSamplesCsvProgress = ref<{ placeIndex: number; placeTotal: number; rowCount: number } | null>(null)
 
 // 삭제
 const deleteConfirmOpen = ref(false)
@@ -1914,6 +1916,80 @@ async function exportMultiCsv() {
   }
 }
 
+// 다중 지점 생성 리뷰 CSV 다운로드
+async function exportMultiSamplesCsv() {
+  if (checkedPlaces.value.length === 0 || multiSamplesCsvLoading.value) return
+
+  const targets = [...checkedPlaces.value]
+  multiSamplesCsvLoading.value = true
+  multiSamplesCsvProgress.value = { placeIndex: 0, placeTotal: targets.length, rowCount: 0 }
+
+  const allRows: string[] = []
+
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      const place = targets[i]
+      multiSamplesCsvProgress.value = { placeIndex: i + 1, placeTotal: targets.length, rowCount: allRows.length }
+
+      let placeSamples: ReviewSample[]
+      try {
+        const res = await fetch(`${WORKER_BASE}/api/places/${place.id}/samples`, {
+          headers: authHeaders(),
+        })
+        if (!res.ok) {
+          console.warn(`[exportMultiSamplesCsv] ${placeName(place)} fetch 실패: ${res.status}`)
+          continue
+        }
+        const data = await res.json() as { samples: ReviewSample[] }
+        placeSamples = data.samples ?? []
+      } catch (e: unknown) {
+        console.warn(`[exportMultiSamplesCsv] ${placeName(place)} fetch 예외:`, e)
+        continue
+      }
+
+      if (placeSamples.length === 0) continue
+
+      for (const s of placeSamples) {
+        allRows.push([
+          csvEscape(placeName(place)),
+          csvEscape(s.body),
+          csvEscape(lengthLabel[s.length] ?? s.length),
+          csvEscape(providerLabel[s.provider ?? ''] ?? s.provider ?? ''),
+          csvEscape(s.naturalness != null ? String(s.naturalness) : ''),
+          csvEscape(s.slop_hits != null ? String(s.slop_hits) : ''),
+          csvEscape((s.slop_top ?? []).join(';')),
+          csvEscape(s.created_at ? new Date(s.created_at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''),
+        ].join(','))
+      }
+    }
+
+    if (allRows.length === 0) {
+      collectToast.value = { type: 'warn', message: '생성된 리뷰가 없습니다' }
+      return
+    }
+
+    const headers = ['지점명', '본문', '길이', '모델(provider)', '자연도', 'slop수', '상위slop', '생성일']
+    const csvLines = [headers.join(','), ...allRows]
+
+    const bom = '﻿'
+    const blob = new Blob([bom + csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `generated_reviews_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e: unknown) {
+    collectToast.value = {
+      type: 'error',
+      message: `생성 리뷰 CSV 다운로드 실패: ${e instanceof Error ? e.message : '알 수 없는 오류'}`,
+    }
+  } finally {
+    multiSamplesCsvLoading.value = false
+    multiSamplesCsvProgress.value = null
+  }
+}
+
 // ─── 삭제 ────────────────────────────────────────────────────────────────────
 
 function openDeleteConfirm() {
@@ -2354,6 +2430,19 @@ onUnmounted(() => {
             :disabled="multiCsvLoading || multiBackfillRunning"
             :loading="multiCsvLoading"
             @click="exportMultiCsv"
+          />
+          <UButton
+            :label="multiSamplesCsvLoading
+              ? (multiSamplesCsvProgress ? `받는 중... (지점 ${multiSamplesCsvProgress.placeIndex}/${multiSamplesCsvProgress.placeTotal})` : '받는 중...')
+              : `생성 리뷰 CSV (${checkedPlaces.length})`"
+            size="xs"
+            color="neutral"
+            variant="outline"
+            icon="i-heroicons-document-arrow-down"
+            class="w-full"
+            :disabled="checkedPlaces.length === 0 || multiSamplesCsvLoading || multiBackfillRunning"
+            :loading="multiSamplesCsvLoading"
+            @click="exportMultiSamplesCsv"
           />
           <!-- 삭제 버튼: tester 차단 -->
           <UButton
