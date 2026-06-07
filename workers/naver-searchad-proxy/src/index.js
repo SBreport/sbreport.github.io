@@ -228,6 +228,24 @@ export default {
       return handleLLMClassify(request, env, corsHeaders);
     }
 
+    // --- 블라인드 테스트 ---
+    // POST /api/blind-test/pool    — 풀 구성 (admin)
+    // GET  /api/blind-test/items   — 아이템 목록 (공개 + 접근코드)
+    // POST /api/blind-test/ratings — 평점 제출 (공개 + 접근코드)
+    // GET  /api/blind-test/results — 집계 결과 (researcher/admin)
+    if (url.pathname === '/api/blind-test/pool' && request.method === 'POST') {
+      return handleBlindTestPool(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/blind-test/items' && request.method === 'GET') {
+      return handleBlindTestItems(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/blind-test/ratings' && request.method === 'POST') {
+      return handleBlindTestRatings(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/blind-test/results' && request.method === 'GET') {
+      return handleBlindTestResults(request, env, corsHeaders);
+    }
+
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
 
@@ -6872,6 +6890,316 @@ async function handleReviewSprintStats(request, env, corsHeaders) {
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
+}
+
+// ============================================================
+// 블라인드 테스트 (blind_test_items / blind_test_ratings)
+// ============================================================
+
+// 공개 엔드포인트용 접근코드 검증 헬퍼.
+// 반환: null(통과) | Response(에러)
+function checkBlindTestCode(code, env, corsHeaders) {
+  if (!env.BLIND_TEST_ACCESS_CODE) {
+    return jsonResponse({ error: 'not_configured' }, 503, corsHeaders);
+  }
+  if (code !== env.BLIND_TEST_ACCESS_CODE) {
+    return jsonResponse({ error: 'bad_code' }, 401, corsHeaders);
+  }
+  return null;
+}
+
+// POST /api/blind-test/pool — 평가 풀 구성 (admin 전용)
+async function handleBlindTestPool(request, env, corsHeaders) {
+  const auth = await requireAdmin(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  let body;
+  try { body = await request.json(); } catch { body = {}; }
+
+  const n_real = Number(body.n_real ?? 15);
+  const n_gen  = Number(body.n_gen  ?? 15);
+  const place_row_id = body.place_row_id ?? null;
+  const gen_since    = body.gen_since    ?? null;
+
+  // real 추출: human_label='human' 우선, 부족하면 라벨 없는 것으로 보충
+  const placeFilterReal = place_row_id ? `AND pr.place_row_id = '${place_row_id}'` : '';
+  const realRows = await env.DB.prepare(`
+    SELECT pr.id, pr.body
+    FROM place_reviews pr
+    LEFT JOIN place_review_labels prl ON prl.review_id = pr.id
+    WHERE length(pr.body) BETWEEN 15 AND 200
+      ${placeFilterReal}
+    ORDER BY CASE WHEN prl.human_label = 'human' THEN 0 ELSE 1 END, RANDOM()
+    LIMIT ?
+  `).bind(n_real).all();
+
+  // gen 추출: status 'deleted'/'hidden' 제외
+  const placeFilterGen = place_row_id ? `AND place_row_id = '${place_row_id}'` : '';
+  const genSinceFilter = gen_since ? `AND created_at > '${gen_since}'` : '';
+  const genRows = await env.DB.prepare(`
+    SELECT id, body
+    FROM place_generated_samples
+    WHERE status NOT IN ('deleted', 'hidden')
+      AND length(body) BETWEEN 15 AND 200
+      ${placeFilterGen}
+      ${genSinceFilter}
+    ORDER BY RANDOM()
+    LIMIT ?
+  `).bind(n_gen).all();
+
+  const realItems = realRows.results ?? [];
+  const genItems  = genRows.results  ?? [];
+
+  if (realItems.length === 0 && genItems.length === 0) {
+    return jsonResponse({ error: 'no_data', message: '조건에 맞는 데이터가 없습니다' }, 404, corsHeaders);
+  }
+
+  const pool = 'pool_' + crypto.randomUUID().slice(0, 8);
+  const now  = new Date().toISOString();
+
+  // 배치 INSERT
+  const stmt = env.DB.prepare(
+    `INSERT INTO blind_test_items (id, pool, source, ref_id, body, created_at, active)
+     VALUES (?, ?, ?, ?, ?, ?, 1)`
+  );
+  const batch = [
+    ...realItems.map(r => stmt.bind(crypto.randomUUID(), pool, 'real', r.id, r.body, now)),
+    ...genItems.map(r  => stmt.bind(crypto.randomUUID(), pool, 'gen',  r.id, r.body, now)),
+  ];
+  await env.DB.batch(batch);
+
+  return jsonResponse({
+    pool,
+    n_real: realItems.length,
+    n_gen:  genItems.length,
+    total:  realItems.length + genItems.length,
+  }, 200, corsHeaders);
+}
+
+// GET /api/blind-test/items?code=&pool= — 아이템 목록 (공개 + 접근코드)
+async function handleBlindTestItems(request, env, corsHeaders) {
+  const url  = new URL(request.url);
+  const code = url.searchParams.get('code') ?? '';
+  const codeErr = checkBlindTestCode(code, env, corsHeaders);
+  if (codeErr) return codeErr;
+
+  let pool = url.searchParams.get('pool') ?? '';
+
+  // pool 미지정이면 가장 최근 pool 사용
+  if (!pool) {
+    const poolRow = await env.DB.prepare(
+      `SELECT pool FROM blind_test_items ORDER BY created_at DESC LIMIT 1`
+    ).first();
+    if (!poolRow) {
+      return jsonResponse({ error: 'no_pool', message: '등록된 풀이 없습니다' }, 404, corsHeaders);
+    }
+    pool = poolRow.pool;
+  }
+
+  const rows = await env.DB.prepare(
+    `SELECT id, body FROM blind_test_items WHERE pool = ? AND active = 1`
+  ).bind(pool).all();
+
+  const items = rows.results ?? [];
+
+  // Fisher-Yates 셔플 (source 포함 금지 — id·body만)
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+
+  return jsonResponse({ pool, items }, 200, corsHeaders);
+}
+
+// POST /api/blind-test/ratings — 평점 제출 (공개 + 접근코드)
+async function handleBlindTestRatings(request, env, corsHeaders) {
+  let body;
+  try { body = await request.json(); } catch { body = {}; }
+
+  const code = body.code ?? '';
+  const codeErr = checkBlindTestCode(code, env, corsHeaders);
+  if (codeErr) return codeErr;
+
+  const nickname = (body.nickname ?? '').trim();
+  if (!nickname) {
+    return jsonResponse({ error: 'bad_request', message: 'nickname이 비어있습니다' }, 400, corsHeaders);
+  }
+
+  const ratings = Array.isArray(body.ratings) ? body.ratings : [];
+  if (ratings.length === 0) {
+    return jsonResponse({ error: 'bad_request', message: 'ratings 배열이 비어있습니다' }, 400, corsHeaders);
+  }
+
+  // 유효한 item_id 집합 조회 (존재하지 않는 항목 skip용)
+  const itemIds = ratings.map(r => r.item_id).filter(Boolean);
+  if (itemIds.length === 0) {
+    return jsonResponse({ saved: 0, skipped: ratings.length }, 200, corsHeaders);
+  }
+
+  const placeholders = itemIds.map(() => '?').join(',');
+  const existRows = await env.DB.prepare(
+    `SELECT id FROM blind_test_items WHERE id IN (${placeholders})`
+  ).bind(...itemIds).all();
+  const existSet = new Set((existRows.results ?? []).map(r => r.id));
+
+  const now  = new Date().toISOString();
+  const stmt = env.DB.prepare(
+    `INSERT OR IGNORE INTO blind_test_ratings (id, item_id, rater_label, rating, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+
+  const batch = [];
+  let skipped = 0;
+  for (const r of ratings) {
+    const rating = Number(r.rating);
+    // rating이 1~5 정수가 아니거나 item_id가 없으면 skip
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5 || !existSet.has(r.item_id)) {
+      skipped++;
+      continue;
+    }
+    batch.push(stmt.bind(
+      crypto.randomUUID(),
+      r.item_id,
+      nickname,
+      rating,
+      r.note ?? null,
+      now
+    ));
+  }
+
+  if (batch.length > 0) {
+    await env.DB.batch(batch);
+  }
+
+  return jsonResponse({ saved: batch.length, skipped }, 200, corsHeaders);
+}
+
+// GET /api/blind-test/results?pool= — 집계 결과 (researcher/admin)
+async function handleBlindTestResults(request, env, corsHeaders) {
+  const auth = await requireResearcher(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  const url  = new URL(request.url);
+  const pool = url.searchParams.get('pool') ?? '';
+
+  // source별 평점 목록 조회
+  const poolFilter = pool ? `AND bti.pool = '${pool}'` : '';
+  const rows = await env.DB.prepare(`
+    SELECT bti.source, btr.rating, btr.rater_label
+    FROM blind_test_ratings btr
+    JOIN blind_test_items bti ON bti.id = btr.item_id
+    WHERE 1=1 ${poolFilter}
+  `).all();
+
+  const allRatings = rows.results ?? [];
+
+  // source별 분리
+  const realRatings = allRatings.filter(r => r.source === 'real').map(r => r.rating);
+  const genRatings  = allRatings.filter(r => r.source === 'gen').map(r => r.rating);
+  const raters = new Set(allRatings.map(r => r.rater_label)).size;
+
+  function summarize(arr) {
+    const n = arr.length;
+    if (n === 0) return { n: 0, mean: null, dist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } };
+    const sum  = arr.reduce((a, b) => a + b, 0);
+    const mean = Math.round((sum / n) * 1000) / 1000;
+    const dist = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const v of arr) { if (dist[v] !== undefined) dist[v]++; }
+    return { n, mean, dist };
+  }
+
+  const real = summarize(realRatings);
+  const gen  = summarize(genRatings);
+  const mean_diff = (real.mean !== null && gen.mean !== null)
+    ? Math.round((real.mean - gen.mean) * 1000) / 1000
+    : null;
+
+  // Mann-Whitney U 검정 (동점 평균순위 처리, 정규근사)
+  const mw = mannWhitneyU(realRatings, genRatings);
+
+  return jsonResponse({
+    pool: pool || null,
+    real,
+    gen,
+    mean_diff,
+    raters,
+    mann_whitney: mw,
+  }, 200, corsHeaders);
+}
+
+// Mann-Whitney U 검정 (순수 JS, 동점 평균순위 처리, 타이 보정 포함)
+// 반환: { U, z, p_approx, note }
+function mannWhitneyU(x, y) {
+  const nx = x.length;
+  const ny = y.length;
+
+  if (nx === 0 || ny === 0) {
+    return { U: null, z: null, p_approx: null, note: '데이터 부족으로 계산 불가' };
+  }
+
+  // 전체 통합 후 평균 순위 부여
+  const combined = [
+    ...x.map(v => ({ v, g: 'x' })),
+    ...y.map(v => ({ v, g: 'y' })),
+  ].sort((a, b) => a.v - b.v);
+
+  const n = combined.length;
+  const rank = new Array(n);
+  let i = 0;
+  while (i < n) {
+    let j = i;
+    while (j < n && combined[j].v === combined[i].v) j++;
+    const avgRank = (i + 1 + j) / 2; // 1-indexed 평균
+    for (let k = i; k < j; k++) rank[k] = avgRank;
+    i = j;
+  }
+
+  // 그룹별 순위합
+  let Rx = 0;
+  for (let k = 0; k < n; k++) {
+    if (combined[k].g === 'x') Rx += rank[k];
+  }
+
+  const Ux = Rx - (nx * (nx + 1)) / 2;
+  const Uy = nx * ny - Ux;
+  const U  = Math.min(Ux, Uy);
+
+  // 타이 보정 variance
+  // 타이 그룹 크기 계산
+  let tieCorrection = 0;
+  let ti = 0;
+  while (ti < n) {
+    let tj = ti;
+    while (tj < n && combined[tj].v === combined[ti].v) tj++;
+    const t = tj - ti;
+    if (t > 1) tieCorrection += (t * t * t - t);
+    ti = tj;
+  }
+  const varU = (nx * ny / 12) * ((n + 1) - tieCorrection / (n * (n - 1)));
+  const muU  = (nx * ny) / 2;
+
+  let z = null;
+  let p_approx = null;
+
+  if (varU > 0) {
+    z = Math.round(((U - muU) / Math.sqrt(varU)) * 1000) / 1000;
+    // 양측 p 정규 근사: p ≈ 2 * Φ(-|z|)
+    p_approx = Math.round(2 * normalCDF(-Math.abs(z)) * 10000) / 10000;
+  }
+
+  const note = (nx < 20 || ny < 20)
+    ? '표본이 적어 p값은 참고용(정규근사 오차 큼)'
+    : '정규근사 (n≥20 기준 충족)';
+
+  return { U, z, p_approx, note };
+}
+
+// 표준정규분포 CDF 근사 (Abramowitz & Stegun, 최대오차 7.5e-8)
+function normalCDF(x) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989422820 * Math.exp(-x * x / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.7814779 + t * (-1.8212560 + t * 1.3302744))));
+  return x >= 0 ? 1 - p : p;
 }
 
 // --- 시그니처 ---
