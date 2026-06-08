@@ -91,7 +91,7 @@ interface BlindResultData {
 
 // ─── 서브탭 상태 ─────────────────────────────────────────────────────────────
 
-type AdminSubTab = 'users' | 'blind-test'
+type AdminSubTab = 'users' | 'blind-test' | 'iaa'
 const activeSubTab = ref<AdminSubTab>('users')
 
 // ─── 사용자 섹션 상태 ─────────────────────────────────────────────────────────
@@ -700,6 +700,199 @@ function switchToBlindTab() {
   }
 }
 
+// ─── IAA 타입 ────────────────────────────────────────────────────────────────
+
+interface IaaSetListItem {
+  set_id: string
+  created_at: string
+  item_count: number
+  annotator_count: number
+  label_count: number
+}
+
+interface IaaPairwise {
+  a: string
+  b: string
+  kappa: number | null
+  n: number
+}
+
+interface IaaAnnotator {
+  name: string
+  count: number
+}
+
+interface IaaResults {
+  set: string
+  n_reviews_multi: number | null
+  annotators: IaaAnnotator[]
+  fleiss_kappa: number | null
+  interpretation: string | null
+  pairwise: IaaPairwise[]
+  raw_agreement: number | null
+  class_dist: Record<string, number> | null
+  note?: string
+}
+
+// ─── IAA 상태 ────────────────────────────────────────────────────────────────
+
+// 세트 생성
+const iaaN = ref(60)
+const iaaCreateStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
+const iaaCreateError = ref<string | null>(null)
+const iaaCreateResult = ref<{ set_id: string; count: number } | null>(null)
+
+// 세트 목록
+const iaaSetsStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
+const iaaSetsError = ref<string | null>(null)
+const iaaSets = ref<IaaSetListItem[]>([])
+
+// 결과 패널
+const iaaResultStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
+const iaaResultError = ref<string | null>(null)
+const iaaResult = ref<IaaResults | null>(null)
+const iaaResultSetId = ref<string | null>(null)
+
+// ─── IAA API 함수 ─────────────────────────────────────────────────────────────
+
+async function createIaaSet() {
+  iaaCreateStatus.value = 'loading'
+  iaaCreateError.value = null
+  iaaCreateResult.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/iaa/set`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ n: iaaN.value }),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      iaaCreateError.value = msg
+      iaaCreateStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as { set_id: string; count: number }
+    iaaCreateResult.value = data
+    iaaCreateStatus.value = 'done'
+    await fetchIaaSets()
+  } catch (e: unknown) {
+    iaaCreateError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    iaaCreateStatus.value = 'error'
+  }
+}
+
+async function fetchIaaSets() {
+  iaaSetsStatus.value = 'loading'
+  iaaSetsError.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/iaa/sets`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      iaaSetsError.value = msg
+      iaaSetsStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as { sets: IaaSetListItem[] }
+    iaaSets.value = data.sets
+    iaaSetsStatus.value = 'done'
+  } catch (e: unknown) {
+    iaaSetsError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    iaaSetsStatus.value = 'error'
+  }
+}
+
+async function fetchIaaResults(setId: string) {
+  iaaResultStatus.value = 'loading'
+  iaaResultError.value = null
+  iaaResult.value = null
+  iaaResultSetId.value = setId
+  try {
+    const res = await fetch(
+      `${WORKER_BASE}/api/iaa/results?set=${encodeURIComponent(setId)}`,
+      { headers: authHeaders() }
+    )
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      iaaResultError.value = msg
+      iaaResultStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as IaaResults
+    iaaResult.value = data
+    iaaResultStatus.value = 'done'
+  } catch (e: unknown) {
+    iaaResultError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    iaaResultStatus.value = 'error'
+  }
+}
+
+// IAA κ 해석 밴드
+function kappaInterpretation(k: number | null): string {
+  if (k === null) return '—'
+  if (k < 0) return '우연보다 낮음'
+  if (k < 0.2) return 'slight(미미)'
+  if (k < 0.4) return 'fair(약간)'
+  if (k < 0.6) return 'moderate(보통)'
+  if (k < 0.8) return 'substantial(상당)'
+  return 'almost perfect(거의 완벽)'
+}
+
+function kappaColorClass(k: number | null): string {
+  if (k === null) return 'text-gray-400 dark:text-slate-500'
+  if (k >= 0.6) return 'text-emerald-600 dark:text-emerald-400'
+  if (k >= 0.4) return 'text-amber-600 dark:text-amber-400'
+  return 'text-red-500 dark:text-red-400'
+}
+
+function classDist(dist: Record<string, number> | null): Array<{ label: string; count: number; pct: number }> {
+  if (!dist) return []
+  const total = Object.values(dist).reduce((s, v) => s + v, 0)
+  const labelMap: Record<string, string> = {
+    genuine: '진짜손님',
+    ad: '사람마케팅',
+    ai: 'AI조립',
+    unsure: '모름',
+  }
+  return Object.entries(dist).map(([k, v]) => ({
+    label: labelMap[k] ?? k,
+    count: v,
+    pct: total > 0 ? Math.round((v / total) * 100) : 0,
+  }))
+}
+
+function formatIaaDate(s: string): string {
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return s
+  return d.toLocaleDateString('ko-KR', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+function switchToIaaTab() {
+  activeSubTab.value = 'iaa'
+  if (iaaSetsStatus.value === 'idle') {
+    fetchIaaSets()
+  }
+}
+
 // ─── 초기 로드 ────────────────────────────────────────────────────────────────
 
 onMounted(() => {
@@ -728,7 +921,7 @@ onMounted(() => {
         @click="loadAll"
       />
       <UButton
-        v-else
+        v-else-if="activeSubTab === 'blind-test'"
         icon="i-heroicons-arrow-path"
         size="sm"
         color="neutral"
@@ -736,6 +929,16 @@ onMounted(() => {
         :loading="blindPoolsStatus === 'loading'"
         label="새로고침"
         @click="fetchBlindPools"
+      />
+      <UButton
+        v-else
+        icon="i-heroicons-arrow-path"
+        size="sm"
+        color="neutral"
+        variant="outline"
+        :loading="iaaSetsStatus === 'loading'"
+        label="새로고침"
+        @click="fetchIaaSets"
       />
     </div>
 
@@ -758,6 +961,15 @@ onMounted(() => {
         @click="switchToBlindTab"
       >
         블라인드 평가
+      </button>
+      <button
+        class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+        :class="activeSubTab === 'iaa'
+          ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+          : 'border-transparent text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
+        @click="switchToIaaTab"
+      >
+        IAA
       </button>
     </div>
 
@@ -1364,6 +1576,260 @@ onMounted(() => {
       </div>
     </template>
     <!-- /섹션 2: 블라인드 평가 -->
+
+    <!-- ════════════════════════════════════════════════════════════════════════ -->
+    <!-- 섹션 3: IAA -->
+    <!-- ════════════════════════════════════════════════════════════════════════ -->
+    <template v-else-if="activeSubTab === 'iaa'">
+
+      <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4">
+
+        <!-- 안내 배너 -->
+        <div class="shrink-0 text-xs text-gray-500 dark:text-slate-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded px-3 py-2">
+          <span>라벨 페이지: </span>
+          <code class="font-mono text-blue-700 dark:text-blue-400">/label</code>
+          <span class="ml-2 text-gray-400 dark:text-slate-500">(접근코드는 블라인드와 동일, 별도 공유)</span>
+        </div>
+
+        <!-- ─ 세트 만들기 카드 ─ -->
+        <div class="shrink-0 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg p-4 flex flex-col gap-3">
+          <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">세트 만들기</h3>
+          <div class="flex items-end gap-3 flex-wrap">
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-gray-500 dark:text-slate-400">문항 수 (n)</label>
+              <input
+                v-model.number="iaaN"
+                type="number"
+                min="1"
+                max="500"
+                class="w-24 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+            <UButton
+              label="세트 만들기"
+              size="sm"
+              color="primary"
+              variant="solid"
+              icon="i-heroicons-squares-plus"
+              :loading="iaaCreateStatus === 'loading'"
+              :disabled="iaaCreateStatus === 'loading'"
+              @click="createIaaSet"
+            />
+          </div>
+
+          <p v-if="iaaCreateError" class="text-xs text-red-500 dark:text-red-400">{{ iaaCreateError }}</p>
+
+          <!-- 생성 성공 -->
+          <div
+            v-if="iaaCreateStatus === 'done' && iaaCreateResult"
+            class="flex items-center gap-2 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded px-3 py-2"
+          >
+            <UIcon name="i-heroicons-check-circle" class="w-4 h-4 text-green-600 dark:text-green-400 shrink-0" />
+            <div class="flex flex-col gap-0.5">
+              <span class="font-medium text-green-700 dark:text-green-300">세트 생성 완료</span>
+              <span class="font-mono text-[11px] text-green-600 dark:text-green-400">{{ iaaCreateResult.set_id }}</span>
+              <span class="text-green-600 dark:text-green-400">문항 {{ iaaCreateResult.count }}건</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ─ 세트 목록 ─ -->
+        <div class="shrink-0 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg overflow-hidden flex flex-col">
+          <div class="px-4 py-3 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">세트 목록</h3>
+            <UButton
+              icon="i-heroicons-arrow-path"
+              size="xs"
+              color="neutral"
+              variant="ghost"
+              :loading="iaaSetsStatus === 'loading'"
+              @click="fetchIaaSets"
+            />
+          </div>
+
+          <!-- Loading -->
+          <div v-if="iaaSetsStatus === 'loading' || iaaSetsStatus === 'idle'" class="flex items-center justify-center py-6">
+            <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 text-gray-400 dark:text-slate-500 animate-spin" />
+          </div>
+
+          <!-- Error -->
+          <div v-else-if="iaaSetsStatus === 'error'" class="flex flex-col items-center gap-2 py-6">
+            <p class="text-xs text-red-500 dark:text-red-400">{{ iaaSetsError }}</p>
+            <UButton label="재시도" size="xs" color="neutral" variant="outline" @click="fetchIaaSets" />
+          </div>
+
+          <!-- Empty -->
+          <div v-else-if="iaaSets.length === 0" class="flex items-center justify-center py-6">
+            <p class="text-xs text-gray-400 dark:text-slate-500">생성된 세트가 없습니다.</p>
+          </div>
+
+          <!-- 세트 표 -->
+          <div v-else class="overflow-x-auto">
+            <table class="w-full text-xs border-collapse">
+              <thead class="bg-gray-50 dark:bg-slate-900">
+                <tr class="h-7">
+                  <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700">Set ID</th>
+                  <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700">생성일</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">문항수</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">평가자</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">라벨수</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-20"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="s in iaaSets"
+                  :key="s.set_id"
+                  class="border-b border-gray-100 dark:border-slate-700 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors"
+                  :class="iaaResultSetId === s.set_id ? 'bg-blue-50/40 dark:bg-blue-900/10' : ''"
+                >
+                  <td class="px-3 py-1.5 align-middle font-mono text-[11px] text-gray-600 dark:text-slate-300 whitespace-nowrap">{{ s.set_id }}</td>
+                  <td class="px-3 py-1.5 align-middle text-gray-500 dark:text-slate-400 whitespace-nowrap">{{ formatIaaDate(s.created_at) }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ s.item_count }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ s.annotator_count }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ s.label_count }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right">
+                    <UButton
+                      label="결과보기"
+                      size="xs"
+                      color="neutral"
+                      variant="outline"
+                      :loading="iaaResultStatus === 'loading' && iaaResultSetId === s.set_id"
+                      @click="fetchIaaResults(s.set_id)"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ─ 결과 패널 ─ -->
+        <div v-if="iaaResultStatus !== 'idle'" class="shrink-0 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg p-4 flex flex-col gap-4">
+          <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">
+            IAA 결과
+            <span v-if="iaaResultSetId" class="text-[11px] font-mono font-normal text-gray-400 dark:text-slate-500 ml-2">{{ iaaResultSetId }}</span>
+          </h3>
+
+          <!-- Loading -->
+          <div v-if="iaaResultStatus === 'loading'" class="flex items-center gap-2 py-2">
+            <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 animate-spin text-gray-400 dark:text-slate-500" />
+            <span class="text-xs text-gray-400 dark:text-slate-500">불러오는 중...</span>
+          </div>
+
+          <!-- Error -->
+          <p v-else-if="iaaResultStatus === 'error'" class="text-xs text-red-500 dark:text-red-400">{{ iaaResultError }}</p>
+
+          <!-- Done -->
+          <template v-else-if="iaaResultStatus === 'done' && iaaResult">
+
+            <!-- 평가자 미달 경고 -->
+            <div
+              v-if="iaaResult.fleiss_kappa === null"
+              class="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-3 py-2"
+            >
+              평가자가 2명 이상이어야 κ를 계산할 수 있습니다.
+              현재 {{ iaaResult.annotators.length }}명이 라벨링했습니다.
+            </div>
+
+            <!-- Fleiss κ 메인 카드 -->
+            <div v-if="iaaResult.fleiss_kappa !== null" class="flex flex-col gap-2 p-4 bg-gray-50 dark:bg-slate-700/50 rounded-lg">
+              <p class="text-xs font-semibold text-gray-600 dark:text-slate-400">Fleiss κ</p>
+              <div class="flex items-baseline gap-2">
+                <span
+                  class="text-3xl font-bold tabular-nums"
+                  :class="kappaColorClass(iaaResult.fleiss_kappa)"
+                >
+                  {{ iaaResult.fleiss_kappa.toFixed(3) }}
+                </span>
+                <span class="text-xs text-gray-500 dark:text-slate-400">
+                  — {{ iaaResult.interpretation ?? kappaInterpretation(iaaResult.fleiss_kappa) }}
+                </span>
+              </div>
+              <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-gray-500 dark:text-slate-400">
+                <span>다중라벨 문항: <span class="text-gray-700 dark:text-slate-300 font-medium tabular-nums">{{ iaaResult.n_reviews_multi ?? '—' }}</span></span>
+                <span>평가자: <span class="text-gray-700 dark:text-slate-300 font-medium tabular-nums">{{ iaaResult.annotators.length }}명</span></span>
+                <span v-if="iaaResult.raw_agreement !== null">완전일치율: <span class="text-gray-700 dark:text-slate-300 font-medium tabular-nums">{{ (iaaResult.raw_agreement * 100).toFixed(1) }}%</span></span>
+              </div>
+              <p class="text-[11px] text-gray-400 dark:text-slate-500 leading-relaxed mt-1">
+                κ ≥ 0.6이면 라벨 신뢰 가능. A2의 LLM 37% 기준을 사람 한계(κ)와 비교해 평가 품질을 판단하세요.
+              </p>
+            </div>
+
+            <!-- 평가자 목록 -->
+            <div v-if="iaaResult.annotators.length > 0" class="flex flex-col gap-1.5">
+              <p class="text-xs font-semibold text-gray-600 dark:text-slate-400">평가자</p>
+              <div class="flex flex-wrap gap-2">
+                <span
+                  v-for="ann in iaaResult.annotators"
+                  :key="ann.name"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded border border-gray-200 dark:border-slate-600 text-gray-600 dark:text-slate-300 bg-gray-50 dark:bg-slate-700"
+                >
+                  {{ ann.name }}
+                  <span class="text-gray-400 dark:text-slate-500 tabular-nums">({{ ann.count }}건)</span>
+                </span>
+              </div>
+            </div>
+
+            <!-- 쌍별 Cohen κ -->
+            <div v-if="iaaResult.pairwise && iaaResult.pairwise.length > 0" class="flex flex-col gap-2">
+              <p class="text-xs font-semibold text-gray-600 dark:text-slate-400">쌍별 Cohen κ</p>
+              <div class="overflow-x-auto">
+                <table class="text-xs border-collapse">
+                  <thead>
+                    <tr class="h-6">
+                      <th class="px-3 text-left font-medium text-gray-500 dark:text-slate-400 border-b border-gray-200 dark:border-slate-700 whitespace-nowrap">평가자 쌍</th>
+                      <th class="px-3 text-right font-medium text-gray-500 dark:text-slate-400 border-b border-gray-200 dark:border-slate-700 w-14">n</th>
+                      <th class="px-3 text-right font-medium text-gray-500 dark:text-slate-400 border-b border-gray-200 dark:border-slate-700 w-16">κ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="pw in iaaResult.pairwise"
+                      :key="`${pw.a}-${pw.b}`"
+                      class="border-b border-gray-100 dark:border-slate-700 last:border-0"
+                    >
+                      <td class="px-3 py-1 align-middle text-gray-700 dark:text-slate-300 whitespace-nowrap">{{ pw.a }} – {{ pw.b }}</td>
+                      <td class="px-3 py-1 align-middle text-right tabular-nums text-gray-500 dark:text-slate-400">{{ pw.n }}</td>
+                      <td class="px-3 py-1 align-middle text-right tabular-nums font-medium" :class="kappaColorClass(pw.kappa)">
+                        {{ pw.kappa !== null ? pw.kappa.toFixed(3) : '—' }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- 클래스 분포 -->
+            <div v-if="iaaResult.class_dist && classDist(iaaResult.class_dist).length > 0" class="flex flex-col gap-2">
+              <p class="text-xs font-semibold text-gray-600 dark:text-slate-400">클래스 분포</p>
+              <div class="flex flex-col gap-1.5">
+                <div v-for="cd in classDist(iaaResult.class_dist)" :key="cd.label" class="flex items-center gap-2">
+                  <span class="text-xs text-gray-500 dark:text-slate-400 w-20 shrink-0">{{ cd.label }}</span>
+                  <div class="flex-1 h-2.5 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden">
+                    <div
+                      class="h-full bg-primary-400 rounded-full"
+                      :style="{ width: cd.pct + '%' }"
+                    />
+                  </div>
+                  <span class="text-xs tabular-nums text-gray-500 dark:text-slate-400 w-10 text-right shrink-0">
+                    {{ cd.count }} ({{ cd.pct }}%)
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 노트 -->
+            <p v-if="iaaResult.note" class="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-3 py-2">
+              {{ iaaResult.note }}
+            </p>
+
+          </template>
+        </div>
+
+      </div>
+    </template>
+    <!-- /섹션 3: IAA -->
 
   </div>
 </template>
