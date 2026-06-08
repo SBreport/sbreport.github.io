@@ -192,11 +192,11 @@ async function loadMore() {
 
 // ─── 점수 라벨 ────────────────────────────────────────────────────────────────
 const RATING_LABELS: Record<number, { short: string; desc: string }> = {
-  1: { short: '1점', desc: 'AI 같음·어색함' },
-  2: { short: '2점', desc: '어색한 부분 있음' },
-  3: { short: '3점', desc: '보통' },
-  4: { short: '4점', desc: '자연스러운 편' },
-  5: { short: '5점', desc: '자연스러움·사람 같음' },
+  1: { short: '1점', desc: '매우 AI 같음·어색함' },
+  2: { short: '2점', desc: '살짝 AI 같음·살짝 어색함' },
+  3: { short: '3점', desc: '애매 — 선택 보류' },
+  4: { short: '4점', desc: '사람 후기 같음' },
+  5: { short: '5점', desc: '매우 사람 후기 같음' },
 }
 </script>
 
