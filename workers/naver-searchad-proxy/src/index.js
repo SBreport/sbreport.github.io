@@ -229,15 +229,27 @@ export default {
     }
 
     // --- 블라인드 테스트 ---
-    // POST /api/blind-test/pool    — 풀 구성 (admin)
-    // GET  /api/blind-test/items   — 아이템 목록 (공개 + 접근코드)
-    // POST /api/blind-test/ratings — 평점 제출 (공개 + 접근코드)
-    // GET  /api/blind-test/results — 집계 결과 (researcher/admin)
+    // POST   /api/blind-test/pool          — 풀 구성 (admin)
+    // GET    /api/blind-test/pools         — 풀 목록 (researcher/admin)
+    // DELETE /api/blind-test/pools/:pool   — 풀 삭제 (admin)
+    // GET    /api/blind-test/access-code   — 접근코드 조회 (researcher/admin)
+    // GET    /api/blind-test/items         — 아이템 목록 (공개 + 접근코드)
+    // POST   /api/blind-test/ratings       — 평점 제출 (공개 + 접근코드)
+    // GET    /api/blind-test/results       — 집계 결과 (researcher/admin)
     if (url.pathname === '/api/blind-test/pool' && request.method === 'POST') {
       return handleBlindTestPool(request, env, corsHeaders);
     }
     if (url.pathname === '/api/blind-test/pools' && request.method === 'GET') {
       return handleBlindTestPools(request, env, corsHeaders);
+    }
+    {
+      const m = url.pathname.match(/^\/api\/blind-test\/pools\/([^/]+)$/);
+      if (m && request.method === 'DELETE') {
+        return handleBlindTestPoolDelete(m[1], request, env, corsHeaders);
+      }
+    }
+    if (url.pathname === '/api/blind-test/access-code' && request.method === 'GET') {
+      return handleBlindTestAccessCode(request, env, corsHeaders);
     }
     if (url.pathname === '/api/blind-test/items' && request.method === 'GET') {
       return handleBlindTestItems(request, env, corsHeaders);
@@ -7178,6 +7190,32 @@ async function handleBlindTestRatings(request, env, corsHeaders) {
 }
 
 // GET /api/blind-test/results?pool= — 집계 결과 (researcher/admin)
+async function handleBlindTestPoolDelete(pool, request, env, corsHeaders) {
+  const auth = await requireAdmin(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  // ratings 먼저 삭제 (FK 제약 고려)
+  const ratingsResult = await env.DB.prepare(
+    `DELETE FROM blind_test_ratings WHERE item_id IN (SELECT id FROM blind_test_items WHERE pool = ?)`
+  ).bind(pool).run();
+
+  const itemsResult = await env.DB.prepare(
+    `DELETE FROM blind_test_items WHERE pool = ?`
+  ).bind(pool).run();
+
+  return jsonResponse({
+    deleted_items: itemsResult.meta?.changes ?? 0,
+    deleted_ratings: ratingsResult.meta?.changes ?? 0,
+  }, 200, corsHeaders);
+}
+
+async function handleBlindTestAccessCode(request, env, corsHeaders) {
+  const auth = await requireResearcher(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  return jsonResponse({ code: env.BLIND_TEST_ACCESS_CODE ?? null }, 200, corsHeaders);
+}
+
 async function handleBlindTestResults(request, env, corsHeaders) {
   const auth = await requireResearcher(request, env);
   if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);

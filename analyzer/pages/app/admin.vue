@@ -478,6 +478,28 @@ async function saveMemo(user: AdminUser) {
 
 // ─── 블라인드 평가 상태 ───────────────────────────────────────────────────────
 
+// 접근코드
+const blindAccessCode = ref<string | null>(null)
+const blindAccessCodeCopied = ref(false)
+const rateLinkCopied = ref(false)
+
+function copyAccessCode() {
+  if (!blindAccessCode.value) return
+  copyToClipboard(
+    blindAccessCode.value,
+    () => { blindAccessCodeCopied.value = true },
+    () => { blindAccessCodeCopied.value = false },
+  )
+}
+
+function copyRateLink() {
+  copyToClipboard(
+    window.location.origin + '/rate',
+    () => { rateLinkCopied.value = true },
+    () => { rateLinkCopied.value = false },
+  )
+}
+
 // 풀 구성
 const blindNReal = ref(15)
 const blindNGen = ref(15)
@@ -489,6 +511,9 @@ const blindPoolResult = ref<BlindPoolResult | null>(null)
 const blindPoolsStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
 const blindPoolsError = ref<string | null>(null)
 const blindPools = ref<BlindPoolListItem[]>([])
+
+// 풀 삭제 중인 pool id 집합
+const blindDeletingPools = ref<Set<string>>(new Set())
 
 // 결과 패널
 const blindResultStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
@@ -562,6 +587,65 @@ async function fetchBlindPools() {
   }
 }
 
+async function fetchBlindAccessCode() {
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/blind-test/access-code`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) return
+    const data = await res.json() as { code: string | null }
+    blindAccessCode.value = data.code
+  } catch { /* 접근코드 조회 실패는 무시 */ }
+}
+
+async function deleteBlindPool(pool: string) {
+  if (blindDeletingPools.value.has(pool)) return
+  const confirmed = confirm('이 풀과 해당 풀의 평가를 모두 삭제합니다. 되돌릴 수 없습니다.')
+  if (!confirmed) return
+
+  blindDeletingPools.value = new Set([...blindDeletingPools.value, pool])
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/blind-test/pools/${encodeURIComponent(pool)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `삭제 실패 (${res.status})`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      toast.add({ title: '오류', description: msg, color: 'error' })
+      return
+    }
+    // 결과 패널이 이 풀을 보고 있었다면 초기화
+    if (blindResultPool.value === pool) {
+      blindResultStatus.value = 'idle'
+      blindResultError.value = null
+      blindResult.value = null
+      blindResultPool.value = null
+    }
+    toast.add({ title: '삭제 완료', description: `풀 "${pool}"과 해당 평가가 삭제되었습니다.`, color: 'success' })
+    await fetchBlindPools()
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '알 수 없는 오류'
+    toast.add({ title: '오류', description: msg, color: 'error' })
+  } finally {
+    const next = new Set(blindDeletingPools.value)
+    next.delete(pool)
+    blindDeletingPools.value = next
+  }
+}
+
+async function copyToClipboard(text: string, onCopied: () => void, onReset: () => void) {
+  try {
+    await navigator.clipboard.writeText(text)
+    onCopied()
+    setTimeout(onReset, 1500)
+  } catch { /* ignore */ }
+}
+
 async function fetchBlindResults(poolId: string) {
   blindResultStatus.value = 'loading'
   blindResultError.value = null
@@ -610,6 +694,9 @@ function switchToBlindTab() {
   activeSubTab.value = 'blind-test'
   if (blindPoolsStatus.value === 'idle') {
     fetchBlindPools()
+  }
+  if (blindAccessCode.value === null) {
+    fetchBlindAccessCode()
   }
 }
 
@@ -999,9 +1086,24 @@ onMounted(() => {
       <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4">
 
         <!-- 안내 배너 -->
-        <div class="shrink-0 text-xs text-gray-500 dark:text-slate-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-3 py-2">
-          평가 페이지: <code class="font-mono text-amber-700 dark:text-amber-400">/rate</code>
-          &nbsp;—&nbsp;접근코드는 연구실에 별도 공유 (코드 자체는 여기 노출되지 않습니다)
+        <div class="shrink-0 text-xs text-gray-500 dark:text-slate-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-3 py-2 flex flex-col gap-1.5">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span>평가 페이지:</span>
+            <code class="font-mono text-amber-700 dark:text-amber-400">/rate</code>
+            <button
+              class="text-[11px] px-1.5 py-0.5 border border-amber-300 dark:border-amber-700 rounded text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors"
+              @click="copyRateLink"
+            >{{ rateLinkCopied ? '복사됨' : 'URL 복사' }}</button>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <span>접근코드:</span>
+            <code class="font-mono text-amber-700 dark:text-amber-400 select-all">{{ blindAccessCode ?? '(미설정)' }}</code>
+            <button
+              v-if="blindAccessCode"
+              class="text-[11px] px-1.5 py-0.5 border border-amber-300 dark:border-amber-700 rounded text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors"
+              @click="copyAccessCode"
+            >{{ blindAccessCodeCopied ? '복사됨' : '복사' }}</button>
+          </div>
         </div>
 
         <!-- ─ 풀 만들기 카드 ─ -->
@@ -1102,7 +1204,7 @@ onMounted(() => {
                   <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">생성</th>
                   <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">평가수</th>
                   <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">평가자</th>
-                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-20"></th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-32"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1119,14 +1221,25 @@ onMounted(() => {
                   <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ p.total_ratings }}</td>
                   <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ p.raters }}</td>
                   <td class="px-3 py-1.5 align-middle text-right">
-                    <UButton
-                      label="결과보기"
-                      size="xs"
-                      color="neutral"
-                      variant="outline"
-                      :loading="blindResultStatus === 'loading' && blindResultPool === p.pool"
-                      @click="fetchBlindResults(p.pool)"
-                    />
+                    <div class="flex items-center justify-end gap-1.5">
+                      <UButton
+                        label="결과보기"
+                        size="xs"
+                        color="neutral"
+                        variant="outline"
+                        :loading="blindResultStatus === 'loading' && blindResultPool === p.pool"
+                        @click="fetchBlindResults(p.pool)"
+                      />
+                      <UButton
+                        label="삭제"
+                        size="xs"
+                        color="error"
+                        variant="outline"
+                        :loading="blindDeletingPools.has(p.pool)"
+                        :disabled="blindDeletingPools.has(p.pool)"
+                        @click="deleteBlindPool(p.pool)"
+                      />
+                    </div>
                   </td>
                 </tr>
               </tbody>
