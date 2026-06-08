@@ -5906,10 +5906,6 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
 [출력 형식]
 반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }`;
 
-  const factPoolText = factPool.length > 0
-    ? `[허용 사실 — 시술명·메뉴·담당자명·특징어. 이 목록 안에서만 구체적 사실을 사용할 것]\n${factPool.join(', ')}`
-    : '[허용 사실: 없음 — 구체적 사실을 새로 지어내지 말 것]';
-
   // ── (a-3) 담당자명 희소 배정 + 주 fact 중복 방지 ──────────────────────────
   // factPool을 담당자명(staffNames)과 그 외 사실(otherFacts)로 분리.
   // 담당자명은 전체 샘플의 STAFF_NAME_RATE(≈30%)에만, 이름마다 최대 1회 배정.
@@ -5917,6 +5913,16 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   const STAFF_NAME_RE = /(실장님|원장님|선생님|쌤|대표님|상담실장)$/;
   const staffNames = factPool.filter(f => STAFF_NAME_RE.test(f));
   const otherFacts = factPool.filter(f => !STAFF_NAME_RE.test(f));
+
+  // ★이름 제외(includeNames=false)면 전역 [허용 사실] 목록에서도 담당자명을 빼고
+  // 명시적으로 실명 금지를 지시한다. (per-item 미배정만으론 LLM이 허용목록·본보기의 이름을 갖다 씀 → 버그 수정)
+  const visibleFacts = includeNames ? factPool : otherFacts;
+  const nameOffNote = includeNames
+    ? ''
+    : '\n[담당자 이름 제외: "○○원장님"·"○○실장님" 같은 특정 실명을 쓰지 말 것. 이름 없는 generic 호칭(원장님/실장님/선생님)만 사용. 본보기에 실명이 있어도 따라 쓰지 말 것.]';
+  const factPoolText = visibleFacts.length > 0
+    ? `[허용 사실 — 시술명·메뉴·특징어${includeNames ? '·담당자명' : ''}. 이 목록 안에서만 구체적 사실을 사용할 것]\n${visibleFacts.join(', ')}${nameOffNote}`
+    : `[허용 사실: 없음 — 구체적 사실을 새로 지어내지 말 것]${nameOffNote}`;
 
   // 이름을 받을 샘플 수: includeNames=false이면 0, 아니면 있는 이름 개수와 rate 기준 수 중 작은 값
   const nameQuota = includeNames
