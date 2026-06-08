@@ -236,6 +236,9 @@ export default {
     if (url.pathname === '/api/blind-test/pool' && request.method === 'POST') {
       return handleBlindTestPool(request, env, corsHeaders);
     }
+    if (url.pathname === '/api/blind-test/pools' && request.method === 'GET') {
+      return handleBlindTestPools(request, env, corsHeaders);
+    }
     if (url.pathname === '/api/blind-test/items' && request.method === 'GET') {
       return handleBlindTestItems(request, env, corsHeaders);
     }
@@ -2949,21 +2952,18 @@ async function handleAdminResearchActivity(request, env, corsHeaders) {
 
     const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
 
-    // researcher 또는 admin 역할인 사용자만 필터
-    const researchers = (userRows ?? []).filter(u => {
-      const effectiveRole = adminEmails.includes(u.email) ? 'admin'
-        : (u.role === 'researcher' ? 'researcher' : 'user');
-      return effectiveRole === 'researcher' || effectiveRole === 'admin';
-    }).map(u => ({
+    // status='approved'인 전체 사용자를 포함 (테스터·일반 사용자도 활동·비용 표시)
+    const researchers = (userRows ?? []).map(u => ({
       user_id: u.id,
       name: u.name,
       email: u.email,
       role: adminEmails.includes(u.email) ? 'admin'
-        : (u.role === 'researcher' ? 'researcher' : 'user'),
+        : (u.role === 'researcher' ? 'researcher'
+          : (u.role === 'tester' ? 'tester' : 'user')),
     }));
 
     if (researchers.length === 0) {
-      return jsonResponse({ researchers: [] }, 200, cors);
+      return jsonResponse({ researchers: [], unattributed_cost_usd: 0 }, 200, cors);
     }
 
     // 활동 집계: 각 테이블별로 actor_user_id 기준 GROUP BY
@@ -3009,7 +3009,16 @@ async function handleAdminResearchActivity(request, env, corsHeaders) {
       total_cost_usd: usageMap.get(u.user_id)?.total_cost_usd  ?? 0,
     }));
 
-    return jsonResponse({ researchers: result }, 200, cors);
+    // 미귀속 비용: actor_user_id가 NULL이거나 users에 없는 llm_usage 행의 비용 합계
+    const unattributedRow = await env.DB.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS total
+       FROM llm_usage
+       WHERE actor_user_id IS NULL
+          OR actor_user_id NOT IN (SELECT id FROM users)`
+    ).first();
+    const unattributed_cost_usd = unattributedRow?.total ?? 0;
+
+    return jsonResponse({ researchers: result, unattributed_cost_usd }, 200, cors);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
@@ -6974,6 +6983,60 @@ async function handleBlindTestPool(request, env, corsHeaders) {
     n_gen:  genItems.length,
     total:  realItems.length + genItems.length,
   }, 200, corsHeaders);
+}
+
+// GET /api/blind-test/pools — 풀별 집계 목록 (researcher/admin)
+async function handleBlindTestPools(request, env, corsHeaders) {
+  const auth = await requireResearcher(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  try {
+    // 풀별 아이템 집계
+    const itemsRes = await env.DB.prepare(`
+      SELECT pool,
+             MIN(created_at) AS created_at,
+             SUM(CASE WHEN source = 'real' THEN 1 ELSE 0 END) AS n_real,
+             SUM(CASE WHEN source = 'gen'  THEN 1 ELSE 0 END) AS n_gen,
+             COUNT(*) AS total_items
+      FROM blind_test_items
+      GROUP BY pool
+      ORDER BY MIN(created_at) DESC
+    `).all();
+
+    const pools = itemsRes.results ?? [];
+
+    if (pools.length === 0) {
+      return jsonResponse({ pools: [] }, 200, corsHeaders);
+    }
+
+    // 풀별 평가 집계 (total_ratings, raters)
+    const ratingsRes = await env.DB.prepare(`
+      SELECT bti.pool,
+             COUNT(btr.id)              AS total_ratings,
+             COUNT(DISTINCT btr.rater_label) AS raters
+      FROM blind_test_items bti
+      LEFT JOIN blind_test_ratings btr ON btr.item_id = bti.id
+      GROUP BY bti.pool
+    `).all();
+
+    const ratingsMap = new Map(
+      (ratingsRes.results ?? []).map(r => [r.pool, { total_ratings: r.total_ratings ?? 0, raters: r.raters ?? 0 }])
+    );
+
+    const result = pools.map(p => ({
+      pool:          p.pool,
+      created_at:    p.created_at,
+      n_real:        p.n_real ?? 0,
+      n_gen:         p.n_gen  ?? 0,
+      total_items:   p.total_items ?? 0,
+      total_ratings: ratingsMap.get(p.pool)?.total_ratings ?? 0,
+      raters:        ratingsMap.get(p.pool)?.raters        ?? 0,
+    }));
+
+    return jsonResponse({ pools: result }, 200, corsHeaders);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, corsHeaders);
+  }
 }
 
 // GET /api/blind-test/items?code=&pool= — 아이템 목록 (공개 + 접근코드)
