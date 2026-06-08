@@ -5939,14 +5939,44 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   let namedCount = 0; // 이름 배정 카운터
 
   /**
+   * 환각 방지: 본보기 구체 수치 마스킹.
+   * 말투·구조는 유지하되, 가격·용량·횟수 등 검증 가능한 구체 수치를 제거해
+   * 모델이 본보기 수치를 그대로 베껴 환각 리뷰를 생성하는 것을 막는다.
+   *
+   * 제거 대상:
+   *   1. 가격: "8만원", "82,500원", "3천원" 등 (숫자 + 원/만원/천원)
+   *   2. 용량·횟수·단위: "2cc", "600샷", "3회차", "50mg", "3개월" 등
+   *   3. 독립된 큰 숫자(3자리 이상): 앞 두 패턴에서 걸러지지 않은 가격류 수치
+   *
+   * @param {string} text 원본 본보기 본문
+   * @returns {string} 수치가 제거된 본보기 본문
+   */
+  function maskExemplarSpecifics(text) {
+    let t = text;
+    // 1. 범위 가격: "2~3만원", "1~3만원" 같은 X~Y단위 패턴 (1보다 먼저 처리)
+    t = t.replace(/\d+\s*~\s*\d+\s*(원|만원|천원)/g, '');
+    // 2. 가격 (숫자 + 원/만원/천원)
+    t = t.replace(/\d[\d,]*\s*(원|만원|천원)/g, '');
+    // 3. 용량·횟수·단위 (숫자 + cc|ml|샷|바이알|mg|회차|회|%|개월|주|번)
+    t = t.replace(/\d+\s*(cc|ml|샷|바이알|mg|회차|회|%|개월|주|번)/g, '');
+    // 4. 독립된 3자리 이상 숫자 (앞 규칙에서 남은 가격류)
+    t = t.replace(/\b\d{3,}\b/g, '');
+    // 연속 공백 정리 (줄바꿈 보존)
+    t = t.replace(/[^\S\n]{2,}/g, ' ').trim();
+    return t;
+  }
+
+  /**
    * 샘플 i에 대한 itemLine 문자열을 생성하는 내부 헬퍼.
    * @param {number} i 샘플 인덱스 (0-based)
    * @param {object} style styleAssignments[i]
-   * @param {string} exampleText 본보기 본문
+   * @param {string} exampleText 본보기 본문 (마스킹 전 원본)
    * @param {string|null} conflictHint 재생성 시 충돌 본문 힌트 (null이면 최초 생성)
    * @param {boolean} resetAssigned 재생성 시 assigned 추적 무시 여부
    */
   function buildItemLine(i, style, exampleText, conflictHint = null, resetAssigned = false) {
+    // 환각 방지: 프롬프트에 넣기 전 본보기 구체 수치 마스킹
+    const maskedExample = maskExemplarSpecifics(exampleText);
     // otherFacts 중 이 본보기에 없고, 주 fact 중복 아닌 것 우선
     const notInExample = shuffledOtherFacts.filter(f => !exampleText.includes(f));
     const freshOther = notInExample.filter(f =>
@@ -5995,7 +6025,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
       ? ` [주의: 아래 문장들과 도입·문장구조를 반드시 다르게 써라: ${conflictHint}]`
       : '';
 
-    return `[${i + 1}] 말투 본보기: "${exampleText}" / 이번 리뷰에 담을 사실(구체 내용만, 칭찬어 금지): ${factsStr}${lengthHint} → 본보기 말투·길이 유지, 내용은 완전히 새로${conflictNote}`;
+    return `[${i + 1}] 말투 본보기: "${maskedExample}" / 이번 리뷰에 담을 사실(구체 내용만, 칭찬어 금지): ${factsStr}${lengthHint} → 본보기 말투·길이 유지, 내용은 완전히 새로${conflictNote}`;
   }
 
   const itemLines = styleAssignments.map((style, i) => {
