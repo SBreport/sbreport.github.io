@@ -486,6 +486,8 @@ async function saveMemo(user: AdminUser) {
 const blindAccessCode = ref<string | null>(null)
 const blindAccessCodeCopied = ref(false)
 const rateLinkCopied = ref(false)
+const labelLinkCopied = ref(false)
+const iaaAccessCodeCopied = ref(false)
 
 function copyAccessCode() {
   if (!blindAccessCode.value) return
@@ -501,6 +503,23 @@ function copyRateLink() {
     window.location.origin + '/rate',
     () => { rateLinkCopied.value = true },
     () => { rateLinkCopied.value = false },
+  )
+}
+
+function copyLabelLink() {
+  copyToClipboard(
+    window.location.origin + '/label',
+    () => { labelLinkCopied.value = true },
+    () => { labelLinkCopied.value = false },
+  )
+}
+
+function copyIaaAccessCode() {
+  if (!blindAccessCode.value) return
+  copyToClipboard(
+    blindAccessCode.value,
+    () => { iaaAccessCodeCopied.value = true },
+    () => { iaaAccessCodeCopied.value = false },
   )
 }
 
@@ -895,6 +914,9 @@ function switchToLabelingTab(inner?: LabelingTab) {
   if (inner) activeLabelingTab.value = inner
   if (activeLabelingTab.value === 'iaa' && iaaSetsStatus.value === 'idle') {
     fetchIaaSets()
+  }
+  if (activeLabelingTab.value === 'iaa' && blindAccessCode.value === null) {
+    fetchBlindAccessCode()
   }
   if (activeLabelingTab.value === 'sprint' && sprintStatsStatus.value === 'idle') {
     fetchSprintStats()
@@ -1769,7 +1791,7 @@ onMounted(() => {
           :class="activeLabelingTab === 'iaa'
             ? 'bg-white dark:bg-slate-700 text-gray-900 dark:text-slate-100 shadow-sm'
             : 'text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
-          @click="activeLabelingTab = 'iaa'; if (iaaSetsStatus === 'idle') fetchIaaSets()"
+          @click="activeLabelingTab = 'iaa'; if (iaaSetsStatus === 'idle') fetchIaaSets(); if (blindAccessCode === null) fetchBlindAccessCode()"
         >
           IAA
         </button>
@@ -2076,11 +2098,26 @@ onMounted(() => {
           <p class="text-[11px] text-gray-400 dark:text-slate-500 pl-4 mt-0.5">※ κ는 <strong>2명 이상</strong>이 같은 세트를 라벨해야 계산됨.</p>
         </div>
 
-        <!-- 안내 배너 -->
-        <div class="shrink-0 text-xs text-gray-500 dark:text-slate-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded px-3 py-2">
-          <span>라벨 페이지: </span>
-          <code class="font-mono text-blue-700 dark:text-blue-400">/label</code>
-          <span class="ml-2 text-gray-400 dark:text-slate-500">(접근코드는 블라인드와 동일, 별도 공유)</span>
+        <!-- 연구원 공유 배너 -->
+        <div class="shrink-0 text-xs text-gray-500 dark:text-slate-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded px-3 py-2 flex flex-col gap-1.5">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span>라벨링 페이지:</span>
+            <code class="font-mono text-blue-700 dark:text-blue-400">/label</code>
+            <button
+              class="text-[11px] px-1.5 py-0.5 border border-blue-300 dark:border-blue-700 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+              @click="copyLabelLink"
+            >{{ labelLinkCopied ? '복사됨' : 'URL 복사' }}</button>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <span>접근코드:</span>
+            <code class="font-mono text-blue-700 dark:text-blue-400 select-all">{{ blindAccessCode ?? '(미설정)' }}</code>
+            <button
+              v-if="blindAccessCode"
+              class="text-[11px] px-1.5 py-0.5 border border-blue-300 dark:border-blue-700 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+              @click="copyIaaAccessCode"
+            >{{ iaaAccessCodeCopied ? '복사됨' : '복사' }}</button>
+          </div>
+          <p class="text-[11px] text-gray-400 dark:text-slate-500">블라인드 평가와 같은 코드입니다 · 연구원에게 <code class="font-mono">/label</code> 주소와 코드를 공유하세요.</p>
         </div>
 
         <!-- ─ 세트 만들기 카드 ─ -->
