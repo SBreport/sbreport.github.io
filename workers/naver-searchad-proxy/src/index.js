@@ -3373,6 +3373,9 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
     '처음','오늘','저번','지난','이번에',
   ]);
 
+  // 빈도 바닥: freq ≥ 2 인 엔티티만 최종 채택 (1회짜리 노이즈 제거)
+  const STAFF_NAME_MIN_FREQ = 2;
+
   // 담당자명 엔티티 추출: "이름+(실장님|원장님|선생님|쌤|대표님|상담실장)" 패턴
   // 예: "김실장님", "박원장님", "수연쌤", "지은 상담실장"
   const STAFF_TITLE_RE = /([가-힣]{1,4})\s*(실장님|원장님|선생님|쌤|대표님|상담실장)/g;
@@ -3381,8 +3384,17 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
     '친절한','꼼꼼한','깔끔한','편안한','세심한','자세한','정확한','상냥한','능숙한','깨끗한','시원한','훌륭한',
     '친절하신','꼼꼼하신','깔끔하신','세심하신','자세하신','친절했던','꼼꼼했던',
   ]);
-  // 동사·접속어로 끝나는 namePart 오탐 차단 — "절하시고원장님" 류 근절
-  const BAD_STAFF_SUFFIX_RE = /(하시고|하셔서|하신|했던|하고|해서|한|하게|하며|하여|시고|셔서|히고)$/;
+  // 역할어·지시어 블록리스트 — namePart 자체가 역할어/지시어인 경우 제외
+  const STAFF_DESCRIPTOR = new Set([
+    '의사','여의사','남의사','간호사','관리사','피부','데스크','코디','코디네이터','인포',
+    '총괄','대표','부원장','원장','실장','선생','지점','병원','타병원','의원',
+    '상담','담당','직원','분들','여자','여성','남자','남성',
+    '우리','그분','메인','모든','모두','다른','전체','여기','이곳',
+    // 강조 부사·접속어 (이름 아님)
+    '특히','특히나','그리고','또한','바로','정말','진짜','항상','매번',
+  ]);
+  // 동사·접속어로 끝나는 namePart 오탐 차단 — 기존 항목 유지 + 다음 어미 추가
+  const BAD_STAFF_SUFFIX_RE = /(하시고|하셔서|하신|했던|하고|해서|한|하게|하며|하여|시고|셔서|히고|시는|주시는|으시는|시구|으시구|하시구|는데|어요|아요|에요|예요|으며|으신|으셔|셨|셔서|시던|주신|주셨|다는|라서|다고|길래|는지|군요|네요|더라|더라구|았|었|였|해서|했던)$/;
   // 형용사 어근 포함 오탐 차단 — "친절", "꼼꼼" 등이 namePart에 포함된 경우
   const BAD_STAFF_ADJECTIVE_RE = /친절|꼼꼼|깔끔|세심|자세|정확|상냥|편안|능숙|훌륭|깨끗/;
   const staffEntityFreq = new Map();
@@ -3398,10 +3410,14 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
       const namePart = m[1];
       // 형용사 관형형·일반어가 이름으로 잡힌 오탐 제거
       if (BAD_STAFF_NAMES.has(namePart) || GENERIC_FILLER.has(namePart) || STOPWORDS.has(namePart)) continue;
-      // 동사·접속어 어미로 끝나는 경우 ("절하시고", "도해서" 등) 제거
+      // 역할어·지시어 블록리스트 (의사/데스크/여자 등 자체가 역할어인 경우)
+      if (STAFF_DESCRIPTOR.has(namePart)) continue;
+      // 동사·접속어 어미로 끝나는 경우 ("절하시고", "주시는" 등) 제거
       if (BAD_STAFF_SUFFIX_RE.test(namePart)) continue;
       // 형용사 어근이 namePart 안에 포함된 경우 제거
       if (BAD_STAFF_ADJECTIVE_RE.test(namePart)) continue;
+      // 길이 제한: 한국 이름은 2~3자 (1자·4자 제외)
+      if (namePart.length < 2 || namePart.length > 3) continue;
       const entity = m[0].replace(/\s+/g, ''); // 공백 제거해서 정규화
       staffEntityFreq.set(entity, (staffEntityFreq.get(entity) ?? 0) + 1);
     }
@@ -3419,11 +3435,15 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
   }
 
   // 엔티티(담당자명)를 우선 배치, 나머지 슬롯을 빈도 단어로 채움
+  // freq ≥ STAFF_NAME_MIN_FREQ 인 엔티티만 채택 (1회짜리 노이즈 제거)
   const staffEntities = Array.from(staffEntityFreq.entries())
+    .filter(([, freq]) => freq >= STAFF_NAME_MIN_FREQ)
     .sort((a, b) => b[1] - a[1])
     .map(([word]) => word);
 
+  // freqWords도 freq ≥ 2 인 단어만 채택 (1회짜리 오타·노이즈 팩트 제거)
   const freqWords = Array.from(wordFreq.entries())
+    .filter(([, freq]) => freq >= 2)
     .sort((a, b) => b[1] - a[1])
     .map(([word]) => word)
     .filter(w => !staffEntities.includes(w)); // 중복 제거
