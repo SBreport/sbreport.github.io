@@ -1158,6 +1158,11 @@ onMounted(() => {
               <span>평가자 {{ blindResult.raters }}명</span>
             </div>
 
+            <!-- 아직 평가가 0건인 풀 -->
+            <p v-if="(blindResult.real.n + blindResult.gen.n) === 0" class="text-xs text-amber-600 dark:text-amber-400">
+              아직 제출된 평가가 없습니다. <code class="font-mono">/rate</code> 에서 이 풀을 평가하면 결과가 집계됩니다.
+            </p>
+
             <!-- 진짜 vs 생성 비교 -->
             <div class="grid grid-cols-2 gap-3">
               <!-- 진짜 -->
@@ -1168,7 +1173,7 @@ onMounted(() => {
                   <span class="text-xs text-gray-400 dark:text-slate-500 ml-auto tabular-nums">n={{ blindResult.real.n }}</span>
                 </div>
                 <div class="text-2xl font-bold tabular-nums text-gray-800 dark:text-slate-100">
-                  {{ blindResult.real.mean.toFixed(2) }}<span class="text-sm font-normal text-gray-400 dark:text-slate-500">/5</span>
+                  {{ blindResult.real.mean != null ? blindResult.real.mean.toFixed(2) : '—' }}<span class="text-sm font-normal text-gray-400 dark:text-slate-500">/5</span>
                 </div>
                 <!-- 1~5 분포 바 -->
                 <div class="flex flex-col gap-1">
@@ -1195,7 +1200,7 @@ onMounted(() => {
                   <span class="text-xs text-gray-400 dark:text-slate-500 ml-auto tabular-nums">n={{ blindResult.gen.n }}</span>
                 </div>
                 <div class="text-2xl font-bold tabular-nums text-gray-800 dark:text-slate-100">
-                  {{ blindResult.gen.mean.toFixed(2) }}<span class="text-sm font-normal text-gray-400 dark:text-slate-500">/5</span>
+                  {{ blindResult.gen.mean != null ? blindResult.gen.mean.toFixed(2) : '—' }}<span class="text-sm font-normal text-gray-400 dark:text-slate-500">/5</span>
                 </div>
                 <!-- 1~5 분포 바 -->
                 <div class="flex flex-col gap-1">
@@ -1222,14 +1227,14 @@ onMounted(() => {
                 class="font-semibold tabular-nums"
                 :class="blindResult.mean_diff > 0 ? 'text-emerald-600 dark:text-emerald-400' : blindResult.mean_diff < 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-slate-300'"
               >
-                {{ blindResult.mean_diff >= 0 ? '+' : '' }}{{ blindResult.mean_diff.toFixed(2) }}
+                {{ blindResult.mean_diff == null ? '—' : (blindResult.mean_diff >= 0 ? '+' : '') + blindResult.mean_diff.toFixed(2) }}
               </span>
             </div>
 
             <!-- Mann-Whitney -->
             <div class="border-t border-gray-100 dark:border-slate-700 pt-3 flex flex-col gap-1.5">
               <span class="text-xs font-semibold text-gray-700 dark:text-slate-300">Mann-Whitney U 검정</span>
-              <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-gray-600 dark:text-slate-400">
+              <div v-if="blindResult.mann_whitney.z != null" class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-gray-600 dark:text-slate-400">
                 <span>U = <span class="tabular-nums font-medium text-gray-800 dark:text-slate-200">{{ blindResult.mann_whitney.U }}</span></span>
                 <span>z = <span class="tabular-nums font-medium text-gray-800 dark:text-slate-200">{{ blindResult.mann_whitney.z.toFixed(3) }}</span></span>
                 <span>p ≈ <span class="tabular-nums font-medium" :class="blindResult.mann_whitney.p_approx < 0.05 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-800 dark:text-slate-200'">{{ blindResult.mann_whitney.p_approx.toFixed(3) }}</span></span>
