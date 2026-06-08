@@ -1688,6 +1688,81 @@ onMounted(() => {
 
           <!-- Done -->
           <template v-else-if="blindResultStatus === 'done' && blindResult">
+
+            <!-- ── 쉬운 해석 박스 ───────────────────────────────────────────── -->
+            <div
+              class="border rounded-lg px-3 py-2.5 flex flex-col gap-2"
+              :class="
+                (blindResult.mean_diff == null || blindResult.mann_whitney.p_approx == null || blindResult.real.n === 0 || blindResult.gen.n === 0)
+                  ? 'bg-gray-50 dark:bg-slate-700/30 border-gray-200 dark:border-slate-600'
+                  : blindResult.mann_whitney.p_approx >= 0.05
+                    ? 'bg-gray-50 dark:bg-slate-700/30 border-gray-200 dark:border-slate-600'
+                    : blindResult.real.mean > blindResult.gen.mean
+                      ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'
+                      : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800'
+              "
+            >
+              <!-- (A) 한 줄 결론 -->
+              <p
+                class="text-sm font-semibold leading-snug"
+                :class="
+                  (blindResult.mean_diff == null || blindResult.mann_whitney.p_approx == null || blindResult.real.n === 0 || blindResult.gen.n === 0)
+                    ? 'text-gray-500 dark:text-slate-400'
+                    : blindResult.mann_whitney.p_approx >= 0.05
+                      ? 'text-gray-600 dark:text-slate-300'
+                      : blindResult.real.mean > blindResult.gen.mean
+                        ? 'text-amber-700 dark:text-amber-400'
+                        : 'text-emerald-700 dark:text-emerald-400'
+                "
+              >
+                <template v-if="blindResult.mean_diff == null || blindResult.mann_whitney.p_approx == null || blindResult.real.n === 0 || blindResult.gen.n === 0">
+                  아직 결과를 낼 데이터가 부족해요. (평가가 더 쌓여야 함)
+                </template>
+                <template v-else-if="blindResult.mann_whitney.p_approx >= 0.05">
+                  통계적으로 뚜렷한 차이는 없어요 — 단, 표본·평가자가 적어서일 수 있어요('구별 안 됨' 아님).
+                </template>
+                <template v-else-if="blindResult.real.mean > blindResult.gen.mean">
+                  사람들이 진짜 후기를 더 자연스럽다고 평가했어요 → 생성물이 아직 구별됩니다(개선 여지).
+                </template>
+                <template v-else>
+                  생성물이 진짜만큼(또는 그 이상) 자연스럽게 평가됐어요 → 좋은 신호(표본 확인 필요).
+                </template>
+              </p>
+
+              <!-- (B) 줄별 쉬운 설명 -->
+              <ul class="flex flex-col gap-1 text-xs text-gray-600 dark:text-slate-400">
+                <li>
+                  <span class="font-medium text-gray-700 dark:text-slate-300">평가 점수:</span>
+                  진짜 {{ blindResult.real.mean != null ? blindResult.real.mean.toFixed(2) : '—' }}점 vs 생성 {{ blindResult.gen.mean != null ? blindResult.gen.mean.toFixed(2) : '—' }}점
+                  <span class="text-gray-400 dark:text-slate-500"> — 5점 만점, 높을수록 '사람이 쓴 것 같다'</span>
+                </li>
+                <li>
+                  <span class="font-medium text-gray-700 dark:text-slate-300">차이:</span>
+                  진짜가 {{ blindResult.mean_diff != null ? (blindResult.mean_diff >= 0 ? '+' : '') + blindResult.mean_diff.toFixed(2) : '—' }}점
+                  <span class="text-gray-400 dark:text-slate-500"> — 양수면 진짜를 더 자연스럽게(= 생성이 덜 자연스러움)</span>
+                </li>
+                <li>
+                  <span class="font-medium text-gray-700 dark:text-slate-300">우연일 확률(p={{ blindResult.mann_whitney.p_approx != null ? blindResult.mann_whitney.p_approx.toFixed(3) : '—' }}):</span>
+                  <template v-if="blindResult.mann_whitney.p_approx != null && blindResult.mann_whitney.p_approx < 0.05">
+                    <span class="text-gray-400 dark:text-slate-500"> p가 0.05보다 작으므로 "이 차이는 우연이 아니라 실제 차이(진짜·생성이 구별됨)"</span>
+                  </template>
+                  <template v-else>
+                    <span class="text-gray-400 dark:text-slate-500"> 차이가 우연일 수 있음 = 아직 확실치 않음</span>
+                  </template>
+                </li>
+                <li>
+                  <span class="font-medium text-gray-700 dark:text-slate-300">평가자 {{ blindResult.raters }}명</span>
+                  <span v-if="blindResult.raters < 3" class="text-gray-400 dark:text-slate-500"> — 적어요. 여러 명 쌓이면 신뢰도가 올라갑니다.</span>
+                </li>
+              </ul>
+
+              <!-- (C) 용어 한 줄 -->
+              <p class="text-[11px] text-gray-400 dark:text-slate-500 leading-snug border-t border-gray-200 dark:border-slate-600 pt-1.5">
+                Mann-Whitney U 검정 = 두 점수 분포가 같은지 비교하는 통계 방법. p값 = 결과가 우연일 확률.
+              </p>
+            </div>
+            <!-- /쉬운 해석 박스 -->
+
             <!-- 평가자 수 -->
             <div class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-slate-400">
               <UIcon name="i-heroicons-users" class="w-3.5 h-3.5 shrink-0" />
