@@ -526,6 +526,7 @@ function copyIaaAccessCode() {
 // 풀 구성
 const blindNReal = ref(15)
 const blindNGen = ref(15)
+const blindGenSince = ref<string>('')
 const blindPoolStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
 const blindPoolError = ref<string | null>(null)
 const blindPoolResult = ref<BlindPoolResult | null>(null)
@@ -554,6 +555,9 @@ async function createBlindPool() {
     const body: Record<string, unknown> = {
       n_real: blindNReal.value,
       n_gen: blindNGen.value,
+    }
+    if (blindGenSince.value) {
+      body.gen_since = new Date(blindGenSince.value).toISOString()
     }
     // 글로벌(전체) 컨텍스트: place_row_id 미전송
     const res = await fetch(`${WORKER_BASE}/api/blind-test/pool`, {
@@ -1540,6 +1544,17 @@ onMounted(() => {
             </div>
           </div>
 
+          <!-- gen_since 필터 -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs text-gray-500 dark:text-slate-400">생성물: 이 시각 이후 생성분만 <span class="text-gray-400 dark:text-slate-500 font-normal">(선택)</span></label>
+            <input
+              v-model="blindGenSince"
+              type="datetime-local"
+              class="w-56 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <p class="text-[11px] text-gray-400 dark:text-slate-500">현재 생성기를 평가하려면, 새 로직으로 생성한 뒤 그 시각 이후로 거르세요. (비우면 과거 생성물 포함)</p>
+          </div>
+
           <p v-if="blindPoolError" class="text-xs text-red-500 dark:text-red-400">{{ blindPoolError }}</p>
 
           <div class="flex items-center gap-3">
@@ -1563,6 +1578,9 @@ onMounted(() => {
               <span class="text-green-600 dark:text-green-400 font-mono text-[11px]">{{ blindPoolResult.pool }}</span>
               <span class="text-green-600 dark:text-green-400">
                 진짜 {{ blindPoolResult.n_real }}건 · 생성 {{ blindPoolResult.n_gen }}건 · 합계 {{ blindPoolResult.total }}건
+              </span>
+              <span v-if="blindGenSince" class="text-green-600 dark:text-green-400 text-[11px]">
+                생성물 필터: {{ blindGenSince }} 이후
               </span>
             </div>
           </div>
