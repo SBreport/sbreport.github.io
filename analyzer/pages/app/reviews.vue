@@ -248,6 +248,11 @@ interface ReviewSample {
   naturalness?: number   // 0~100 정수
   slop_hits?: number     // 감지된 slop n-gram 수
   slop_top?: string[]    // 상위 slop 표현 최대 3개
+  // 환각 탐지 soft-flag (표면 정규식 조기경보 — 재생성 아님)
+  hallucination?: {
+    risk: 'none' | 'low' | 'high'
+    flags: Array<{ type: string; text: string }>
+  }
 }
 
 interface NaturalnessSummary {
@@ -256,6 +261,11 @@ interface NaturalnessSummary {
   median: number
   min: number
   mean_slop_hits: number
+}
+
+interface HallucinationSummary {
+  high: number
+  low: number
 }
 
 interface BatchDiversity {
@@ -288,6 +298,8 @@ const samplesErrorCode = ref<string | null>(null)
 const samplesGenerating = ref(false)
 // R2: 배치 자연스러움 요약 (fetchSamples 응답에서)
 const naturalnessSummary = ref<NaturalnessSummary | null>(null)
+// 환각 탐지 배치 요약 (fetchSamples 응답에서)
+const hallucinationSummary = ref<HallucinationSummary | null>(null)
 
 // 마지막 생성 배치 provider/model 기록 (결과 헤더 표시용)
 const lastGenerationInfo = ref<{ provider: string; model: string } | null>(null)
@@ -1206,9 +1218,10 @@ async function fetchSamples(placeId: number) {
       samplesStatus.value = 'error'
       return
     }
-    const data = await res.json() as { samples: ReviewSample[]; naturalness_summary?: NaturalnessSummary | null }
+    const data = await res.json() as { samples: ReviewSample[]; naturalness_summary?: NaturalnessSummary | null; hallucination_summary?: HallucinationSummary | null }
     samples.value = data.samples ?? []
     naturalnessSummary.value = data.naturalness_summary ?? null
+    hallucinationSummary.value = data.hallucination_summary ?? null
     samplesStatus.value = samples.value.length > 0 ? 'done' : 'empty'
   } catch (e: unknown) {
     samplesError.value = e instanceof Error ? e.message : '알 수 없는 오류'
@@ -1503,6 +1516,7 @@ function selectPlace(place: Place) {
   lastGenerationInfo.value = null
   lastDiversity.value = null
   naturalnessSummary.value = null
+  hallucinationSummary.value = null
   aiDiagnosis.value = null
   aiDiagnosisStatus.value = 'idle'
   aiDiagnosisError.value = null
@@ -3364,6 +3378,17 @@ onUnmounted(() => {
                     <span class="font-normal opacity-70">/ min {{ naturalnessSummary.min }}</span>
                   </span>
                 </UTooltip>
+                <!-- 환각 탐지 배치 요약 (soft-flag 조기경보 — 재생성 아님) -->
+                <UTooltip
+                  v-if="hallucinationSummary && (hallucinationSummary.high + hallucinationSummary.low) > 0"
+                  :text="`표면 정규식 기반 조기경보 (오탐 가능). 재생성 아님.\nhigh ${hallucinationSummary.high}건 · low ${hallucinationSummary.low}건`"
+                  :popper="{ placement: 'top' }"
+                >
+                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium cursor-default whitespace-nowrap bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                    <UIcon name="i-heroicons-exclamation-triangle" class="w-3 h-3 shrink-0" />
+                    환각 의심 {{ hallucinationSummary.high + hallucinationSummary.low }}건
+                  </span>
+                </UTooltip>
                 <span v-if="samplesUsage" class="text-[10px] text-gray-400 dark:text-slate-500 tabular-nums">
                   ≈ ${{ samplesUsage.cost_usd.toFixed(4) }} (입력 {{ (samplesUsage.prompt_tokens / 1000).toFixed(1) }}k · 출력 {{ (samplesUsage.completion_tokens / 1000).toFixed(1) }}k)
                 </span>
@@ -3488,6 +3513,12 @@ onUnmounted(() => {
                           <span class="cursor-default">자연도</span>
                         </UTooltip>
                       </th>
+                      <!-- 환각 탐지 (soft-flag) -->
+                      <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-10">
+                        <UTooltip text="표면 정규식 조기경보 (오탐 가능). 재생성 아님." :popper="{ placement: 'top' }">
+                          <span class="cursor-default">환각</span>
+                        </UTooltip>
+                      </th>
                       <!-- 액션 -->
                       <th class="px-3 border-b border-gray-200 dark:border-slate-700 w-20" />
                     </tr>
@@ -3581,6 +3612,23 @@ onUnmounted(() => {
                           <span v-if="sample.slop_hits && sample.slop_hits > 0" class="ml-1 text-[10px] text-gray-400 dark:text-slate-500 tabular-nums">s{{ sample.slop_hits }}</span>
                         </template>
                         <span v-else class="text-gray-300 dark:text-slate-600">—</span>
+                      </td>
+                      <!-- 환각 탐지 배지 (soft-flag 조기경보 — risk=none이면 미표시) -->
+                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                        <UTooltip
+                          v-if="sample.hallucination && sample.hallucination.risk !== 'none'"
+                          :text="`표면 정규식 조기경보 (오탐 가능). 재생성 아님.\n` + (sample.hallucination.flags ?? []).map(f => `${f.type}: ${f.text}`).join('\n')"
+                          :popper="{ placement: 'top' }"
+                        >
+                          <span
+                            class="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] font-medium cursor-default"
+                            :class="sample.hallucination.risk === 'high'
+                              ? 'bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+                              : 'bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400'"
+                          >
+                            <UIcon name="i-heroicons-exclamation-triangle" class="w-3 h-3 shrink-0" />
+                          </span>
+                        </UTooltip>
                       </td>
                       <!-- 액션 버튼 (hover) -->
                       <td class="px-3 py-1.5 whitespace-nowrap align-top">

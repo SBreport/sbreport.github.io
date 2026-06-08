@@ -4,6 +4,9 @@
 import { scoreNaturalness } from './naturalness-score.js';
 import naturalnessProfile from './naturalness-profile.json';
 
+// 환각 탐지기 (soft-flag 조기경보 — 재생성/차단 아님)
+import { detectHallucination } from './hallucination-detect.js';
+
 // 정확 매칭 + 접두사 매칭 분리: prefix 매칭만 쓰면 도메인 위조에 취약함
 // (예: https://sbreport.github.io.evil.com 이 startsWith로 통과되는 문제)
 const ALLOWED_ORIGINS = [
@@ -6219,13 +6222,31 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
 
   // ── R2: 자연스러움 점수 즉석 계산 (저장/마이그 없음) ──────────────────────
   // 배치 추이 감시용 지표. 개별 합격/불합격 판단에 쓰지 말 것.
+
+  // 환각 탐지용 allowedStaffNames: 팩트풀에서 역할 호칭 패턴 항목만 추출 (요청당 1회)
+  let allowedStaffNames = [];
+  if (results.length > 0) {
+    try {
+      const factPoolArr = await extractFactPool(env, placeRowId);
+      const STAFF_TITLE_SUFFIX_RE = /(원장님|실장님|선생님|쌤|대표님|상담실장)$/;
+      allowedStaffNames = factPoolArr.filter(e => STAFF_TITLE_SUFFIX_RE.test(e));
+    } catch (_) {
+      // 탐지기는 soft-flag 조기경보 — 팩트풀 오류가 샘플 조회를 막지 않도록
+    }
+  }
+
   const scoredSamples = results.map(s => {
     const scored = scoreNaturalness(s.body ?? '', naturalnessProfile);
+    const halResult = detectHallucination(s.body ?? '', allowedStaffNames);
     return {
       ...s,
       naturalness:  Math.round(scored.naturalness),
       slop_hits:    scored.slop.hits.length,
       slop_top:     scored.slop.hits.slice(0, 3).map(h => h.ngram),
+      hallucination: {
+        risk:  halResult.risk,
+        flags: halResult.flags.slice(0, 5).map(f => ({ type: f.type, text: f.text })),
+      },
     };
   });
 
@@ -6251,7 +6272,13 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
     };
   }
 
-  return jsonResponse({ samples: scoredSamples, naturalness_summary }, 200, cors);
+  // 환각 탐지 배치 요약
+  const hallucination_summary = scoredSamples.length > 0 ? {
+    high: scoredSamples.filter(s => s.hallucination.risk === 'high').length,
+    low:  scoredSamples.filter(s => s.hallucination.risk === 'low').length,
+  } : null;
+
+  return jsonResponse({ samples: scoredSamples, naturalness_summary, hallucination_summary }, 200, cors);
 }
 
 /**
