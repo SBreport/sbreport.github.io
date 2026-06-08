@@ -8,6 +8,12 @@ definePageMeta({
 
 const WORKER_BASE = 'https://naver-searchad-proxy.sbreport.workers.dev'
 
+// ─── 컬러모드 토글 (독립 페이지라 자체 토글 제공) ──────────────────────────────
+const colorMode = useColorMode()
+function toggleColorMode() {
+  colorMode.preference = colorMode.value === 'dark' ? 'light' : 'dark'
+}
+
 // ─── 타입 ────────────────────────────────────────────────────────────────────
 
 interface RateItem {
@@ -174,14 +180,24 @@ const RATING_LABELS: Record<number, { short: string; desc: string }> = {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-50 dark:bg-slate-900 flex flex-col">
+  <div class="h-screen overflow-hidden bg-gray-50 dark:bg-slate-900 flex flex-col">
     <!-- 헤더 -->
-    <header class="shrink-0 bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 px-4 py-3">
-      <h1 class="text-sm font-semibold text-gray-800 dark:text-slate-100">후기 자연스러움 평가</h1>
-      <p class="text-xs text-gray-400 dark:text-slate-500 mt-0.5">후기가 얼마나 자연스러운지 1~5점으로 평가해 주세요.</p>
+    <header class="shrink-0 bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 px-4 py-3 flex items-center justify-between gap-3">
+      <div class="min-w-0">
+        <h1 class="text-sm font-semibold text-gray-800 dark:text-slate-100">후기 자연스러움 평가</h1>
+        <p class="text-xs text-gray-400 dark:text-slate-500 mt-0.5">후기가 얼마나 자연스러운지 1~5점으로 평가해 주세요.</p>
+      </div>
+      <button
+        class="shrink-0 flex items-center justify-center w-8 h-8 rounded-md text-slate-500 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
+        :title="colorMode.value === 'dark' ? '라이트 모드' : '다크 모드'"
+        aria-label="라이트/다크 전환"
+        @click="toggleColorMode"
+      >
+        <UIcon :name="colorMode.value === 'dark' ? 'i-heroicons-sun' : 'i-heroicons-moon'" class="w-4.5 h-4.5" />
+      </button>
     </header>
 
-    <main class="flex-1 flex flex-col items-center px-4 py-6">
+    <main class="flex-1 min-h-0 overflow-y-auto flex flex-col items-center px-4 py-6">
 
       <!-- ── 입력 화면 ─────────────────────────────────────────── -->
       <div v-if="phase === 'input'" class="w-full max-w-sm flex flex-col gap-4">
