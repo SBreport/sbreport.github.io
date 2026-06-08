@@ -4,12 +4,27 @@
  *
  * 한계(surface regex 방식):
  *  - 철자를 약간 바꾼 금액 표현("오만원", "오만 원")은 미탐지
- *  - 시술명·메뉴명 환각은 탐지 범위 외 (별도 과제)
  *  - 문맥 없이 표면 패턴만 보므로 오탐 가능 (예: 리뷰 속 인용·비교)
  *  - allowedStaffNames가 빈 배열이면 name flag가 더 많이 발생할 수 있음
+ *  - treatment 탐지: 지점이 실제 하는데 후기에 안 나와 팩트풀에 없으면 오탐
+ *    → hard 차단 아닌 soft-flag(risk=low)로만 처리
  */
 
 // ── 패턴 정의 ────────────────────────────────────────────────────────────────
+
+// 0. 시술 사전 — 피부과·미용 시술명·장비명 (사용자가 나중에 확장 가능)
+// 형식: 정확 단어 단위 매칭이 아닌 substring 포함 여부로 검사
+// 추가 예: '스컬프트라', '써마지', '아큐티트' 등 신규 시술 여기에 덧붙이면 됨
+export const TREATMENT_LEXICON = new Set([
+  '보톡스', '스킨보톡스', '필러', '리쥬란', '쥬베룩', '볼뉴머',
+  '슈링크', '울쎄라', '인모드', '포텐자',
+  '프락셀', '피코', '피코토닝', '레이저토닝', '듀얼토닝',
+  '제네시스', '엑셀브이', '클라리티', '네오빔',
+  '다이오드레이저', '아이피엘', 'IPL', '제모',
+  '아쿠아필', '물광주사', '스킨부스터', '콜라겐주사',
+  '실리프팅', '윤곽주사', '지방분해주사',
+  '올리지오', '덴서티', '더모톡신', '라라필', '토닝',
+]);
 
 // 1. 가격: 숫자 + 원/만원/천원
 const PRICE_RE = /\d[\d,]*\s*(원|만원|천원)/g;
@@ -60,9 +75,12 @@ const EXTRA_BAD_NAMES = new Set([
  * @param {string[]} allowedStaffNames - 그 지점 팩트풀의 담당자명 엔티티 배열
  *   예: ['이민희원장님', '민희원장님']
  *   allowedStaffNames 중 어느 하나에 body 내 캡처된 이름이 포함되면 허용된 이름으로 간주.
+ * @param {string[]} allowedFacts - 그 지점 팩트풀 전체 배열 (extractFactPool 결과 원본)
+ *   시술명 환각 검사에 사용: 팩트풀 항목에 해당 시술어가 substring으로 없으면 soft-flag.
+ *   빈 배열이면 treatment 검사 스킵(팩트풀 없으면 판단 불가).
  * @returns {{ flags: Array<{type: string, text: string, reason: string}>, risk: 'none'|'low'|'high' }}
  */
-export function detectHallucination(body, allowedStaffNames = []) {
+export function detectHallucination(body, allowedStaffNames = [], allowedFacts = []) {
   if (!body || typeof body !== 'string') {
     return { flags: [], risk: 'none' };
   }
@@ -137,14 +155,38 @@ export function detectHallucination(body, allowedStaffNames = []) {
     }
   }
 
+  // ── 규칙 4: treatment ────────────────────────────────────────────────────
+  // 지점이 실제 하는데 후기에 안 나와 팩트풀에 없으면 오탐 → hard 차단 아닌 soft-flag
+  // allowedFacts가 빈 배열이면 판단 불가(팩트풀 미수집) → 스킵
+  if (allowedFacts.length > 0) {
+    const seenTreatments = new Set(); // 같은 시술어 중복 flag 방지
+    for (const term of TREATMENT_LEXICON) {
+      if (!body.includes(term)) continue;
+      if (seenTreatments.has(term)) continue;
+      // 팩트풀 항목 중 어느 하나에 이 시술어가 substring으로 포함되면 허용
+      const inFactPool = allowedFacts.some(fact => fact.includes(term));
+      if (!inFactPool) {
+        flags.push({
+          type: 'treatment',
+          text: term,
+          reason: '지점 시술 목록(팩트풀)에 없음 — 오탐 가능',
+        });
+        seenTreatments.add(term);
+      }
+    }
+  }
+
   // ── risk 종합 ─────────────────────────────────────────────────────────────
-  const hasName  = flags.some(f => f.type === 'name');
-  const hasPrice = flags.some(f => f.type === 'price');
-  const hasQty   = flags.some(f => f.type === 'quantity');
+  // name·price = high(구체 사실 환각 위험 큼)
+  // quantity·treatment = low(오탐 가능성 있어 조기경보 수준)
+  const hasName      = flags.some(f => f.type === 'name');
+  const hasPrice     = flags.some(f => f.type === 'price');
+  const hasQty       = flags.some(f => f.type === 'quantity');
+  const hasTreatment = flags.some(f => f.type === 'treatment');
 
   let risk = 'none';
   if (hasName || hasPrice) risk = 'high';
-  else if (hasQty) risk = 'low';
+  else if (hasQty || hasTreatment) risk = 'low';
 
   return { flags, risk };
 }

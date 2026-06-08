@@ -1,7 +1,7 @@
 /**
  * measure-hallucination.mjs
- * place_generated_samples 전체(약 602건)에 환각 탐지기를 돌려 현재 발생률을 측정.
- * 결과: flag률·type별·risk별 분포 + 실제 예시 각 5건 + 한 줄 판정.
+ * place_generated_samples 전체(약 632건)에 환각 탐지기를 돌려 현재 발생률을 측정.
+ * 결과: flag률·type별(treatment 포함)·risk별 분포 + 실제 예시 각 5건 + 한 줄 판정.
  *
  * 실행:
  *   cd workers/naver-searchad-proxy
@@ -53,8 +53,9 @@ function fetchD1(sql, label) {
   return rows;
 }
 
-// ── 담당자명 추출 (index.js의 extractFactPool 담당자 규칙 복제) ──────────────
+// ── 팩트풀 추출 (index.js extractFactPool 로직 로컬 복제) ───────────────────
 const STAFF_TITLE_RE = /([가-힣]{1,4})\s*(실장님|원장님|선생님|쌤|대표님|상담실장)/g;
+const STAFF_TITLE_SUFFIX_RE = /(원장님|실장님|선생님|쌤|대표님|상담실장)$/;
 const BAD_STAFF_NAMES = new Set([
   '친절한','꼼꼼한','깔끔한','편안한','세심한','자세한','정확한','상냥한','능숙한','깨끗한','시원한','훌륭한',
   '친절하신','꼼꼼하신','깔끔하신','세심하신','자세하신','친절했던','꼼꼼했던',
@@ -77,6 +78,11 @@ const STOPWORDS = new Set([
   '너무','정말','진짜','그리고','하지만','에서','으로','합니다','했어요','같아요','있어요',
 ]);
 const STAFF_NAME_MIN_FREQ = 2;
+
+// 개별 토큰 추출 (빈도 기반 명사·엔티티) — index.js extractFactPool 간소화 버전
+// treatment 검사에는 실제 후기 body 전체 텍스트를 allowedFacts로 넘기는 게 더 직관적이나
+// 여기서는 factPool(고빈도 토큰) 대신 리뷰 본문 원문 배열을 넘겨 substring 검사
+// → 후기 본문에 시술명이 한 번이라도 나오면 지점 팩트풀에 있는 것으로 간주
 
 /**
  * 리뷰 본문 배열에서 담당자명 엔티티(freq>=2) 배열 반환
@@ -153,25 +159,29 @@ async function main() {
     reviewsByPlace.get(row.place_row_id).push(row.body);
   }
 
-  // 지점별 allowedStaffNames 계산
+  // 지점별 allowedStaffNames + allowedFacts(리뷰 본문 배열) 계산
+  // treatment 검사는 후기 본문 전체를 팩트풀로 사용: 시술명이 한 번이라도 실제 후기에 나오면 허용
+  const allowedFactsMap = new Map(); // place_row_id -> string[] (리뷰 body 배열)
   for (const pid of placeIds) {
     const bodies = reviewsByPlace.get(pid) ?? [];
     staffNamesMap.set(pid, extractAllowedStaffNames(bodies));
+    allowedFactsMap.set(pid, bodies); // 리뷰 본문 배열 전체를 팩트풀로
   }
 
   // 3. 탐지 실행
-  console.log('[3] 환각 탐지 실행...');
+  console.log('[3] 환각 탐지 실행 (treatment 포함)...');
   const results = [];
   for (const sample of samples) {
     const allowedNames = staffNamesMap.get(sample.place_row_id) ?? [];
-    const det = detectHallucination(sample.body ?? '', allowedNames);
+    const allowedFacts = allowedFactsMap.get(sample.place_row_id) ?? [];
+    const det = detectHallucination(sample.body ?? '', allowedNames, allowedFacts);
     results.push({ ...sample, ...det, allowedNames });
   }
 
   // 4. 집계
   const total = results.length;
   const flagged = results.filter(r => r.flags.length > 0);
-  const byType = { price: [], quantity: [], name: [] };
+  const byType = { price: [], quantity: [], name: [], treatment: [] };
   const byRisk = { high: 0, low: 0, none: 0 };
 
   for (const r of results) {
@@ -180,6 +190,9 @@ async function main() {
       if (byType[f.type]) byType[f.type].push({ sample: r, flag: f });
     }
   }
+
+  // treatment: 샘플 단위 중복 제거 (한 샘플에서 여러 시술 flag → 1건으로 카운트)
+  const treatmentFlaggedSamples = new Set(byType.treatment.map(h => h.sample.id));
 
   // 5. 출력
   console.log('\n====================================================');
@@ -191,9 +204,10 @@ async function main() {
   console.log('');
 
   console.log('[ type별 건수 (flag 발생 건, 중복 포함) ]');
-  console.log(`  price    : ${byType.price.length}건 (샘플의 ${pct(byType.price.length, total)})`);
-  console.log(`  quantity : ${byType.quantity.length}건 (샘플의 ${pct(byType.quantity.length, total)})`);
-  console.log(`  name     : ${byType.name.length}건 (샘플의 ${pct(byType.name.length, total)})`);
+  console.log(`  price     : ${byType.price.length}건 (샘플의 ${pct(byType.price.length, total)})`);
+  console.log(`  quantity  : ${byType.quantity.length}건 (샘플의 ${pct(byType.quantity.length, total)})`);
+  console.log(`  name      : ${byType.name.length}건 (샘플의 ${pct(byType.name.length, total)})`);
+  console.log(`  treatment : ${byType.treatment.length}건 (샘플의 ${pct(byType.treatment.length, total)}) — 샘플 기준 ${treatmentFlaggedSamples.size}건 (${pct(treatmentFlaggedSamples.size, total)})`);
   console.log('');
 
   console.log('[ risk별 분포 ]');
@@ -203,7 +217,7 @@ async function main() {
   console.log('');
 
   // 6. type별 예시 각 5건
-  for (const type of ['price', 'quantity', 'name']) {
+  for (const type of ['price', 'quantity', 'name', 'treatment']) {
     const hits = byType[type];
     console.log(`----------------------------------------------------`);
     console.log(`  [${type.toUpperCase()} 예시 — 최대 5건]`);
@@ -225,6 +239,7 @@ async function main() {
   console.log('====================================================');
   const highPct = (byRisk.high / total * 100).toFixed(1);
   const flagPct = (flagged.length / total * 100).toFixed(1);
+  const treatmentSamplePct = (treatmentFlaggedSamples.size / total * 100).toFixed(1);
 
   let verdict;
   if (byRisk.high / total >= 0.10) {
@@ -232,12 +247,13 @@ async function main() {
   } else if (byRisk.high / total >= 0.03) {
     verdict = `high-risk 샘플이 ${highPct}% — 환각이 산발적으로 존재. 게이트 도입을 권장하나 급박하지 않음.`;
   } else if (flagged.length / total >= 0.05) {
-    verdict = `high-risk는 낮지만 quantity 포함 flag 비율이 ${flagPct}% — low-risk(임상수치) 패턴 위주. 게이트 우선순위 낮음.`;
+    verdict = `high-risk는 낮지만 flag 비율이 ${flagPct}% — low-risk(임상수치·시술명) 패턴 위주. 게이트 우선순위 낮음.`;
   } else {
     verdict = `환각 flag 비율이 ${flagPct}%로 낮음 — 현재 생성물에서 환각이 드묾. 게이트는 예방 목적으로 도입.`;
   }
 
   console.log(`  판정: ${verdict}`);
+  console.log(`  시술명 환각(treatment): 샘플 ${treatmentFlaggedSamples.size}건 (${treatmentSamplePct}%) soft-flag — 오탐 포함 추정.`);
   console.log('====================================================\n');
 }
 

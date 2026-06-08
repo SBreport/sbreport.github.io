@@ -6275,11 +6275,13 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
   // ── R2: 자연스러움 점수 즉석 계산 (저장/마이그 없음) ──────────────────────
   // 배치 추이 감시용 지표. 개별 합격/불합격 판단에 쓰지 말 것.
 
-  // 환각 탐지용 allowedStaffNames: 팩트풀에서 역할 호칭 패턴 항목만 추출 (요청당 1회)
+  // 환각 탐지용 팩트풀: 전체 배열(allowedFacts)과 담당자명 필터(allowedStaffNames) 분리 (요청당 1회)
   let allowedStaffNames = [];
+  let allowedFacts = [];
   if (results.length > 0) {
     try {
       const factPoolArr = await extractFactPool(env, placeRowId);
+      allowedFacts = factPoolArr; // treatment 검사용 — 팩트풀 원본 전체
       const STAFF_TITLE_SUFFIX_RE = /(원장님|실장님|선생님|쌤|대표님|상담실장)$/;
       allowedStaffNames = factPoolArr.filter(e => STAFF_TITLE_SUFFIX_RE.test(e));
     } catch (_) {
@@ -6289,7 +6291,7 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
 
   const scoredSamples = results.map(s => {
     const scored = scoreNaturalness(s.body ?? '', naturalnessProfile);
-    const halResult = detectHallucination(s.body ?? '', allowedStaffNames);
+    const halResult = detectHallucination(s.body ?? '', allowedStaffNames, allowedFacts);
     return {
       ...s,
       naturalness:  Math.round(scored.naturalness),
