@@ -264,6 +264,28 @@ export default {
       return handleBlindTestResults(request, env, corsHeaders);
     }
 
+    // --- IAA (평가자 간 일치도) ---
+    // POST /api/iaa/set     — 세트 생성 (admin)
+    // GET  /api/iaa/sets    — 세트 목록 (researcher)
+    // GET  /api/iaa/items   — 아이템 목록 (공개 + 코드)
+    // POST /api/iaa/labels  — 라벨 제출 (공개 + 코드)
+    // GET  /api/iaa/results — κ 결과 (researcher)
+    if (url.pathname === '/api/iaa/set' && request.method === 'POST') {
+      return handleIaaSet(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/iaa/sets' && request.method === 'GET') {
+      return handleIaaSets(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/iaa/items' && request.method === 'GET') {
+      return handleIaaItems(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/iaa/labels' && request.method === 'POST') {
+      return handleIaaLabels(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/iaa/results' && request.method === 'GET') {
+      return handleIaaResults(request, env, corsHeaders);
+    }
+
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
   },
 
@@ -7388,6 +7410,452 @@ function normalCDF(x) {
   const d = 0.3989422820 * Math.exp(-x * x / 2);
   const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.7814779 + t * (-1.8212560 + t * 1.3302744))));
   return x >= 0 ? 1 - p : p;
+}
+
+// ============================================================
+// IAA (평가자 간 일치도) 엔드포인트
+// ============================================================
+
+/**
+ * POST /api/iaa/set  (admin 전용)
+ * body: { n=60 }
+ * 층화 표본(지점 × 길이구간)으로 place_reviews에서 n건 추출해 iaa_items에 저장.
+ * 반환: { set_id, count }
+ */
+async function handleIaaSet(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  let body;
+  try { body = await request.json(); } catch { body = {}; }
+  const n = Math.max(1, Math.min(parseInt(body?.n ?? 60, 10) || 60, 500));
+
+  // 전체 지점 목록
+  const { results: places } = await env.DB.prepare(
+    `SELECT id FROM review_places ORDER BY id`
+  ).all();
+
+  if (!places || places.length === 0) {
+    return jsonResponse({ error: 'no_places', message: '등록된 지점이 없습니다' }, 404, cors);
+  }
+
+  const BUCKETS = [
+    { minLen: 10,  maxLen: 49  },
+    { minLen: 50,  maxLen: 149 },
+    { minLen: 150, maxLen: 400 },
+  ];
+
+  const placeCount  = places.length;
+  const bucketCount = BUCKETS.length;
+  const perSlot     = Math.max(1, Math.ceil(n / (placeCount * bucketCount)));
+
+  const collected = [];
+
+  for (const place of places) {
+    for (const bucket of BUCKETS) {
+      const { results: rows } = await env.DB.prepare(`
+        SELECT id, body
+        FROM place_reviews
+        WHERE place_row_id = ?
+          AND LENGTH(COALESCE(body, '')) >= ?
+          AND LENGTH(COALESCE(body, '')) <= ?
+        ORDER BY RANDOM()
+        LIMIT ?
+      `).bind(place.id, bucket.minLen, bucket.maxLen, perSlot).all();
+
+      for (const row of (rows ?? [])) {
+        collected.push({ review_id: row.id, body: row.body });
+      }
+    }
+  }
+
+  // 전체 셔플 → n건 절단 (중복 review_id 제거)
+  for (let i = collected.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [collected[i], collected[j]] = [collected[j], collected[i]];
+  }
+  const seen = new Set();
+  const items = [];
+  for (const item of collected) {
+    if (!seen.has(item.review_id) && items.length < n) {
+      seen.add(item.review_id);
+      items.push(item);
+    }
+  }
+
+  if (items.length === 0) {
+    return jsonResponse({ error: 'no_reviews', message: '조건에 맞는 리뷰가 없습니다' }, 404, cors);
+  }
+
+  const set_id   = 'iaa_' + crypto.randomUUID().slice(0, 8);
+  const now      = new Date().toISOString();
+  const insertStmt = env.DB.prepare(
+    `INSERT INTO iaa_items (id, set_id, review_id, body, created_at) VALUES (?, ?, ?, ?, ?)`
+  );
+
+  const batch = items.map(item =>
+    insertStmt.bind(crypto.randomUUID(), set_id, item.review_id, item.body, now)
+  );
+  await env.DB.batch(batch);
+
+  return jsonResponse({ set_id, count: items.length }, 200, cors);
+}
+
+/**
+ * GET /api/iaa/sets  (researcher 이상)
+ * 세트 목록 + 메타(아이템 수, 평가자 수, 라벨 수).
+ * 반환: { sets:[{ set_id, created_at, item_count, annotator_count, label_count }] }
+ */
+async function handleIaaSets(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT
+        i.set_id,
+        MIN(i.created_at) AS created_at,
+        COUNT(DISTINCT i.id) AS item_count,
+        COUNT(DISTINCT l.annotator) AS annotator_count,
+        COUNT(l.id) AS label_count
+      FROM iaa_items i
+      LEFT JOIN iaa_labels l ON l.set_id = i.set_id
+      GROUP BY i.set_id
+      ORDER BY created_at DESC
+    `).all();
+
+    return jsonResponse({ sets: results ?? [] }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+/**
+ * GET /api/iaa/items?code=&set=  (공개 + 접근코드)
+ * set 미지정 시 최근 세트 사용. 셔플 후 반환.
+ * 반환: { set_id, items:[{ review_id, body }] }
+ */
+async function handleIaaItems(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const url  = new URL(request.url);
+  const code = url.searchParams.get('code') ?? '';
+  const codeErr = checkBlindTestCode(code, env, corsHeaders);
+  if (codeErr) return codeErr;
+
+  let set_id = url.searchParams.get('set') ?? '';
+
+  if (!set_id) {
+    const row = await env.DB.prepare(
+      `SELECT set_id FROM iaa_items ORDER BY created_at DESC LIMIT 1`
+    ).first();
+    if (!row) {
+      return jsonResponse({ error: 'no_set', message: '등록된 세트가 없습니다' }, 404, cors);
+    }
+    set_id = row.set_id;
+  }
+
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT review_id, body FROM iaa_items WHERE set_id = ?`
+    ).bind(set_id).all();
+
+    const items = results ?? [];
+    // Fisher-Yates 셔플
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+
+    return jsonResponse({ set_id, items }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+/**
+ * POST /api/iaa/labels  (공개 + 접근코드)
+ * body: { code, nickname, set, labels:[{ review_id, label, note? }] }
+ * label∈{genuine,ad,ai,unsure} 외 skip. INSERT OR IGNORE.
+ * 반환: { saved, skipped }
+ */
+async function handleIaaLabels(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  let body;
+  try { body = await request.json(); } catch { body = {}; }
+
+  const code = body.code ?? '';
+  const codeErr = checkBlindTestCode(code, env, corsHeaders);
+  if (codeErr) return codeErr;
+
+  const nickname = (body.nickname ?? '').trim();
+  if (!nickname) {
+    return jsonResponse({ error: 'bad_request', message: 'nickname이 비어있습니다' }, 400, cors);
+  }
+
+  const set_id = (body.set ?? '').trim();
+  if (!set_id) {
+    return jsonResponse({ error: 'bad_request', message: 'set이 비어있습니다' }, 400, cors);
+  }
+
+  const VALID_LABELS = new Set(['genuine', 'ad', 'ai', 'unsure']);
+  const labels = Array.isArray(body.labels) ? body.labels : [];
+
+  const now  = new Date().toISOString();
+  const stmt = env.DB.prepare(
+    `INSERT OR IGNORE INTO iaa_labels (id, set_id, review_id, annotator, label, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+
+  const batch = [];
+  let skipped = 0;
+
+  for (const entry of labels) {
+    const review_id = (entry.review_id ?? '').trim();
+    const label     = (entry.label ?? '').trim();
+    if (!review_id || !VALID_LABELS.has(label)) {
+      skipped++;
+      continue;
+    }
+    batch.push(stmt.bind(
+      crypto.randomUUID(),
+      set_id,
+      review_id,
+      nickname,
+      label,
+      entry.note ?? null,
+      now
+    ));
+  }
+
+  if (batch.length > 0) {
+    try {
+      await env.DB.batch(batch);
+    } catch (err) {
+      return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+    }
+  }
+
+  return jsonResponse({ saved: batch.length, skipped }, 200, cors);
+}
+
+/**
+ * GET /api/iaa/results?set=  (researcher 이상)
+ * Fleiss' κ + 쌍별 Cohen's κ + raw_agreement + class_dist.
+ * 반환: { set, n_reviews_multi, annotators, fleiss_kappa, interpretation,
+ *         pairwise, raw_agreement, class_dist, note? }
+ */
+async function handleIaaResults(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  const url   = new URL(request.url);
+  let set_id  = url.searchParams.get('set') ?? '';
+
+  // set 미지정 시 최근 세트
+  if (!set_id) {
+    try {
+      const row = await env.DB.prepare(
+        `SELECT set_id FROM iaa_items ORDER BY created_at DESC LIMIT 1`
+      ).first();
+      if (row) set_id = row.set_id;
+    } catch (err) {
+      return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+    }
+  }
+
+  if (!set_id) {
+    return jsonResponse({ error: 'no_set', message: '등록된 세트가 없습니다' }, 404, cors);
+  }
+
+  let labelRows;
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT review_id, annotator, label FROM iaa_labels WHERE set_id = ?`
+    ).bind(set_id).all();
+    labelRows = results ?? [];
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  // --- 기본값 (데이터 부족) ---
+  const CATEGORIES = ['genuine', 'ad', 'ai', 'unsure'];
+
+  // annotator별 라벨 수 집계
+  const annotatorCountMap = new Map();
+  for (const row of labelRows) {
+    annotatorCountMap.set(row.annotator, (annotatorCountMap.get(row.annotator) ?? 0) + 1);
+  }
+  const annotators = [...annotatorCountMap.entries()].map(([name, count]) => ({ name, count }));
+
+  // review_id별 { annotator -> label } 맵 구성
+  const reviewMap = new Map(); // review_id -> Map<annotator, label>
+  for (const row of labelRows) {
+    if (!reviewMap.has(row.review_id)) reviewMap.set(row.review_id, new Map());
+    reviewMap.get(row.review_id).set(row.annotator, row.label);
+  }
+
+  // 2명 이상 라벨한 리뷰만 분석 대상
+  const multiReviews = [...reviewMap.entries()].filter(([, m]) => m.size >= 2);
+  const N = multiReviews.length;
+
+  // class_dist: 전체 라벨 분포
+  const classDist = { genuine: 0, ad: 0, ai: 0, unsure: 0 };
+  for (const row of labelRows) {
+    if (row.label in classDist) classDist[row.label]++;
+  }
+
+  // 데이터 부족
+  if (annotators.length < 2 || N < 1) {
+    return jsonResponse({
+      set: set_id,
+      n_reviews_multi: N,
+      annotators,
+      fleiss_kappa: null,
+      interpretation: null,
+      pairwise: [],
+      raw_agreement: null,
+      class_dist: classDist,
+      note: '분석 대상 리뷰 부족 (평가자 2명 이상, 공통 리뷰 1건 이상 필요)',
+    }, 200, cors);
+  }
+
+  // ─── Fleiss' κ (가변 평가자 수 버전) ─────────────────────────────────────────
+  // P̄ = 평균(P_i),  P_e = Σ_c p_c²
+  // P_i = (Σ_c n_ic² − n_i) / (n_i(n_i − 1))
+  // p_c = (Σ_i n_ic) / (Σ_i n_i)
+  // κ = (P̄ − P_e) / (1 − P_e)
+
+  let sumPi        = 0;
+  let totalLabels  = 0;               // Σ_i n_i
+  const catTotal   = new Map(CATEGORIES.map(c => [c, 0])); // Σ_i n_ic per category
+
+  for (const [, annotMap] of multiReviews) {
+    const ni = annotMap.size;
+    // 이 리뷰의 카테고리별 카운트
+    const catCount = new Map(CATEGORIES.map(c => [c, 0]));
+    for (const label of annotMap.values()) {
+      if (catCount.has(label)) catCount.set(label, catCount.get(label) + 1);
+    }
+
+    // P_i
+    let sumSq = 0;
+    for (const c of CATEGORIES) sumSq += catCount.get(c) ** 2;
+    const Pi = (sumSq - ni) / (ni * (ni - 1));
+    sumPi      += Pi;
+    totalLabels += ni;
+
+    for (const c of CATEGORIES) {
+      catTotal.set(c, catTotal.get(c) + catCount.get(c));
+    }
+  }
+
+  const Pbar = sumPi / N;
+  // p_c = catTotal_c / totalLabels
+  let Pe = 0;
+  for (const c of CATEGORIES) {
+    const pc = catTotal.get(c) / totalLabels;
+    Pe += pc * pc;
+  }
+
+  let fleiss_kappa = null;
+  if (1 - Pe !== 0) {
+    fleiss_kappa = Math.round(((Pbar - Pe) / (1 - Pe)) * 10000) / 10000;
+  }
+
+  // Landis-Koch 해석
+  function interpretKappa(k) {
+    if (k === null) return null;
+    if (k < 0)   return 'poor (우연보다 낮음)';
+    if (k < 0.2) return 'slight (매우 약함)';
+    if (k < 0.4) return 'fair (약함)';
+    if (k < 0.6) return 'moderate (보통)';
+    if (k < 0.8) return 'substantial (상당함)';
+    return 'almost perfect (거의 완전 일치)';
+  }
+  const interpretation = interpretKappa(fleiss_kappa);
+
+  // ─── 쌍별 Cohen's κ ──────────────────────────────────────────────────────────
+  const annotatorList = annotators.map(a => a.name);
+  const pairwise = [];
+
+  for (let ai = 0; ai < annotatorList.length; ai++) {
+    for (let bi = ai + 1; bi < annotatorList.length; bi++) {
+      const A = annotatorList[ai];
+      const B = annotatorList[bi];
+
+      // 둘 다 라벨한 리뷰
+      const shared = [];
+      for (const [, annotMap] of reviewMap) {
+        if (annotMap.has(A) && annotMap.has(B)) {
+          shared.push({ la: annotMap.get(A), lb: annotMap.get(B) });
+        }
+      }
+
+      const pairN = shared.length;
+      if (pairN === 0) {
+        pairwise.push({ a: A, b: B, kappa: null, n: 0 });
+        continue;
+      }
+
+      // 관측 일치 Po
+      let agree = 0;
+      const countA = new Map(CATEGORIES.map(c => [c, 0]));
+      const countB = new Map(CATEGORIES.map(c => [c, 0]));
+      for (const { la, lb } of shared) {
+        if (la === lb) agree++;
+        if (countA.has(la)) countA.set(la, countA.get(la) + 1);
+        if (countB.has(lb)) countB.set(lb, countB.get(lb) + 1);
+      }
+      const Po = agree / pairN;
+
+      // 기대 일치 Pe = Σ_c (nA_c/n) * (nB_c/n)
+      let pairPe = 0;
+      for (const c of CATEGORIES) {
+        pairPe += (countA.get(c) / pairN) * (countB.get(c) / pairN);
+      }
+
+      let pairKappa = null;
+      if (1 - pairPe !== 0) {
+        pairKappa = Math.round(((Po - pairPe) / (1 - pairPe)) * 10000) / 10000;
+      }
+
+      pairwise.push({ a: A, b: B, kappa: pairKappa, n: pairN });
+    }
+  }
+
+  // ─── raw_agreement ────────────────────────────────────────────────────────────
+  // 다중 라벨 리뷰 중 모든 평가자 라벨이 동일한 비율
+  let fullAgree = 0;
+  for (const [, annotMap] of multiReviews) {
+    const vals = [...annotMap.values()];
+    if (vals.every(v => v === vals[0])) fullAgree++;
+  }
+  const raw_agreement = Math.round((fullAgree / N) * 10000) / 10000;
+
+  return jsonResponse({
+    set: set_id,
+    n_reviews_multi: N,
+    annotators,
+    fleiss_kappa,
+    interpretation,
+    pairwise,
+    raw_agreement,
+    class_dist: classDist,
+  }, 200, cors);
 }
 
 // --- 시그니처 ---
