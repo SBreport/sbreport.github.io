@@ -1775,6 +1775,24 @@ onMounted(() => {
         </button>
       </div>
 
+      <!-- ── 라벨링이란? 공통 설명 카드 (스프린트·IAA 항상 표시) ──────── -->
+      <div class="shrink-0 bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2.5 flex flex-col gap-1.5 text-xs text-gray-600 dark:text-slate-300">
+        <p class="leading-snug">
+          <span class="font-semibold text-gray-800 dark:text-slate-100">라벨링이란?</span>
+          모은 실제 후기를 사람이 4가지로 분류(진짜손님 / 광고 / AI / 모름)하는 작업.
+        </p>
+        <ul class="flex flex-col gap-0.5 pl-0 leading-snug text-gray-500 dark:text-slate-400">
+          <li class="flex gap-1.5">
+            <span class="font-semibold text-gray-700 dark:text-slate-300 shrink-0">스프린트</span>
+            <span>— 혼자 후기를 하나씩 분류해서 <em>정답지</em>를 만든다.</span>
+          </li>
+          <li class="flex gap-1.5">
+            <span class="font-semibold text-gray-700 dark:text-slate-300 shrink-0">IAA</span>
+            <span>— 여러 명이 같은 후기를 따로 분류 → <em>서로 얼마나 일치하는지</em>로 그 정답지가 믿을 만한지 검증한다. (혼자 매긴 답은 주관일 수 있으니까.)</span>
+          </li>
+        </ul>
+      </div>
+
       <!-- ── 라벨링 > 스프린트 ──────────────────────────────────────────── -->
       <template v-if="activeLabelingTab === 'sprint'">
       <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -2047,36 +2065,16 @@ onMounted(() => {
       <template v-else-if="activeLabelingTab === 'iaa'">
       <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4">
 
-        <!-- IAA 설명 카드 -->
-        <details class="shrink-0 bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded-lg" open>
-          <summary class="px-3 py-2 cursor-pointer select-none text-xs font-semibold text-gray-700 dark:text-slate-200 list-none flex items-center justify-between">
-            <span>IAA(평가자 간 일치도)란?</span>
-            <span class="text-gray-400 dark:text-slate-500 font-normal text-[11px]">접기/펼치기</span>
-          </summary>
-          <div class="px-3 pb-3 flex flex-col gap-2 border-t border-gray-200 dark:border-slate-700 pt-2">
-            <p class="text-xs text-gray-600 dark:text-slate-300 leading-relaxed">
-              같은 후기 묶음을 여러 연구원이 <em>각자 따로</em> 4분류(진짜손님 / 사람마케팅 / AI조립 / 모름)하고,
-              <strong class="text-gray-800 dark:text-slate-100">서로 얼마나 일치하는지</strong>를 숫자(κ, 카파)로 재는 것.
-            </p>
-            <ul class="flex flex-col gap-1 text-xs text-gray-500 dark:text-slate-400 leading-relaxed pl-0">
-              <li class="flex gap-1.5">
-                <span class="shrink-0 font-semibold text-gray-600 dark:text-slate-300">왜?</span>
-                <span>한 사람 라벨만으론 그 사람 주관일 수 있음. 여러 명이 비슷하게 분류하면 그 기준이 <em>믿을 만하다</em>는 근거가 됨.
-                  <strong class="text-emerald-600 dark:text-emerald-400">(κ ≥ 0.6이면 신뢰 가능 수준)</strong>
-                </span>
-              </li>
-              <li class="flex flex-col gap-0.5">
-                <span class="font-semibold text-gray-600 dark:text-slate-300">진행 방법:</span>
-                <ol class="flex flex-col gap-0.5 pl-4 list-decimal">
-                  <li>여기서 <strong class="text-gray-700 dark:text-slate-200">세트 만들기</strong> (평가할 후기 묶음 생성)</li>
-                  <li>연구원들이 <code class="font-mono text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-1 rounded">/label</code> 페이지에서 접근코드 + 닉네임으로 들어가 각자 분류</li>
-                  <li><strong class="text-gray-700 dark:text-slate-200">결과보기</strong> → Fleiss κ(일치도) 확인</li>
-                </ol>
-                <p class="text-[11px] text-gray-400 dark:text-slate-500 pl-4">※ κ는 <strong>2명 이상</strong>이 같은 세트를 라벨해야 계산됨.</p>
-              </li>
-            </ul>
-          </div>
-        </details>
+        <!-- IAA 운영 안내 (정의는 위 공통 카드 참조, 여기선 진행 방법만) -->
+        <div class="shrink-0 bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2.5 flex flex-col gap-1 text-xs text-gray-500 dark:text-slate-400">
+          <p class="font-semibold text-gray-700 dark:text-slate-300 mb-0.5">진행 방법</p>
+          <ol class="flex flex-col gap-0.5 pl-4 list-decimal leading-snug">
+            <li>여기서 <strong class="text-gray-700 dark:text-slate-200">세트 만들기</strong> (평가할 후기 묶음 생성)</li>
+            <li>연구원들이 <code class="font-mono text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-1 rounded">/label</code> 페이지에서 접근코드 + 닉네임으로 들어가 각자 분류</li>
+            <li><strong class="text-gray-700 dark:text-slate-200">결과보기</strong> → Fleiss κ(일치도) 확인 — <strong class="text-emerald-600 dark:text-emerald-400">κ ≥ 0.6이면 신뢰 가능</strong></li>
+          </ol>
+          <p class="text-[11px] text-gray-400 dark:text-slate-500 pl-4 mt-0.5">※ κ는 <strong>2명 이상</strong>이 같은 세트를 라벨해야 계산됨.</p>
+        </div>
 
         <!-- 안내 배너 -->
         <div class="shrink-0 text-xs text-gray-500 dark:text-slate-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded px-3 py-2">
