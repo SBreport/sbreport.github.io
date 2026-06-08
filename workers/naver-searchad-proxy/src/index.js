@@ -5971,6 +5971,14 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     t = t.replace(/\d+\s*(cc|ml|샷|바이알|mg|회차|회|%|개월|주|번)/g, '');
     // 4. 독립된 3자리 이상 숫자 (앞 규칙에서 남은 가격류)
     t = t.replace(/\b\d{3,}\b/g, '');
+    // 5. 이름 제외(includeNames=false)면 본보기의 담당자 실명도 제거(직함만 남김).
+    //    본보기 실제 후기에 든 실명(예: "박채이 실장님")을 LLM이 베껴오는 잔여 누수 차단.
+    if (!includeNames) {
+      const NAME_DESC = /^(의사|여의사|간호사|관리사|데스크|코디|인포|총괄|대표|부원장|지점|병원|상담|담당|직원|분들|여자|여성|남자|우리|그분|메인|모든|모두|다른|여기|이곳|그리고|그래서|그런데|근데|진짜|정말|항상|특히)$/;
+      const NAME_VSUF = /(시는|주시는|시구|는데|어요|아요|으며|으신|셨|다는|라서|해서|했던|하시고|하셔서|하고|하신|시고|셔서|아서|어서|았고|었고)$/;
+      t = t.replace(/([가-힣]{2,3})\s*(원장님|실장님|선생님|쌤|대표님|상담실장)/g, (full, name, title) =>
+        (NAME_DESC.test(name) || NAME_VSUF.test(name)) ? full : title);
+    }
     // 연속 공백 정리 (줄바꿈 보존)
     t = t.replace(/[^\S\n]{2,}/g, ' ').trim();
     return t;
