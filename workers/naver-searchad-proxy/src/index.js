@@ -184,6 +184,10 @@ export default {
     if (samplesDeleteMatch && request.method === 'POST') {
       return handleDeleteSamples(request, env, corsHeaders, samplesDeleteMatch[1]);
     }
+    const samplesDeleteAllMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/samples\/delete-all$/);
+    if (samplesDeleteAllMatch && request.method === 'POST') {
+      return handleDeleteAllSamples(request, env, corsHeaders, samplesDeleteAllMatch[1]);
+    }
     const samplesMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/samples$/);
     if (samplesMatch && request.method === 'GET') {
       return handleGetSamples(request, env, corsHeaders, samplesMatch[1]);
@@ -6472,6 +6476,54 @@ async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
     const result = await env.DB.prepare(
       `DELETE FROM place_generated_samples WHERE id IN (${placeholders}) AND place_row_id = ?`
     ).bind(...ids, placeRowId).run();
+    deleted = result.meta?.changes ?? 0;
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ ok: true, deleted }, 200, cors);
+}
+
+/**
+ * POST /api/places/:id/samples/delete-all  (researcher/tester 이상)
+ * 해당 지점의 생성 예시 전량 삭제.
+ * admin/tester는 모든 지점, researcher는 본인 소유 지점만.
+ */
+async function handleDeleteAllSamples(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireTester(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인 (admin/tester는 전체, researcher는 자기 지점만)
+  let placeOwnerRow;
+  try {
+    placeOwnerRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeOwnerRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  {
+    const isAdmin = authResult.user.role === 'admin';
+    const isTester = authResult.user.role === 'tester';
+    if (!isAdmin && !isTester && placeOwnerRow.user_id !== authResult.user.id) {
+      return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+    }
+  }
+
+  let deleted = 0;
+  try {
+    const result = await env.DB.prepare(
+      'DELETE FROM place_generated_samples WHERE place_row_id = ?'
+    ).bind(placeRowId).run();
     deleted = result.meta?.changes ?? 0;
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);

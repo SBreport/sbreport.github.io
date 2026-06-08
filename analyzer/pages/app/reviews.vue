@@ -168,6 +168,8 @@ const multiCsvLoading = ref(false)
 const multiCsvProgress = ref<{ placeIndex: number; placeTotal: number; rowCount: number } | null>(null)
 const multiSamplesCsvLoading = ref(false)
 const multiSamplesCsvProgress = ref<{ placeIndex: number; placeTotal: number; rowCount: number } | null>(null)
+const multiSampleDeleteLoading = ref(false)
+const multiSampleDeleteProgress = ref<{ placeIndex: number; placeTotal: number } | null>(null)
 
 // 삭제
 const deleteConfirmOpen = ref(false)
@@ -2004,6 +2006,63 @@ async function exportMultiSamplesCsv() {
   }
 }
 
+// ─── 선택 지점 생성 예시 일괄 삭제 ──────────────────────────────────────────
+
+async function deleteMultiSamples() {
+  if (checkedPlaces.value.length === 0 || multiSampleDeleteLoading.value) return
+
+  const targets = [...checkedPlaces.value]
+  const confirmed = window.confirm(
+    `선택한 ${targets.length}개 지점의 생성 예시를 모두 삭제합니다. 되돌릴 수 없습니다. 계속할까요?`
+  )
+  if (!confirmed) return
+
+  multiSampleDeleteLoading.value = true
+  multiSampleDeleteProgress.value = { placeIndex: 0, placeTotal: targets.length }
+
+  let totalDeleted = 0
+  const failedPlaces: string[] = []
+
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      const place = targets[i]
+      multiSampleDeleteProgress.value = { placeIndex: i + 1, placeTotal: targets.length }
+
+      try {
+        const res = await fetch(`${WORKER_BASE}/api/places/${place.id}/samples/delete-all`, {
+          method: 'POST',
+          headers: authHeaders(),
+        })
+        if (!res.ok) {
+          console.warn(`[deleteMultiSamples] ${placeName(place)} 실패: ${res.status}`)
+          failedPlaces.push(placeName(place))
+          continue
+        }
+        const data = await res.json() as { deleted?: number }
+        totalDeleted += data.deleted ?? 0
+      } catch (e: unknown) {
+        console.warn(`[deleteMultiSamples] ${placeName(place)} 예외:`, e)
+        failedPlaces.push(placeName(place))
+      }
+    }
+
+    if (failedPlaces.length === 0) {
+      collectToast.value = {
+        type: 'success',
+        message: `${targets.length}개 지점에서 생성 예시 ${totalDeleted}건 삭제됨`,
+      }
+    } else {
+      collectToast.value = {
+        type: 'warn',
+        message: `생성 예시 ${totalDeleted}건 삭제됨, ${failedPlaces.length}개 지점 실패: ${failedPlaces[0]}`,
+      }
+    }
+  } finally {
+    multiSampleDeleteLoading.value = false
+    multiSampleDeleteProgress.value = null
+  }
+}
+
 // ─── 삭제 ────────────────────────────────────────────────────────────────────
 
 function openDeleteConfirm() {
@@ -2306,6 +2365,20 @@ onUnmounted(() => {
             :disabled="checkedPlaces.length === 0 || multiSamplesCsvLoading || multiBackfillRunning"
             :loading="multiSamplesCsvLoading"
             @click="exportMultiSamplesCsv"
+          />
+          <!-- 생성 예시 일괄 삭제 버튼: researcher 이상 허용 -->
+          <UButton
+            :label="multiSampleDeleteLoading
+              ? (multiSampleDeleteProgress ? `삭제 중... (${multiSampleDeleteProgress.placeIndex}/${multiSampleDeleteProgress.placeTotal})` : '삭제 중...')
+              : `선택 지점 생성 예시 삭제 (${checkedPlaces.length})`"
+            size="xs"
+            color="error"
+            variant="soft"
+            icon="i-heroicons-sparkles"
+            class="w-full"
+            :disabled="multiSampleDeleteLoading || multiBackfillRunning"
+            :loading="multiSampleDeleteLoading"
+            @click="deleteMultiSamples"
           />
           <!-- 삭제 버튼: tester 차단 -->
           <UButton
