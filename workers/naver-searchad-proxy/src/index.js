@@ -7134,7 +7134,47 @@ async function handleBlindTestRatings(request, env, corsHeaders) {
     await env.DB.batch(batch);
   }
 
-  return jsonResponse({ saved: batch.length, skipped }, 200, corsHeaders);
+  // ─── 채점 결과 + 해답 (제출 후 공개) ────────────────────────────────────────
+  // 유효 점수(1~5)인 항목만 대상으로 한다.
+  const validRatings = ratings.filter(r => {
+    const v = Number(r.rating);
+    return Number.isInteger(v) && v >= 1 && v <= 5 && r.item_id;
+  });
+
+  let summary = { total: 0, correct: 0, correct_human: 0, correct_ai: 0, abstain: 0, wrong: 0 };
+  let reveal = [];
+
+  if (validRatings.length > 0) {
+    const validIds = validRatings.map(r => r.item_id);
+    const ph2 = validIds.map(() => '?').join(',');
+    const sourceRows = await env.DB.prepare(
+      `SELECT id, source FROM blind_test_items WHERE id IN (${ph2})`
+    ).bind(...validIds).all();
+    const sourceMap = {};
+    for (const row of (sourceRows.results ?? [])) {
+      sourceMap[row.id] = row.source;
+    }
+
+    let correct_human = 0, correct_ai = 0, abstain = 0;
+    for (const r of validRatings) {
+      const source = sourceMap[r.item_id];
+      if (!source) continue; // 이상값 제외
+      const rating = Number(r.rating);
+      reveal.push({ item_id: r.item_id, source, rating });
+      if (rating === 3) {
+        abstain++;
+      } else if ((rating >= 4 && source === 'real') || (rating <= 2 && source === 'gen')) {
+        correct_human += (source === 'real') ? 1 : 0;
+        correct_ai    += (source === 'gen')  ? 1 : 0;
+      }
+    }
+    const total = reveal.length;
+    const correct = correct_human + correct_ai;
+    const wrong = total - correct - abstain;
+    summary = { total, correct, correct_human, correct_ai, abstain, wrong };
+  }
+
+  return jsonResponse({ saved: batch.length, skipped, summary, reveal }, 200, corsHeaders);
 }
 
 // GET /api/blind-test/results?pool= — 집계 결과 (researcher/admin)

@@ -44,10 +44,29 @@ const items = ref<RateItem[]>([])
 const ratings = ref<RatingEntry[]>([])
 const noteOpenIds = ref<Set<string>>(new Set())
 
+// ─── 채점 결과 타입 ───────────────────────────────────────────────────────────
+
+interface RevealItem {
+  item_id: string
+  source: 'real' | 'gen'
+  rating: number
+}
+
+interface Summary {
+  total: number
+  correct: number
+  correct_human: number
+  correct_ai: number
+  abstain: number
+  wrong: number
+}
+
 // 제출
 const submitLoading = ref(false)
 const submitError = ref<string | null>(null)
 const savedCount = ref(0)
+const summary = ref<Summary | null>(null)
+const reveal = ref<RevealItem[]>([])
 
 // ─── localStorage 닉네임 기억 ─────────────────────────────────────────────────
 
@@ -151,8 +170,10 @@ async function submit(force = false) {
       submitError.value = `제출 실패 (${res.status}). 다시 시도해 주세요.`
       return
     }
-    const data = await res.json() as { saved: number; skipped: number }
+    const data = await res.json() as { saved: number; skipped: number; summary?: Summary; reveal?: RevealItem[] }
     savedCount.value = data.saved
+    summary.value = data.summary ?? null
+    reveal.value = data.reveal ?? []
     phase.value = 'done'
   } catch {
     submitError.value = '서버에 연결할 수 없습니다. 다시 시도해 주세요.'
@@ -327,24 +348,69 @@ const RATING_LABELS: Record<number, { short: string; desc: string }> = {
       </div>
 
       <!-- ── 완료 화면 ─────────────────────────────────────────── -->
-      <div v-else-if="phase === 'done'" class="w-full max-w-sm flex flex-col gap-4">
-        <div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-6 flex flex-col items-center gap-4 text-center">
-          <div class="w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-            <svg class="w-6 h-6 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-          <div>
-            <p class="text-sm font-semibold text-gray-800 dark:text-slate-100">평가 제출 완료</p>
-            <p class="text-xs text-gray-500 dark:text-slate-400 mt-1">{{ savedCount }}건이 저장되었습니다. 감사합니다!</p>
-          </div>
-          <button
-            class="w-full bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-700 dark:text-slate-300 text-sm font-medium py-2.5 rounded transition-colors"
-            @click="loadMore"
-          >
-            더 평가하기
-          </button>
+      <div v-else-if="phase === 'done'" class="w-full max-w-2xl flex flex-col gap-4 pb-6">
+
+        <!-- 요약 카드 -->
+        <div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-5 flex flex-col gap-1.5">
+          <p class="text-sm font-semibold text-gray-800 dark:text-slate-100">
+            총 {{ summary?.total ?? savedCount }}개 중 {{ summary?.correct ?? 0 }}개 맞췄습니다
+          </p>
+          <p class="text-xs text-gray-500 dark:text-slate-400">
+            (AI 원고 {{ summary?.correct_ai ?? 0 }}개 + 사람 원고 {{ summary?.correct_human ?? 0 }}개) · 보류 {{ summary?.abstain ?? 0 }}개
+          </p>
         </div>
+
+        <!-- 해답 리스트 -->
+        <div v-if="reveal.length > 0" class="flex flex-col gap-2">
+          <p class="text-xs font-medium text-gray-500 dark:text-slate-400">해답</p>
+          <div
+            v-for="rv in reveal"
+            :key="rv.item_id"
+            class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-4 py-3 flex flex-col gap-2"
+          >
+            <!-- 본문 (2줄 클램프) -->
+            <p class="text-sm text-gray-800 dark:text-slate-100 leading-relaxed line-clamp-2">
+              {{ items.find(it => it.id === rv.item_id)?.body ?? rv.item_id }}
+            </p>
+            <!-- 배지 행 -->
+            <div class="flex items-center gap-2 flex-wrap">
+              <!-- 내 점수 -->
+              <span class="inline-flex items-center px-2 py-0.5 text-xs rounded border border-gray-300 dark:border-slate-600 text-gray-600 dark:text-slate-300 bg-gray-50 dark:bg-slate-700">
+                내 점수 {{ rv.rating }}
+              </span>
+              <!-- 실제 출처 -->
+              <span
+                v-if="rv.source === 'gen'"
+                class="inline-flex items-center px-2 py-0.5 text-xs rounded font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-700"
+              >AI</span>
+              <span
+                v-else
+                class="inline-flex items-center px-2 py-0.5 text-xs rounded font-medium bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700"
+              >사람</span>
+              <!-- 판정 -->
+              <span
+                v-if="rv.rating === 3"
+                class="inline-flex items-center px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 border border-gray-200 dark:border-slate-600"
+              >보류 –</span>
+              <span
+                v-else-if="(rv.rating >= 4 && rv.source === 'real') || (rv.rating <= 2 && rv.source === 'gen')"
+                class="inline-flex items-center px-2 py-0.5 text-xs rounded font-medium bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700"
+              >정답 ✓</span>
+              <span
+                v-else
+                class="inline-flex items-center px-2 py-0.5 text-xs rounded font-medium bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-700"
+              >오답 ✗</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 더 평가하기 -->
+        <button
+          class="w-full bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-700 dark:text-slate-300 text-sm font-medium py-2.5 rounded transition-colors"
+          @click="loadMore"
+        >
+          더 평가하기
+        </button>
       </div>
 
     </main>
