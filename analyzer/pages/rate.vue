@@ -95,7 +95,7 @@ async function start() {
   startLoading.value = true
   startError.value = null
   try {
-    const res = await fetch(`${WORKER_BASE}/api/blind-test/items?code=${encodeURIComponent(code)}`)
+    const res = await fetch(`${WORKER_BASE}/api/blind-test/items?code=${encodeURIComponent(code)}&pool=&nickname=${encodeURIComponent(nick)}`)
     const data = await res.json() as
       | { pool: string; items: RateItem[] }
       | { error: string }
@@ -188,6 +188,20 @@ async function loadMore() {
   phase.value = 'input'
   // 코드는 유지, 닉네임도 유지. 새 풀로 다시 GET
   await start()
+}
+
+// ─── 결과 정답률 코멘트 ────────────────────────────────────────────────────────
+function resultComment(correct: number, total: number): string {
+  if (total === 0) return ''
+  const pct = Math.round((correct / total) * 100)
+  if (pct >= 80) return '사람·AI 구별 고수!'
+  if (pct >= 50) return '헷갈릴 만했어요'
+  return 'AI가 사람을 이겼네요!'
+}
+
+function correctPct(correct: number, total: number): number {
+  if (total === 0) return 0
+  return Math.round((correct / total) * 100)
 }
 
 // ─── 점수 라벨 ────────────────────────────────────────────────────────────────
@@ -350,14 +364,28 @@ const RATING_LABELS: Record<number, { short: string; desc: string }> = {
       <!-- ── 완료 화면 ─────────────────────────────────────────── -->
       <div v-else-if="phase === 'done'" class="w-full max-w-2xl flex flex-col gap-4 pb-6">
 
-        <!-- 요약 카드 -->
-        <div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-5 flex flex-col gap-1.5">
-          <p class="text-sm font-semibold text-gray-800 dark:text-slate-100">
-            총 {{ summary?.total ?? savedCount }}개 중 {{ summary?.correct ?? 0 }}개 맞췄습니다
+        <!-- 결과 카드 (크게) -->
+        <div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-6 flex flex-col gap-3 text-center">
+          <!-- 큰 숫자 -->
+          <div class="flex flex-col gap-1">
+            <p class="text-4xl font-bold tabular-nums text-gray-900 dark:text-slate-50">
+              {{ summary?.correct ?? 0 }}<span class="text-2xl font-semibold text-gray-400 dark:text-slate-500"> / {{ summary?.total ?? savedCount }}</span>
+            </p>
+            <p class="text-lg font-semibold text-primary-600 dark:text-primary-400 tabular-nums">
+              {{ correctPct(summary?.correct ?? 0, summary?.total ?? savedCount) }}%
+            </p>
+          </div>
+          <!-- 한 줄 코멘트 -->
+          <p class="text-base font-medium text-gray-700 dark:text-slate-200">
+            {{ resultComment(summary?.correct ?? 0, summary?.total ?? savedCount) }}
           </p>
-          <p class="text-xs text-gray-500 dark:text-slate-400">
-            (AI 원고 {{ summary?.correct_ai ?? 0 }}개 + 사람 원고 {{ summary?.correct_human ?? 0 }}개) · 보류 {{ summary?.abstain ?? 0 }}개
-          </p>
+          <!-- 세부 항목 -->
+          <div v-if="summary" class="flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-slate-400 pt-1 border-t border-gray-100 dark:border-slate-700">
+            <span>사람 맞힘 <span class="font-medium text-gray-700 dark:text-slate-200">{{ summary.correct_human }}</span></span>
+            <span>AI 맞힘 <span class="font-medium text-gray-700 dark:text-slate-200">{{ summary.correct_ai }}</span></span>
+            <span>보류 <span class="font-medium text-gray-700 dark:text-slate-200">{{ summary.abstain }}</span></span>
+            <span>오답 <span class="font-medium text-red-500 dark:text-red-400">{{ summary.wrong }}</span></span>
+          </div>
         </div>
 
         <!-- 해답 리스트 -->

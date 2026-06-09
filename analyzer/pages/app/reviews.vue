@@ -3433,7 +3433,7 @@ onUnmounted(() => {
                       </th>
                       <!-- 자연도·slop (잠정·표면 통계 — 배치추이용, 개별 합불 판단 아님) -->
                       <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-28">
-                        <UTooltip text="자연도·slop — 표면 통계(자동 추정). 배치 추이·참고용이며 절대 기준 아님." :popper="{ placement: 'top' }">
+                        <UTooltip text="자연도: 사람이 쓴 후기처럼 자연스럽게 읽히는 정도(0~100). 높을수록 자연스러움. / slop: AI가 흔히 과하게 쓰는 표현이 몇 번 나왔는지. 낮을수록 좋음." :popper="{ placement: 'top' }">
                           <span class="cursor-default">자연도·slop</span>
                         </UTooltip>
                       </th>
@@ -3529,11 +3529,13 @@ onUnmounted(() => {
                                   : sample.naturalness >= 70
                                     ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
                                     : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
+                                title="사람이 쓴 후기처럼 자연스럽게 읽히는 정도(0~100). 높을수록 자연스러움."
                               >자연도 {{ sample.naturalness }}</span>
                               <!-- slop 수 배지 (>0 이면 amber, 0이면 생략) -->
                               <span
                                 v-if="sample.slop_hits != null && sample.slop_hits > 0"
                                 class="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium tabular-nums whitespace-nowrap bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                                title="AI가 흔히 과하게 쓰는 표현이 몇 번 나왔는지. 낮을수록 좋음."
                               >slop {{ sample.slop_hits }}</span>
                             </div>
                             <!-- 상위 slop 표현 (있을 때만) -->

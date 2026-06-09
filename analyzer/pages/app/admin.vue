@@ -48,6 +48,10 @@ type SortDir = 'asc' | 'desc'
 
 interface BlindPoolResult {
   pool: string
+  pool_real: number
+  pool_gen: number
+  per_rater_real: number
+  per_rater_gen: number
   n_real: number
   n_gen: number
   total: number
@@ -1521,27 +1525,32 @@ onMounted(() => {
           <p class="text-[11px] text-gray-400 dark:text-slate-500">전체(글로벌) 리뷰 풀에서 무작위 샘플링합니다. 지점 필터 없음.</p>
 
           <!-- n_real / n_gen 입력 -->
-          <div class="flex gap-4 flex-wrap">
-            <div class="flex flex-col gap-1">
-              <label class="text-xs text-gray-500 dark:text-slate-400">진짜 후기 수</label>
-              <input
-                v-model.number="blindNReal"
-                type="number"
-                min="1"
-                max="100"
-                class="w-24 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
-              />
+          <div class="flex flex-col gap-2">
+            <label class="text-xs font-medium text-gray-600 dark:text-slate-300">평가자당 테스트 건수(진짜/생성)</label>
+            <div class="flex gap-4 flex-wrap">
+              <div class="flex flex-col gap-1">
+                <label class="text-[11px] text-gray-400 dark:text-slate-500">진짜 후기</label>
+                <input
+                  v-model.number="blindNReal"
+                  type="number"
+                  min="1"
+                  max="100"
+                  class="w-24 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-[11px] text-gray-400 dark:text-slate-500">생성 후기</label>
+                <input
+                  v-model.number="blindNGen"
+                  type="number"
+                  min="1"
+                  max="100"
+                  class="w-24 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
             </div>
-            <div class="flex flex-col gap-1">
-              <label class="text-xs text-gray-500 dark:text-slate-400">생성 후기 수</label>
-              <input
-                v-model.number="blindNGen"
-                type="number"
-                min="1"
-                max="100"
-                class="w-24 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
-              />
-            </div>
+            <p class="text-[11px] text-gray-400 dark:text-slate-500">풀은 2배수로 생성됩니다(예: 15 → 풀 30). 평가자마다 서로 다른 5:5 문항을 봅니다.</p>
+            <p class="text-[11px] text-amber-600 dark:text-amber-400">생성물이 있는 지점에서만 추출됩니다.</p>
           </div>
 
           <!-- gen_since 필터 -->
@@ -1577,7 +1586,8 @@ onMounted(() => {
               <span class="font-medium text-green-700 dark:text-green-300">풀 생성 완료</span>
               <span class="text-green-600 dark:text-green-400 font-mono text-[11px]">{{ blindPoolResult.pool }}</span>
               <span class="text-green-600 dark:text-green-400">
-                진짜 {{ blindPoolResult.n_real }}건 · 생성 {{ blindPoolResult.n_gen }}건 · 합계 {{ blindPoolResult.total }}건
+                풀 {{ blindPoolResult.pool_real ?? blindPoolResult.n_real }}+{{ blindPoolResult.pool_gen ?? blindPoolResult.n_gen }} 생성 /
+                평가자당 {{ blindPoolResult.per_rater_real ?? blindPoolResult.n_real }}+{{ blindPoolResult.per_rater_gen ?? blindPoolResult.n_gen }}
               </span>
               <span v-if="blindGenSince" class="text-green-600 dark:text-green-400 text-[11px]">
                 생성물 필터: {{ blindGenSince }} 이후
