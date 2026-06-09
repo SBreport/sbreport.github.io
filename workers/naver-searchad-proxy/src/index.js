@@ -5,7 +5,11 @@ import { scoreNaturalness } from './naturalness-score.js';
 import naturalnessProfile from './naturalness-profile.json';
 
 // 환각 탐지기 (soft-flag 조기경보 — 재생성/차단 아님)
-import { detectHallucination } from './hallucination-detect.js';
+import { detectHallucination, TREATMENT_LEXICON } from './hallucination-detect.js';
+
+// 시술 분포 추출용: TREATMENT_LEXICON + '레이저' 포함한 확장 세트
+// (TREATMENT_LEXICON에 '레이저토닝'·'다이오드레이저' 등 복합어가 있지만 단독 '레이저'는 누락)
+const PROCEDURE_TERMS = new Set([...TREATMENT_LEXICON, '레이저']);
 
 // 정확 매칭 + 접두사 매칭 분리: prefix 매칭만 쓰면 도메인 위조에 취약함
 // (예: https://sbreport.github.io.evil.com 이 startsWith로 통과되는 문제)
@@ -5669,6 +5673,56 @@ function humanizeBody(text, level = 'medium') {
 }
 
 /**
+ * 지점 실제 후기에서 시술 분포를 추출한다.
+ *
+ * - place_reviews.body 최대 1000건 로드.
+ * - PROCEDURE_TERMS 각 시술어별 포함 리뷰 수 카운트(같은 리뷰 내 동일 시술어는 1회).
+ * - noneRate = 어떤 시술어도 없는 리뷰 비율.
+ * - count >= 2 인 시술만 반환(희귀 오탐 제거), 빈도 내림차순.
+ *
+ * @param {object} env   Cloudflare Workers 환경 바인딩
+ * @param {string|number} placeRowId  review_places.id
+ * @returns {{ noneRate: number, procedures: Array<{name: string, count: number}> }}
+ */
+async function extractProcedureDistribution(env, placeRowId) {
+  const { results } = await env.DB.prepare(
+    `SELECT body FROM place_reviews WHERE place_row_id = ? AND body IS NOT NULL LIMIT 1000`
+  ).bind(placeRowId).all();
+
+  const rows = results ?? [];
+  const total = rows.length;
+  if (total === 0) return { noneRate: 1, procedures: [] };
+
+  // 시술어별 등장 리뷰 수 집계
+  const counts = new Map(); // term → count
+  let noneCount = 0;
+
+  for (const row of rows) {
+    const body = row.body;
+    let hasProcedure = false;
+    for (const term of PROCEDURE_TERMS) {
+      if (body.includes(term)) {
+        counts.set(term, (counts.get(term) ?? 0) + 1);
+        hasProcedure = true;
+        // 같은 시술어를 동일 리뷰에서 중복 카운트하지 않으므로 continue 불필요
+        // (이미 Map.set으로 1회 카운트됨)
+      }
+    }
+    if (!hasProcedure) noneCount++;
+  }
+
+  const noneRate = noneCount / total;
+
+  // count >= 2 인 시술만 포함, 빈도 내림차순
+  const procedures = [...counts.entries()]
+    .filter(([, c]) => c >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }));
+
+  return { noneRate, procedures };
+}
+
+/**
  * POST /api/places/:id/generate-samples  (researcher/tester 이상)
  * fact pool 추출 → few-shot 표본 선정 → 스타일 조합 → GPT 생성 → DB 저장 → 반환.
  * tester는 소유권 우회(전 지점 접근).
@@ -5767,6 +5821,31 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
+
+  // ── 시술 분포 추출 (지점 실제 후기 기반) ──────────────────────────────────
+  // noneRate: 무시술 후기 비율 / procedures: count>=2 시술, 빈도순
+  let procDist = { noneRate: 1, procedures: [] };
+  try {
+    procDist = await extractProcedureDistribution(env, placeRowId);
+  } catch {
+    // 분포 추출 실패 시 전부 null(무시술)로 폴백 — 생성은 계속
+  }
+
+  // ── 배치 시술 추첨 (count개 슬롯 각각) ──────────────────────────────────
+  // Math.random() < noneRate → null(무시술)
+  // 아니면 procedures를 count 가중으로 1개 샘플링
+  const { noneRate: _noneRate, procedures: _procedures } = procDist;
+  const _totalProcCount = _procedures.reduce((s, p) => s + p.count, 0);
+  function sampleProcedure() {
+    if (_procedures.length === 0 || Math.random() < _noneRate) return null;
+    let r = Math.random() * _totalProcCount;
+    for (const p of _procedures) {
+      r -= p.count;
+      if (r <= 0) return p.name;
+    }
+    return _procedures[_procedures.length - 1].name;
+  }
+  const itemProcedures = Array.from({ length: count }, () => sampleProcedure());
 
   // ── 스타일 본보기 풀: 각 생성 샘플의 말투·길이·호흡 레퍼런스 ──
   // 우선순위: (a) human_label='human' → (b) 광고/AI 아닌 것(라벨없음 포함), length>=20
@@ -5931,9 +6010,13 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   // factPool을 담당자명(staffNames)과 그 외 사실(otherFacts)로 분리.
   // 담당자명은 전체 샘플의 STAFF_NAME_RATE(≈30%)에만, 이름마다 최대 1회 배정.
   // otherFacts는 샘플 간 주 fact(첫 번째로 배정되는 fact)를 공유하지 않도록 강제.
+  // ★ 시술어는 이제 추첨(itemProcedures)이 담당하므로 otherFacts에서 제거.
+  //   → otherFacts = 시설·특징·분위기 등 비-시술 사실만.
   const STAFF_NAME_RE = /(실장님|원장님|선생님|쌤|대표님|상담실장)$/;
   const staffNames = factPool.filter(f => STAFF_NAME_RE.test(f));
-  const otherFacts = factPool.filter(f => !STAFF_NAME_RE.test(f));
+  // 비-시술 판단: 어떤 PROCEDURE_TERMS 항목도 포함하지 않으면 비-시술
+  const isProcedureFact = (f) => { for (const t of PROCEDURE_TERMS) { if (f.includes(t)) return true; } return false; };
+  const otherFacts = factPool.filter(f => !STAFF_NAME_RE.test(f) && !isProcedureFact(f));
 
   // ★이름 제외(includeNames=false)면 전역 [허용 사실] 목록에서도 담당자명을 빼고
   // 명시적으로 실명 금지를 지시한다. (per-item 미배정만으론 LLM이 허용목록·본보기의 이름을 갖다 씀 → 버그 수정)
@@ -6008,8 +6091,9 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
    * @param {string} exampleText 본보기 본문 (마스킹 전 원본)
    * @param {string|null} conflictHint 재생성 시 충돌 본문 힌트 (null이면 최초 생성)
    * @param {boolean} resetAssigned 재생성 시 assigned 추적 무시 여부
+   * @param {string|null} itemProcedure 추첨된 시술명 (null이면 무시술 후기)
    */
-  function buildItemLine(i, style, exampleText, conflictHint = null, resetAssigned = false) {
+  function buildItemLine(i, style, exampleText, conflictHint = null, resetAssigned = false, itemProcedure = null) {
     // 환각 방지: 프롬프트에 넣기 전 본보기 구체 수치 마스킹
     const maskedExample = maskExemplarSpecifics(exampleText);
     // otherFacts 중 이 본보기에 없고, 주 fact 중복 아닌 것 우선
@@ -6060,12 +6144,17 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
       ? ` [주의: 아래 문장들과 도입·문장구조를 반드시 다르게 써라: ${conflictHint}]`
       : '';
 
-    return `[${i + 1}] 말투 본보기: "${maskedExample}" / 이번 리뷰에 담을 사실(구체 내용만, 칭찬어 금지): ${factsStr}${lengthHint} → 본보기 말투·길이 유지, 내용은 완전히 새로${conflictNote}`;
+    // 시술 앵커: 추첨 결과에 따라 시술 중심 또는 무시술 일반 경험 지시
+    const procedureAnchor = itemProcedure
+      ? ` [이 후기의 시술: ${itemProcedure} — 이 시술 받은 경험 중심으로. (다른 시술명은 쓰지 말 것.)]`
+      : ` [이 후기는 특정 시술보다 서비스·분위기·응대·접근성 등 일반 경험 중심으로. (특정 시술명 억지로 넣지 말 것.)]`;
+
+    return `[${i + 1}] 말투 본보기: "${maskedExample}" / 이번 리뷰에 담을 사실(구체 내용만, 칭찬어 금지): ${factsStr}${lengthHint}${procedureAnchor} → 본보기 말투·길이 유지, 내용은 완전히 새로${conflictNote}`;
   }
 
   const itemLines = styleAssignments.map((style, i) => {
     const example = getExemplarForIdx(i);
-    return buildItemLine(i, style, example.body);
+    return buildItemLine(i, style, example.body, null, false, itemProcedures[i]);
   }).join('\n\n');
 
   const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 절대 쓰지 말 것]
@@ -6124,7 +6213,7 @@ ${itemLines}
       // 다른 본보기 선택 (풀에서 가능한 한 기존과 다른 것)
       const altExemplarIdx = (ci + Math.floor(shuffledExamples.length / 2)) % shuffledExamples.length;
       const altExemplar = shuffledExamples[altExemplarIdx] ?? getExemplarForIdx(ci);
-      regenLines.push(buildItemLine(ci, styleAssignments[ci], altExemplar.body, conflictHint, true));
+      regenLines.push(buildItemLine(ci, styleAssignments[ci], altExemplar.body, conflictHint, true, itemProcedures[ci]));
     }
 
     const regenUserPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 절대 쓰지 말 것]
