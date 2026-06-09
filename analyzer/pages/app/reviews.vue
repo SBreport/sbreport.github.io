@@ -292,7 +292,7 @@ const sampleProvider = ref<'openai' | 'anthropic' | 'xai'>('anthropic')
 const sampleModel = ref<string>('claude-sonnet-4-6')
 const sampleLength = ref<'auto' | 'short' | 'medium' | 'long'>('auto')
 const sampleIncludeNames = ref(false)
-const sampleHumanizeLevel = ref<'off' | 'light' | 'medium' | 'strong'>('medium')
+const sampleHumanizeLevel = ref<'auto' | 'off' | 'light' | 'medium' | 'strong'>('medium')
 const samples = ref<ReviewSample[]>([])
 const samplesStatus = ref<'idle' | 'loading' | 'generating' | 'empty' | 'error' | 'done'>('idle')
 const samplesError = ref<string | null>(null)
@@ -3158,6 +3158,7 @@ onUnmounted(() => {
                     class="h-7 px-2 py-0 text-xs border border-gray-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 focus:outline-none focus:border-primary-400 cursor-pointer"
                     :disabled="samplesGenerating"
                   >
+                    <option value="auto">자동(랜덤)</option>
                     <option value="off">휴머나이즈 끔</option>
                     <option value="light">약</option>
                     <option value="medium">중</option>

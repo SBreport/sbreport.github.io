@@ -5565,6 +5565,20 @@ const HUMANIZE_LEVEL_PARAMS = {
 };
 
 /**
+ * 'auto' 모드용 가중 랜덤 강도 선정.
+ * 분포: light 40% · medium 35% · off 15% · strong 10%
+ * strong 과다 방지를 위해 의도적으로 낮게 설정.
+ * @returns {'off'|'light'|'medium'|'strong'}
+ */
+function pickAutoHumanizeLevel() {
+  const r = Math.random();
+  if (r < 0.40) return 'light';
+  if (r < 0.75) return 'medium';
+  if (r < 0.90) return 'off';
+  return 'strong';
+}
+
+/**
  * 알려진 캐주얼 구어 변형 맵 (첫 매치 1개만 치환).
  * 문장 의미를 바꾸지 않는 표기 변형만 포함.
  */
@@ -5719,8 +5733,9 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   // includeNames 파싱: boolean (기본 true)
   const includeNames = body?.includeNames !== false;
 
-  // humanizeLevel 파싱: 'off' | 'light' | 'medium' | 'strong' (기본 'medium')
-  const VALID_HUMANIZE_LEVELS = ['off', 'light', 'medium', 'strong'];
+  // humanizeLevel 파싱: 'off' | 'light' | 'medium' | 'strong' | 'auto' (기본 'medium')
+  // 'auto'는 샘플마다 pickAutoHumanizeLevel()로 랜덤 강도를 선정한다.
+  const VALID_HUMANIZE_LEVELS = ['off', 'light', 'medium', 'strong', 'auto'];
   const humanizeLevel = VALID_HUMANIZE_LEVELS.includes(body?.humanizeLevel) ? body.humanizeLevel : 'medium';
 
   // 플레이스 소유 확인 (admin/tester는 전체 접근, researcher는 자기 지점만)
@@ -6161,9 +6176,13 @@ ${regenLines.join('\n\n')}
     // ── 구조적 휴머나이저 후처리 ──────────────────────────────────────────
     // humanizeLevel별 rate 확률 통과 시 humanizeBody(text, level) 적용.
     // 'off'이면 rate=0이므로 항상 원본 반환.
-    const hlParams = HUMANIZE_LEVEL_PARAMS[humanizeLevel] ?? HUMANIZE_LEVEL_PARAMS.medium;
+    // 'auto'이면 샘플마다 pickAutoHumanizeLevel()로 강도를 선정한다.
+    // effLevel은 항상 HUMANIZE_LEVEL_PARAMS의 실제 키(off/light/medium/strong)이므로
+    // 'auto'가 HUMANIZE_LEVEL_PARAMS 조회에 직접 들어가지 않는다.
+    const effLevel = humanizeLevel === 'auto' ? pickAutoHumanizeLevel() : humanizeLevel;
+    const hlParams = HUMANIZE_LEVEL_PARAMS[effLevel] ?? HUMANIZE_LEVEL_PARAMS.medium;
     const finalBody = Math.random() < hlParams.rate
-      ? humanizeBody(gptItem.body, humanizeLevel)
+      ? humanizeBody(gptItem.body, effLevel)
       : gptItem.body;
 
     const sampleId = crypto.randomUUID();
