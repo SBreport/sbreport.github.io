@@ -16,6 +16,7 @@ interface Place {
   backfill_done: number | null
   created_at: string
   auto_collect: number  // 1 = on, 0 = off
+  generated_count?: number
 }
 
 interface Review {
@@ -2452,6 +2453,10 @@ onUnmounted(() => {
             <div class="flex items-center gap-2 mt-0.5 pl-5">
               <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums">
                 리뷰 {{ place.total_reviews != null ? place.total_reviews.toLocaleString('ko-KR') : '—' }}
+              </span>
+              <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
+              <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums">
+                생성 {{ place.generated_count != null && place.generated_count > 0 ? place.generated_count : '—' }}
               </span>
               <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
               <span class="text-xs text-gray-400 dark:text-slate-500">갱신: {{ place.last_collected_at ? formatDate(place.last_collected_at) : '전' }}</span>

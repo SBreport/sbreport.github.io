@@ -1414,14 +1414,16 @@ async function handleListPlaces(request, env, corsHeaders) {
     if (isUnrestricted) {
       // tester/admin: 모든 지점 반환 (소유 필터 미적용)
       const res = await env.DB.prepare(
-        `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect
+        `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect,
+                (SELECT COUNT(*) FROM place_generated_samples g WHERE g.place_row_id = review_places.id) AS generated_count
          FROM review_places
          ORDER BY created_at DESC`
       ).all();
       results = res.results;
     } else {
       const res = await env.DB.prepare(
-        `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect
+        `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect,
+                (SELECT COUNT(*) FROM place_generated_samples g WHERE g.place_row_id = review_places.id) AS generated_count
          FROM review_places
          WHERE user_id = ?
          ORDER BY created_at DESC`
