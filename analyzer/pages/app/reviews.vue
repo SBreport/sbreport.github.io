@@ -2450,40 +2450,40 @@ onUnmounted(() => {
                 <UIcon name="i-heroicons-arrow-top-right-on-square" class="w-3.5 h-3.5" />
               </a>
             </div>
-            <div class="flex items-center gap-2 mt-0.5 pl-5">
-              <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums">
-                리뷰 {{ place.total_reviews != null ? place.total_reviews.toLocaleString('ko-KR') : '—' }}
-              </span>
-              <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
-              <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums">
-                생성 {{ place.generated_count != null && place.generated_count > 0 ? place.generated_count : '—' }}
-              </span>
-              <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
-              <span class="text-xs text-gray-400 dark:text-slate-500">갱신: {{ place.last_collected_at ? formatDate(place.last_collected_at) : '전' }}</span>
-              <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
-              <!-- 자동갱신 토글 -->
-              <button
-                class="flex items-center gap-1 shrink-0"
-                :class="autoCollectTogglingIds.has(place.id) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'"
-                :title="place.auto_collect === 1 ? '자동갱신 켜짐 — 클릭해서 끄기' : '자동갱신 꺼짐 — 클릭해서 켜기'"
-                :disabled="autoCollectTogglingIds.has(place.id)"
-                @click.stop="toggleAutoCollect(place)"
-              >
-                <!-- 토글 트랙 -->
-                <span
-                  class="relative inline-flex h-3 w-5 shrink-0 rounded-full transition-colors duration-150"
-                  :class="place.auto_collect === 1 ? 'bg-primary-500' : 'bg-gray-300 dark:bg-slate-600'"
+            <div class="flex flex-col gap-0.5 mt-0.5 pl-5">
+              <!-- 줄1: 데이터 수치 (리뷰·생성) -->
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums whitespace-nowrap">
+                  리뷰 {{ place.total_reviews != null ? place.total_reviews.toLocaleString('ko-KR') : '—' }}
+                </span>
+                <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
+                <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums whitespace-nowrap">
+                  생성 {{ place.generated_count != null && place.generated_count > 0 ? place.generated_count : '—' }}
+                </span>
+              </div>
+              <!-- 줄2: 수집 상태 (갱신 월.일 · 토글 스위치만) -->
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums whitespace-nowrap">갱신 {{ place.last_collected_at ? place.last_collected_at.slice(5, 10).replace('-', '.') : '전' }}</span>
+                <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
+                <!-- 자동갱신 토글 (스위치만, 글자 제거) -->
+                <button
+                  class="flex items-center shrink-0"
+                  :class="autoCollectTogglingIds.has(place.id) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'"
+                  :title="place.auto_collect === 1 ? '자동갱신 켜짐 — 클릭해서 끄기' : '자동갱신 꺼짐 — 클릭해서 켜기'"
+                  :disabled="autoCollectTogglingIds.has(place.id)"
+                  @click.stop="toggleAutoCollect(place)"
                 >
                   <span
-                    class="absolute top-0.5 h-2 w-2 rounded-full bg-white shadow transition-transform duration-150"
-                    :class="place.auto_collect === 1 ? 'translate-x-2.5' : 'translate-x-0.5'"
-                  />
-                </span>
-                <span
-                  class="text-xs"
-                  :class="place.auto_collect === 1 ? 'text-primary-600 dark:text-primary-400' : 'text-gray-400 dark:text-slate-500'"
-                >{{ place.auto_collect === 1 ? '자동' : '수동' }}</span>
-              </button>
+                    class="relative inline-flex h-3 w-5 shrink-0 rounded-full transition-colors duration-150"
+                    :class="place.auto_collect === 1 ? 'bg-primary-500' : 'bg-gray-300 dark:bg-slate-600'"
+                  >
+                    <span
+                      class="absolute top-0.5 h-2 w-2 rounded-full bg-white shadow transition-transform duration-150"
+                      :class="place.auto_collect === 1 ? 'translate-x-2.5' : 'translate-x-0.5'"
+                    />
+                  </span>
+                </button>
+              </div>
             </div>
           </li>
         </ul>
