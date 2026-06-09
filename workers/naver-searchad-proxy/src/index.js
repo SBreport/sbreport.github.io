@@ -7264,13 +7264,19 @@ async function handleBlindTestPool(request, env, corsHeaders) {
   let body;
   try { body = await request.json(); } catch { body = {}; }
 
+  // n_real/n_gen = 평가자당 테스트 건수. 풀은 2배수 생성.
   const n_real = Number(body.n_real ?? 15);
   const n_gen  = Number(body.n_gen  ?? 15);
+  const poolReal = n_real * 2;
+  const poolGen  = n_gen  * 2;
   const place_row_id = body.place_row_id ?? null;
   const gen_since    = body.gen_since    ?? null;
 
   // real 추출: human_label='human' 우선, 부족하면 라벨 없는 것으로 보충
-  const placeFilterReal = place_row_id ? `AND pr.place_row_id = '${place_row_id}'` : '';
+  // place_row_id 미지정 시 생성물 있는 지점만 대상
+  const placeFilterReal = place_row_id
+    ? `AND pr.place_row_id = '${place_row_id}'`
+    : `AND pr.place_row_id IN (SELECT DISTINCT place_row_id FROM place_generated_samples WHERE status NOT IN ('deleted','hidden'))`;
   const realRows = await env.DB.prepare(`
     SELECT pr.id, pr.body
     FROM place_reviews pr
@@ -7279,7 +7285,7 @@ async function handleBlindTestPool(request, env, corsHeaders) {
       ${placeFilterReal}
     ORDER BY CASE WHEN prl.human_label = 'human' THEN 0 ELSE 1 END, RANDOM()
     LIMIT ?
-  `).bind(n_real).all();
+  `).bind(poolReal).all();
 
   // gen 추출: status 'deleted'/'hidden' 제외
   const placeFilterGen = place_row_id ? `AND place_row_id = '${place_row_id}'` : '';
@@ -7293,7 +7299,7 @@ async function handleBlindTestPool(request, env, corsHeaders) {
       ${genSinceFilter}
     ORDER BY RANDOM()
     LIMIT ?
-  `).bind(n_gen).all();
+  `).bind(poolGen).all();
 
   const realItems = realRows.results ?? [];
   const genItems  = genRows.results  ?? [];
@@ -7305,7 +7311,7 @@ async function handleBlindTestPool(request, env, corsHeaders) {
   const pool = 'pool_' + crypto.randomUUID().slice(0, 8);
   const now  = new Date().toISOString();
 
-  // 배치 INSERT
+  // 배치 INSERT (blind_test_items)
   const stmt = env.DB.prepare(
     `INSERT INTO blind_test_items (id, pool, source, ref_id, body, created_at, active)
      VALUES (?, ?, ?, ?, ?, ?, 1)`
@@ -7316,11 +7322,18 @@ async function handleBlindTestPool(request, env, corsHeaders) {
   ];
   await env.DB.batch(batch);
 
+  // blind_test_pools 메타 1행 INSERT
+  await env.DB.prepare(
+    `INSERT INTO blind_test_pools (pool, per_rater_real, per_rater_gen, created_at) VALUES (?, ?, ?, ?)`
+  ).bind(pool, n_real, n_gen, now).run();
+
   return jsonResponse({
     pool,
-    n_real: realItems.length,
-    n_gen:  genItems.length,
-    total:  realItems.length + genItems.length,
+    pool_real:      realItems.length,
+    pool_gen:       genItems.length,
+    per_rater_real: n_real,
+    per_rater_gen:  n_gen,
+    total:          realItems.length + genItems.length,
   }, 200, corsHeaders);
 }
 
@@ -7378,14 +7391,15 @@ async function handleBlindTestPools(request, env, corsHeaders) {
   }
 }
 
-// GET /api/blind-test/items?code=&pool= — 아이템 목록 (공개 + 접근코드)
+// GET /api/blind-test/items?code=&pool=&nickname= — 아이템 목록 (공개 + 접근코드)
 async function handleBlindTestItems(request, env, corsHeaders) {
-  const url  = new URL(request.url);
-  const code = url.searchParams.get('code') ?? '';
-  const codeErr = checkBlindTestCode(code, env, corsHeaders);
+  const url      = new URL(request.url);
+  const code     = url.searchParams.get('code') ?? '';
+  const codeErr  = checkBlindTestCode(code, env, corsHeaders);
   if (codeErr) return codeErr;
 
-  let pool = url.searchParams.get('pool') ?? '';
+  let pool     = url.searchParams.get('pool')     ?? '';
+  const nickname = (url.searchParams.get('nickname') ?? '').trim();
 
   // pool 미지정이면 가장 최근 pool 사용
   if (!pool) {
@@ -7398,13 +7412,79 @@ async function handleBlindTestItems(request, env, corsHeaders) {
     pool = poolRow.pool;
   }
 
-  const rows = await env.DB.prepare(
-    `SELECT id, body FROM blind_test_items WHERE pool = ? AND active = 1`
-  ).bind(pool).all();
+  // 닉네임 없으면 구버전 호환: 풀 전체 셔플 반환
+  if (!nickname) {
+    const rows = await env.DB.prepare(
+      `SELECT id, body FROM blind_test_items WHERE pool = ? AND active = 1`
+    ).bind(pool).all();
+    const items = rows.results ?? [];
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return jsonResponse({ pool, items }, 200, corsHeaders);
+  }
 
-  const items = rows.results ?? [];
+  // per_rater 조회 (blind_test_pools)
+  const poolMeta = await env.DB.prepare(
+    `SELECT per_rater_real, per_rater_gen FROM blind_test_pools WHERE pool = ?`
+  ).bind(pool).first();
 
-  // Fisher-Yates 셔플 (source 포함 금지 — id·body만)
+  // 구 풀(blind_test_pools 행 없음) → 풀 전체 반환 폴백
+  if (!poolMeta) {
+    const rows = await env.DB.prepare(
+      `SELECT id, body FROM blind_test_items WHERE pool = ? AND active = 1`
+    ).bind(pool).all();
+    const items = rows.results ?? [];
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return jsonResponse({ pool, items }, 200, corsHeaders);
+  }
+
+  const perReal = poolMeta.per_rater_real;
+  const perGen  = poolMeta.per_rater_gen;
+
+  // 기존 배정 조회 — 재접속 시 동일 세트 반환
+  const existing = await env.DB.prepare(
+    `SELECT item_ids FROM blind_test_assignments WHERE pool = ? AND nickname = ?`
+  ).bind(pool, nickname).first();
+
+  let assignedIds;
+  if (existing) {
+    assignedIds = JSON.parse(existing.item_ids);
+  } else {
+    // 신규 배정: source별 무작위 선정
+    const realPick = await env.DB.prepare(
+      `SELECT id FROM blind_test_items WHERE pool = ? AND source = 'real' AND active = 1 ORDER BY RANDOM() LIMIT ?`
+    ).bind(pool, perReal).all();
+    const genPick = await env.DB.prepare(
+      `SELECT id FROM blind_test_items WHERE pool = ? AND source = 'gen' AND active = 1 ORDER BY RANDOM() LIMIT ?`
+    ).bind(pool, perGen).all();
+
+    assignedIds = [
+      ...(realPick.results ?? []).map(r => r.id),
+      ...(genPick.results  ?? []).map(r => r.id),
+    ];
+
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `INSERT INTO blind_test_assignments (pool, nickname, item_ids, created_at) VALUES (?, ?, ?, ?)`
+    ).bind(pool, nickname, JSON.stringify(assignedIds), now).run();
+  }
+
+  // 배정된 id로 body 조회
+  if (assignedIds.length === 0) {
+    return jsonResponse({ pool, items: [] }, 200, corsHeaders);
+  }
+  const ph = assignedIds.map(() => '?').join(',');
+  const bodyRows = await env.DB.prepare(
+    `SELECT id, body FROM blind_test_items WHERE id IN (${ph})`
+  ).bind(...assignedIds).all();
+
+  const items = bodyRows.results ?? [];
+  // Fisher-Yates 셔플 (source 절대 미포함 — id·body만)
   for (let i = items.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [items[i], items[j]] = [items[j], items[i]];
@@ -7516,7 +7596,7 @@ async function handleBlindTestRatings(request, env, corsHeaders) {
   return jsonResponse({ saved: batch.length, skipped, summary, reveal }, 200, corsHeaders);
 }
 
-// GET /api/blind-test/results?pool= — 집계 결과 (researcher/admin)
+// DELETE /api/blind-test/pools/:pool — 풀 삭제 (admin 전용)
 async function handleBlindTestPoolDelete(pool, request, env, corsHeaders) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
@@ -7530,9 +7610,18 @@ async function handleBlindTestPoolDelete(pool, request, env, corsHeaders) {
     `DELETE FROM blind_test_items WHERE pool = ?`
   ).bind(pool).run();
 
+  // 배정 및 풀 메타 삭제
+  await env.DB.prepare(
+    `DELETE FROM blind_test_assignments WHERE pool = ?`
+  ).bind(pool).run();
+
+  await env.DB.prepare(
+    `DELETE FROM blind_test_pools WHERE pool = ?`
+  ).bind(pool).run();
+
   return jsonResponse({
-    deleted_items: itemsResult.meta?.changes ?? 0,
-    deleted_ratings: ratingsResult.meta?.changes ?? 0,
+    deleted_items:    itemsResult.meta?.changes ?? 0,
+    deleted_ratings:  ratingsResult.meta?.changes ?? 0,
   }, 200, corsHeaders);
 }
 
