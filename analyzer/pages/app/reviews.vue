@@ -3277,24 +3277,31 @@ onUnmounted(() => {
                   </span>
                 </UTooltip>
                 <!-- R2: 배치 자연스러움 지표 (배치 평균·추이 감시용, 개별 합불 판단 아님) -->
+                <!-- 임계: ≥90 emerald / 70~89 amber / <70 red -->
                 <UTooltip
                   v-if="naturalnessSummary"
-                  :text="`자연스러움 점수 — 배치 추이 감시용 지표 (잠정). 개별 합불 판단 아님.\n중간값 ${naturalnessSummary.median} · 최소 ${naturalnessSummary.min} · 평균 slop ${naturalnessSummary.mean_slop_hits}개/건`"
+                  :text="`자연도·slop — 표면 통계(자동 추정). 배치 추이·참고용이며 개별 합불 판단 기준 아님(Goodhart 주의).\n중간값 ${naturalnessSummary.median} · 최솟값 ${naturalnessSummary.min} · 평균 slop ${naturalnessSummary.mean_slop_hits}개/건`"
                   :popper="{ placement: 'top' }"
                 >
                   <span
                     class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium tabular-nums cursor-default whitespace-nowrap"
-                    :class="naturalnessSummary.mean >= 95
+                    :class="naturalnessSummary.mean >= 90
                       ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
-                      : naturalnessSummary.mean >= 90
+                      : naturalnessSummary.mean >= 70
                         ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
                         : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
                   >
                     <UIcon name="i-heroicons-beaker" class="w-3 h-3 shrink-0" />
-                    자연스러움 {{ naturalnessSummary.mean }}
-                    <span class="font-normal opacity-70">/ min {{ naturalnessSummary.min }}</span>
+                    자연도(배치) {{ naturalnessSummary.mean }}
+                    <span class="font-normal opacity-70">/ slop {{ naturalnessSummary.mean_slop_hits }}개</span>
                   </span>
                 </UTooltip>
+                <!-- Goodhart 주의: 배치 데이터가 있을 때 1회 표시 -->
+                <span
+                  v-if="naturalnessSummary"
+                  class="text-[10px] text-gray-400 dark:text-slate-500 leading-snug"
+                  title="이 지표는 표면 통계(자동 추정)입니다. 배치 추이 감시·참고 용도이며 절대 기준이 아닙니다."
+                >※ 표면 통계·참고용</span>
                 <!-- 환각 탐지 배치 요약 (soft-flag 조기경보 — 재생성 아님) -->
                 <UTooltip
                   v-if="hallucinationSummary && (hallucinationSummary.high + hallucinationSummary.low) > 0"
@@ -3424,10 +3431,10 @@ onUnmounted(() => {
                           </span>
                         </span>
                       </th>
-                      <!-- 자연스러움 (잠정 지표) -->
-                      <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-16">
-                        <UTooltip text="자연스러움 점수 (잠정·배치추이용). 개별 합불 판단 아님." :popper="{ placement: 'top' }">
-                          <span class="cursor-default">자연도</span>
+                      <!-- 자연도·slop (잠정·표면 통계 — 배치추이용, 개별 합불 판단 아님) -->
+                      <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-28">
+                        <UTooltip text="자연도·slop — 표면 통계(자동 추정). 배치 추이·참고용이며 절대 기준 아님." :popper="{ placement: 'top' }">
+                          <span class="cursor-default">자연도·slop</span>
                         </UTooltip>
                       </th>
                       <!-- 환각 탐지 (soft-flag) -->
@@ -3508,25 +3515,33 @@ onUnmounted(() => {
                           class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 dark:bg-slate-700 text-[10px] text-gray-500 dark:text-slate-400"
                         >숨김</span>
                       </td>
-                      <!-- 자연스러움 점수 (R2: 배치 추이 감시용, 개별 합불 아님) -->
-                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                      <!-- 자연도·slop (R2: 배치 추이 감시용, 개별 합불 아님)
+                           임계: ≥90 emerald / ≥70 amber / <70 red -->
+                      <td class="px-3 py-1.5 align-top">
                         <template v-if="sample.naturalness != null">
-                          <UTooltip
-                            :text="sample.slop_hits && sample.slop_hits > 0
-                              ? `slop ${sample.slop_hits}개: ${(sample.slop_top ?? []).join(', ')}`
-                              : 'slop 없음'"
-                            :popper="{ placement: 'top' }"
-                          >
+                          <div class="flex flex-col gap-0.5">
+                            <!-- 자연도 배지 -->
+                            <div class="flex items-center gap-1">
+                              <span
+                                class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium tabular-nums cursor-default whitespace-nowrap"
+                                :class="sample.naturalness >= 90
+                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                  : sample.naturalness >= 70
+                                    ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                    : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
+                              >자연도 {{ sample.naturalness }}</span>
+                              <!-- slop 수 배지 (>0 이면 amber, 0이면 생략) -->
+                              <span
+                                v-if="sample.slop_hits != null && sample.slop_hits > 0"
+                                class="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium tabular-nums whitespace-nowrap bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                              >slop {{ sample.slop_hits }}</span>
+                            </div>
+                            <!-- 상위 slop 표현 (있을 때만) -->
                             <span
-                              class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium tabular-nums cursor-default"
-                              :class="sample.naturalness >= 95
-                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
-                                : sample.naturalness >= 90
-                                  ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-                                  : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
-                            >{{ sample.naturalness }}</span>
-                          </UTooltip>
-                          <span v-if="sample.slop_hits && sample.slop_hits > 0" class="ml-1 text-[10px] text-gray-400 dark:text-slate-500 tabular-nums">s{{ sample.slop_hits }}</span>
+                              v-if="sample.slop_top && sample.slop_top.length > 0"
+                              class="text-[10px] text-gray-400 dark:text-slate-500 leading-snug max-w-[16rem] whitespace-normal"
+                            >{{ sample.slop_top.join(', ') }}</span>
+                          </div>
                         </template>
                         <span v-else class="text-gray-300 dark:text-slate-600">—</span>
                       </td>
