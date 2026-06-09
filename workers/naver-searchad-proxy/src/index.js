@@ -3167,6 +3167,11 @@ const SAMPLE_FEW_SHOT_SIZE = 25;
 /** fact pool 상위 키워드 수 */
 const SAMPLE_FACT_POOL_SIZE = 25;
 
+/** 소스 후기 최근성 필터: 이 일수 이내 후기를 우선 사용 */
+const SOURCE_RECENCY_DAYS = 365;
+/** 최근 후기가 이 수 미만이면 기간 제한 없이 전체 사용 (폴백) */
+const SOURCE_RECENCY_MIN = 50;
+
 /**
  * 담당자명(실장님/원장님 등)을 포함할 샘플 비율 (0~1).
  * 0.3 = 전체 샘플의 약 30%에만 담당자명 배정. 튜닝 시 여기만 조정.
@@ -3365,17 +3370,52 @@ function buildStyleAssignments(count, includeLong = false) {
 }
 
 /**
+ * 소스 후기 최근성 컷오프 절 반환.
+ * 해당 지점의 최근 SOURCE_RECENCY_DAYS일 이내 후기가 SOURCE_RECENCY_MIN 개 이상이면
+ * "AND review_date >= date('now','-N days')" 조건 문자열을 반환하고,
+ * 미만이면 빈 문자열(전체 사용, 폴백)을 반환한다.
+ *
+ * 반환값은 SQL 쿼리 문자열에 직접 삽입하는 safe constant이므로 인젝션 위험 없음.
+ *
+ * @param {object} env  Cloudflare Workers 환경 바인딩
+ * @param {string} placeRowId
+ * @returns {Promise<{clause: string, usedCutoff: boolean}>}
+ */
+async function recencyClause(env, placeRowId) {
+  try {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS cnt
+      FROM place_reviews
+      WHERE place_row_id = ?
+        AND review_date >= date('now', '-${SOURCE_RECENCY_DAYS} days')
+    `).bind(placeRowId).first();
+    const cnt = row?.cnt ?? 0;
+    if (cnt >= SOURCE_RECENCY_MIN) {
+      return {
+        clause: `AND review_date >= date('now', '-${SOURCE_RECENCY_DAYS} days')`,
+        usedCutoff: true,
+      };
+    }
+  } catch {
+    // DB 오류 시 안전하게 전체 사용
+  }
+  return { clause: '', usedCutoff: false };
+}
+
+/**
  * fact pool(허용 소재 키워드 목록) 추출.
  * 빈도순 단어 + 담당자명 엔티티를 함께 반환해 구체성을 높인다.
  * @param {object} env
  * @param {string} placeRowId
  * @param {number} topN
+ * @param {string} [dateClause='']  recencyClause() 결과 (선택)
  * @returns {Promise<string[]>} 단어 배열 (엔티티 우선, 빈도 내림차순)
  */
-async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
+async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE, dateClause = '') {
   const { results: bodyRows } = await env.DB.prepare(`
     SELECT body FROM place_reviews
     WHERE place_row_id = ? AND body IS NOT NULL AND body != ''
+    ${dateClause}
     ORDER BY collected_at DESC
     LIMIT 1000
   `).bind(placeRowId).all();
@@ -5682,11 +5722,12 @@ function humanizeBody(text, level = 'medium') {
  *
  * @param {object} env   Cloudflare Workers 환경 바인딩
  * @param {string|number} placeRowId  review_places.id
+ * @param {string} [dateClause='']  recencyClause() 결과 (선택)
  * @returns {{ noneRate: number, procedures: Array<{name: string, count: number}> }}
  */
-async function extractProcedureDistribution(env, placeRowId) {
+async function extractProcedureDistribution(env, placeRowId, dateClause = '') {
   const { results } = await env.DB.prepare(
-    `SELECT body FROM place_reviews WHERE place_row_id = ? AND body IS NOT NULL LIMIT 1000`
+    `SELECT body FROM place_reviews WHERE place_row_id = ? AND body IS NOT NULL ${dateClause} LIMIT 1000`
   ).bind(placeRowId).all();
 
   const rows = results ?? [];
@@ -5814,10 +5855,16 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
   }
 
+  // ── 소스 후기 최근성 컷오프 결정 (세 소스 공통 적용) ──────────────────────────
+  // 최근 SOURCE_RECENCY_DAYS일 이내 후기가 SOURCE_RECENCY_MIN 개 이상이면 기간 제한,
+  // 미만이면 전체 사용(신규·한산 지점 폴백).
+  const { clause: srcDateClause, usedCutoff: srcCutoff } = await recencyClause(env, placeRowId);
+  console.log(`[generate-samples] place=${placeRowId} recency_cutoff=${srcCutoff} clause="${srcDateClause}"`);
+
   // fact pool 추출
   let factPool;
   try {
-    factPool = await extractFactPool(env, placeRowId, SAMPLE_FACT_POOL_SIZE);
+    factPool = await extractFactPool(env, placeRowId, SAMPLE_FACT_POOL_SIZE, srcDateClause);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
@@ -5826,7 +5873,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   // noneRate: 무시술 후기 비율 / procedures: count>=2 시술, 빈도순
   let procDist = { noneRate: 1, procedures: [] };
   try {
-    procDist = await extractProcedureDistribution(env, placeRowId);
+    procDist = await extractProcedureDistribution(env, placeRowId, srcDateClause);
   } catch {
     // 분포 추출 실패 시 전부 null(무시술)로 폴백 — 생성은 계속
   }
@@ -5865,6 +5912,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
         AND r.body IS NOT NULL
         AND length(r.body) >= 20
         AND l.human_label = 'human'
+        ${srcDateClause}
       ORDER BY RANDOM()
       LIMIT ?
     `).bind(placeRowId, count * 5).all();
@@ -5883,6 +5931,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
           AND r.body IS NOT NULL
           AND length(r.body) >= 20
           AND COALESCE(l.human_label, '') NOT IN ('ad', 'ai')
+          ${srcDateClause}
         ORDER BY RANDOM()
         LIMIT ?
       `).bind(placeRowId, needed).all();
@@ -5902,6 +5951,7 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
         WHERE place_row_id = ?
           AND body IS NOT NULL
           AND length(body) >= 20
+          ${srcDateClause}
         ORDER BY RANDOM()
         LIMIT ?
       `).bind(placeRowId, needed).all();
