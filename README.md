@@ -50,66 +50,61 @@ python -m http.server 8000
 
 ## 2. 저장소 구조
 
+### 먼저 — 왜 이렇게 여러 프로젝트가 한 저장소에 있나?
+
+`sbreport.github.io`는 GitHub **User Pages**다. 즉 **이 저장소의 main 브랜치 루트가 곧 `https://sbreport.github.io/` 웹 서버의 루트 폴더**다(윈도우의 `C:\inetpub\wwwroot`에 해당). 사이트에 무언가 올리려면 이 저장소 루트에 폴더를 둘 수밖에 없어서, 정적 사이트 자산뿐 아니라 관련 웹앱·백엔드·크롬 확장까지 한곳에 모이며 **모노레포**가 됐다.
+
+그래서 폴더는 **배포 대상에 따라 3묶음**으로 나뉜다. 이 구분을 모르고 폴더를 옮기면 사이트가 깨진다.
+
+- 🌐 **GitHub Pages 정적 사이트** — 폴더 위치 = 공개 URL. **함부로 옮기면 외부 공유 링크·북마크가 깨진다.**
+- ⚙️ **별도 배포(Cloudflare)** — Pages와 무관한 자체 런타임. git 위치는 자유롭지만, 옮기면 Cloudflare 대시보드의 "루트 디렉토리" 설정을 함께 바꿔야 한다.
+- 🔧 **비배포** — 로컬에서만 실행. 자유롭게 이동·삭제 가능.
+
 ```
-sbreport.github.io/
+sbreport.github.io/   ← User Pages: 이 저장소 루트 = https://sbreport.github.io/
 │
-├── index.html          ← 허브 페이지 (카드 목록 + 검색·정렬)
-├── style.css           ← 허브 전용 스타일 (카테고리 색상 시스템 포함)
-├── .gitignore          ← 원본 백업 폴더 push 차단
+├─ 🌐 [GitHub Pages 정적 사이트] — 폴더 위치 = 공개 URL (옮기면 링크 깨짐)
+│  ├── index.html / style.css   ← 허브 홈 (카드 목록 + 검색·정렬, 카테고리 색상)
+│  ├── help/                    ← 이 가이드를 사이트에서 보는 뷰어
+│  ├── docs/                    ← 문서·강의·슬라이드 (type: doc)
+│  │   ├── naver-logic-2605/        ← 네이버 AI 검색 대응 강의 (playbook/principle/pro)
+│  │   ├── onboarding/              ← 신규 직원 온보딩 슬라이드 (16:9)
+│  │   └── smart-branding-supporter/← SBS 확장 설치 가이드 (현재 허브 카드 미노출)
+│  ├── tools/                   ← 인터랙티브 웹 도구 (type: tool)
+│  │   ├── keyword-combiner/        ← 네이버 키워드 조합기 (SPA)
+│  │   └── youtube-report/          ← 유튜브 월간 보고서 생성기 (SPA)
+│  ├── extensions/              ← Chrome 확장 소개 페이지 + 확장 소스
+│  │   ├── style.css / viewer.js    ← 확장 뷰어 공용 렌더러
+│  │   ├── smart-branding-supporter/← SBS: 블로그·검색 통합 도구 (Worker 연동)
+│  │   ├── naver-blog-cleaner/      ← 블로그 글감 패널 숨기기
+│  │   └── youtube-script-copier/   ← 유튜브 스크립트 복사
+│  └── deploy/                  ← 클라이언트 공유 보고서 (Netlify 별도 배포)
+│      ├── sbreport2605/ · naver-logic-update-2605/ · sbs-notice/
 │
-├── docs/               ← 문서·강의·슬라이드 (type: doc)
-│   ├── naver-logic-2605/   ← 네이버 AI 검색 대응 강의 묶음
-│   │   ├── index.html      ← 리다이렉트 (→ ./playbook/)
-│   │   ├── style.css / viewer.js / *.md ← 공유 자산
-│   │   ├── playbook/       ← 실행 가이드
-│   │   ├── principle/      ← 원리 설명
-│   │   └── pro/            ← 현업 버전
-│   └── onboarding/     ← 신규 직원 온보딩 슬라이드
-│       ├── index.html  ← 슬라이드 뷰어 (16:9 + 사이드바)
-│       ├── css/ js/    ← 뷰어 자산
-│       ├── sections/   ← 섹션별 HTML
-│       └── _source/ src/ ← 원본 소스 (빌드용)
+├─ ⚙️ [별도 배포 — Cloudflare] — Pages와 무관, 자체 런타임
+│  ├── analyzer/                ← SB analyzer 본 웹앱 (Nuxt 3 SSR)
+│  │                              → https://smartsupport.sbreport.workers.dev (wrangler name: smartsupport)
+│  └── workers/naver-searchad-proxy/ ← 네이버 API 프록시 + 분석 엔진
+│                                 → https://naver-searchad-proxy.sbreport.workers.dev
 │
-├── tools/              ← 인터랙티브 웹 도구 (type: tool)
-│   ├── keyword-combiner/ ← 네이버 키워드 조합기
-│   │   ├── index.html
-│   │   ├── app.js / styles.css
-│   │   └── README.md
-│   └── youtube-report/ ← 유튜브 월간 보고서 생성기 (SPA)
-│       ├── index.html
-│       ├── app.js / youtube-api.js / ai-analysis.js ...
-│       └── style.css
-│
-├── deploy/             ← 외부 공개(Netlify 배포) 보고서
-│   └── naver-logic-update-2605/
-│
-├── extensions/         ← Chrome 확장 소개·다운로드 페이지
-│   ├── style.css       ← 확장 뷰어 공용 스타일
-│   ├── viewer.js       ← 확장 뷰어 공용 렌더러
-│   ├── naver-blog-cleaner/
-│   │   ├── index.html  ← 소개 페이지
-│   │   ├── README.md
-│   │   ├── manifest.json
-│   │   ├── content.js / background.js
-│   │   └── icons/
-│   └── youtube-script-copier/
-│       ├── index.html
-│       ├── README.md
-│       ├── manifest.json
-│       └── content.js / styles.css
-│
-└── help/               ← (예약) 이 가이드를 사이트에서 보는 페이지
+└─ 🔧 [비배포 — 로컬 실행]
+   └── scripts/place-review-backfill/ ← 플레이스 리뷰 백필 Node CLI (.mjs)
 ```
+
+> ⚠️ `analyzer/`·`workers/`는 정적 사이트가 아니라 **Cloudflare에 따로 배포**된다. 이 가이드(§4~8)의 "페이지 추가/배포" 절차는 🌐 정적 사이트에만 해당하며, 두 폴더는 각자의 `wrangler.toml` + Cloudflare 빌드로 배포된다.
 
 ### 각 폴더의 역할 요약
 
-| 폴더 | 성격 | 추가 기준 |
-|------|------|-----------|
-| `docs/` | 문서·강의·슬라이드 (type: doc) | 글 위주 콘텐츠, 슬라이드 |
-| `tools/` | 인터랙티브 웹 도구 (type: tool) | JS SPA, 복잡한 도구 |
-| `deploy/` | 외부 공개 보고서 (Netlify 배포) | 클라이언트 공유용 |
-| `extensions/` | Chrome 확장 소개 페이지 | 확장 배포 시 |
-| `help/` | 가이드·안내 페이지 | 운영 문서 공개 필요 시 |
+| 폴더 | 성격 | 배포 대상 | 추가 기준 |
+|------|------|-----------|-----------|
+| `docs/` | 문서·강의·슬라이드 (type: doc) | 🌐 GitHub Pages | 글 위주 콘텐츠, 슬라이드 |
+| `tools/` | 인터랙티브 웹 도구 (type: tool) | 🌐 GitHub Pages | JS SPA, 복잡한 도구 |
+| `extensions/` | Chrome 확장 소개 페이지 + 소스 | 🌐 GitHub Pages | 확장 배포 시 |
+| `deploy/` | 외부 공개 보고서 | 🌐 Netlify (별도) | 클라이언트 공유용 |
+| `help/` | 가이드·안내 페이지 | 🌐 GitHub Pages | 운영 문서 공개 필요 시 |
+| `analyzer/` | SB analyzer 본 웹앱 (Nuxt 3) | ⚙️ Cloudflare | 로그인 기반 분석 앱 |
+| `workers/` | 네이버 API 프록시·분석 엔진 | ⚙️ Cloudflare | 백엔드 API |
+| `scripts/` | 로컬 실행 CLI 스크립트 | 🔧 비배포 | 웹이 아닌 .mjs 도구 |
 
 ---
 

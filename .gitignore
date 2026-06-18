@@ -19,3 +19,11 @@ _세션/
 pc_serp_*.html
 Program.lnk
 .gstack/
+
+# 의존성·빌드 산출물 (Cloudflare/Nuxt가 자동 생성 — git 포함 금지)
+node_modules/
+**/node_modules/
+.output/
+.nuxt/
+dist/
+dist-dry/
