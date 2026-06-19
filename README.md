@@ -590,6 +590,18 @@ data-type="doc"         ← doc / tool 중 하나인지 확인
 
 ---
 
+**Q. `sb-keyword`, `sb-rank`, `sb-sbs`가 깨진 폴더처럼 보여요. 삭제해도 되나요?**
+
+이 셋은 운영 코드 폴더가 아니라 과거 병렬 작업용 Git worktree 이름입니다. `git worktree list`에서 `prunable gitdir file points to non-existent location`으로 보이면 실제 폴더는 사라지고 `.git/worktrees/` 메타데이터만 남은 상태입니다. 이 경우 원격 브랜치(`feat/keyword`, `feat/rank`, `feat/sbs`)와 현재 코드에는 영향이 없으므로 `git worktree prune`으로 정리하세요. 단, `extensions/smart-branding-supporter/`와 코드 내부 `sbs-*` 식별자는 실제 SBS 확장 기능이므로 삭제 대상이 아닙니다.
+
+---
+
+**Q. Mac에서 `analyzer` 빌드가 `oxc-parser` native binding 오류로 실패해요.**
+
+Windows에서 설치된 `node_modules`를 Mac에서 이어 쓰면 `@oxc-parser/binding-darwin-arm64` 같은 플랫폼별 선택 의존성이 빠질 수 있습니다. `analyzer/`에서 `npm install --no-save --ignore-scripts @oxc-parser/binding-darwin-arm64@0.76.0`로 로컬 의존성을 보강한 뒤 `npm run build`를 다시 실행하세요. `node_modules`, `.nuxt`, `.output`, `.wrangler`는 ignore 대상이라 커밋하지 않습니다.
+
+---
+
 ## 10. 디자인 원칙 참고
 
 이 허브의 디자인은 다음 원칙을 따릅니다. 새 페이지를 추가할 때 톤을 맞추세요.
@@ -636,4 +648,4 @@ data-type="doc"         ← doc / tool 중 하나인지 확인
 
 ---
 
-*최종 업데이트: 2026-05-11*
+*최종 업데이트: 2026-06-19*
