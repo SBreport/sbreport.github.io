@@ -50,48 +50,40 @@ python -m http.server 8000
 
 ## 2. 저장소 구조
 
-### 먼저 — 왜 이렇게 여러 프로젝트가 한 저장소에 있나?
+### 이 저장소엔 "3개 프로젝트"가 한 집에 산다
 
-`sbreport.github.io`는 GitHub **User Pages**다. 즉 **이 저장소의 main 브랜치 루트가 곧 `https://sbreport.github.io/` 웹 서버의 루트 폴더**다(윈도우의 `C:\inetpub\wwwroot`에 해당). 사이트에 무언가 올리려면 이 저장소 루트에 폴더를 둘 수밖에 없어서, 정적 사이트 자산뿐 아니라 관련 웹앱·백엔드·크롬 확장까지 한곳에 모이며 **모노레포**가 됐다.
+`sbreport.github.io`는 GitHub **User Pages**라, **이 저장소의 루트가 곧 `https://sbreport.github.io/` 웹사이트의 루트 폴더**다(윈도우의 `C:\inetpub\wwwroot`에 해당). 그래서 **① 자료 허브**로 시작한 저장소에, 나중에 만든 **② 크롬 확장**과 **③ 분석 웹앱(smartsupport)**이 한곳에 들어오며 **모노레포**가 됐다.
 
-그래서 폴더는 **배포 대상에 따라 3묶음**으로 나뉜다. 이 구분을 모르고 폴더를 옮기면 사이트가 깨진다.
-
-- 🌐 **GitHub Pages 정적 사이트** — 폴더 위치 = 공개 URL. **함부로 옮기면 외부 공유 링크·북마크가 깨진다.**
-- ⚙️ **별도 배포(Cloudflare)** — Pages와 무관한 자체 런타임. git 위치는 자유롭지만, 옮기면 Cloudflare 대시보드의 "루트 디렉토리" 설정을 함께 바꿔야 한다.
-- 🔧 **비배포** — 로컬에서만 실행. 자유롭게 이동·삭제 가능.
+아래 트리는 그 **3개 프로젝트**로 묶은 것이다. **프로젝트마다 배포처가 다르다** — 이걸 모르고 폴더를 옮기면 사이트·배포가 깨진다.
 
 ```
-sbreport.github.io/   ← User Pages: 이 저장소 루트 = https://sbreport.github.io/
+sbreport.github.io/   ← 이 저장소 = 웹사이트 루트 (https://sbreport.github.io/)
 │
-├─ 🌐 [GitHub Pages 정적 사이트] — 폴더 위치 = 공개 URL (옮기면 링크 깨짐)
-│  ├── index.html / style.css   ← 허브 홈 (카드 목록 + 검색·정렬, 카테고리 색상)
-│  ├── help/                    ← 이 가이드를 사이트에서 보는 뷰어
-│  ├── docs/                    ← 문서·강의·슬라이드 (type: doc)
-│  │   ├── naver-logic-2605/        ← 네이버 AI 검색 대응 강의 (playbook/principle/pro)
-│  │   ├── onboarding/              ← 신규 직원 온보딩 슬라이드 (16:9)
-│  │   └── smart-branding-supporter/← SBS 확장 설치 가이드 (현재 허브 카드 미노출)
-│  ├── tools/                   ← 인터랙티브 웹 도구 (type: tool)
-│  │   ├── keyword-combiner/        ← 네이버 키워드 조합기 (SPA)
-│  │   └── youtube-report/          ← 유튜브 월간 보고서 생성기 (SPA)
-│  ├── extensions/              ← Chrome 확장 소개 페이지 + 확장 소스
-│  │   ├── style.css / viewer.js    ← 확장 뷰어 공용 렌더러
-│  │   ├── smart-branding-supporter/← SBS: 블로그·검색 통합 도구 (Worker 연동)
-│  │   ├── naver-blog-cleaner/      ← 블로그 글감 패널 숨기기
-│  │   └── youtube-script-copier/   ← 유튜브 스크립트 복사
-│  └── deploy/                  ← 클라이언트 공유 보고서 (Netlify 별도 배포)
-│      ├── sbreport2605/ · naver-logic-update-2605/ · sbs-notice/
+├─ 📁 프로젝트 ① "스마트브랜딩 페이지 모음" — 자료·도구 허브        [GitHub Pages]
+│   │                                          ※ 폴더 위치 = 공개 URL → 옮기면 링크 깨짐
+│   ├── index.html · style.css   허브 첫 화면 (카드 목록 + 검색·정렬)
+│   ├── help/                    이 가이드를 웹에서 보는 페이지
+│   ├── docs/                    강의·문서   →  naver-logic-2605 · onboarding
+│   ├── tools/                   웹 도구     →  keyword-combiner · youtube-report
+│   └── deploy/                  클라이언트 공유 보고서   [Netlify 별도배포]
+│                                  →  sbreport2605 · naver-logic-update-2605 · sbs-notice
 │
-├─ ⚙️ [별도 배포 — Cloudflare] — Pages와 무관, 자체 런타임
-│  ├── analyzer/                ← SB analyzer 본 웹앱 (Nuxt 3 SSR)
-│  │                              → https://smartsupport.sbreport.workers.dev (wrangler name: smartsupport)
-│  └── workers/naver-searchad-proxy/ ← 네이버 API 프록시 + 분석 엔진
-│                                 → https://naver-searchad-proxy.sbreport.workers.dev
+├─ 🧩 프로젝트 ② "크롬 확장프로그램"                              [크롬 웹스토어]
+│   └── extensions/              확장 3종 (+ 각 폴더에 소개페이지, 허브에서 링크됨)
+│       ├── smart-branding-supporter/   SBS: 블로그·검색 통합 도구 (③ Worker 연동)
+│       ├── naver-blog-cleaner/         블로그 글감 패널 숨기기
+│       └── youtube-script-copier/      유튜브 스크립트 복사
 │
-└─ 🔧 [비배포 — 로컬 실행]
-   └── scripts/place-review-backfill/ ← 플레이스 리뷰 백필 Node CLI (.mjs)
+├─ ⚙️ 프로젝트 ③ "SB analyzer" — 로그인형 분석 웹앱               [Cloudflare]
+│   │                                          ※ 옮기면 Cloudflare '루트 디렉토리' 설정도 변경 필요
+│   ├── analyzer/                웹앱 화면 (Nuxt)  →  smartsupport.sbreport.workers.dev
+│   └── workers/                 백엔드 API        →  naver-searchad-proxy.sbreport.workers.dev
+│
+└─ 🔧 (기타) 로컬 전용 — 배포 안 함
+    └── scripts/place-review-backfill/   리뷰 데이터 백필 CLI (.mjs)
 ```
 
-> ⚠️ `analyzer/`·`workers/`는 정적 사이트가 아니라 **Cloudflare에 따로 배포**된다. 이 가이드(§4~8)의 "페이지 추가/배포" 절차는 🌐 정적 사이트에만 해당하며, 두 폴더는 각자의 `wrangler.toml` + Cloudflare 빌드로 배포된다.
+> ⚠️ 프로젝트 ②③(`extensions/`·`analyzer/`·`workers/`)은 GitHub Pages가 아니라 **각자 다른 곳에 배포**된다. 이 가이드(§4~8)의 "페이지 추가/배포" 절차는 **프로젝트 ① (정적 허브)에만** 해당한다.
 
 ### 각 폴더의 역할 요약
 
