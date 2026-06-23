@@ -28,9 +28,6 @@ node_modules/
 dist/
 dist-dry/
 
-# 내부 기획·조직 문서 (제품 기획서·조직 개편안 등 — public repo 노출 금지)
-analyzer/plan/
-
 # macOS가 폴더마다 자동 생성하는 잡파일
 .DS_Store
 **/.DS_Store

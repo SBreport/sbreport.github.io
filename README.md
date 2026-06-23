@@ -50,40 +50,38 @@ python -m http.server 8000
 
 ## 2. 저장소 구조
 
-### 이 저장소엔 "3개 프로젝트"가 한 집에 산다
+### 이 저장소 = 순수 "허브" (자료·도구 모음 한 가지 역할)
 
-`sbreport.github.io`는 GitHub **User Pages**라, **이 저장소의 루트가 곧 `https://sbreport.github.io/` 웹사이트의 루트 폴더**다(윈도우의 `C:\inetpub\wwwroot`에 해당). 그래서 **① 자료 허브**로 시작한 저장소에, 나중에 만든 **② 크롬 확장**과 **③ 분석 웹앱(smartsupport)**이 한곳에 들어오며 **모노레포**가 됐다.
+`sbreport.github.io`는 GitHub **User Pages**라, **이 저장소의 루트가 곧 `https://sbreport.github.io/` 웹사이트의 루트 폴더**다(윈도우의 `C:\inetpub\wwwroot`에 해당). 이 저장소는 **여러 제품을 모아 보여주는 정적 허브** 역할만 한다 — 별도 서버·백엔드 없이 GitHub Pages로 배포된다.
 
-아래 트리는 그 **3개 프로젝트**로 묶은 것이다. **프로젝트마다 배포처가 다르다** — 이걸 모르고 폴더를 옮기면 사이트·배포가 깨진다.
+> 📌 **2026-06 구조 개편**: 예전엔 크롬 확장(SBS)·분석 웹앱(analyzer)·백엔드(worker)가 이 저장소 안에 함께 있던 모노레포였다. 이제 그 셋은 **각각 독립 비공개 저장소로 분리**됐고, 이 허브는 그 제품들의 **배포 주소로 링크만** 건다(코드는 품지 않는다). 제품 = 저장소 1개, 제품 안의 여러 기능 = 그 저장소 안의 폴더/브랜치.
 
 ```
 sbreport.github.io/   ← 이 저장소 = 웹사이트 루트 (https://sbreport.github.io/)
-│
-├─ 📁 프로젝트 ① "스마트브랜딩 페이지 모음" — 자료·도구 허브        [GitHub Pages]
-│   │                                          ※ 폴더 위치 = 공개 URL → 옮기면 링크 깨짐
-│   ├── index.html · style.css   허브 첫 화면 (카드 목록 + 검색·정렬)
-│   ├── help/                    이 가이드를 웹에서 보는 페이지
-│   ├── docs/                    강의·문서   →  naver-logic-2605 · onboarding
-│   ├── tools/                   웹 도구     →  keyword-combiner · youtube-report
-│   └── deploy/                  클라이언트 공유 보고서   [Netlify 별도배포]
-│                                  →  sbreport2605 · naver-logic-update-2605 · sbs-notice
-│
-├─ 🧩 프로젝트 ② "크롬 확장프로그램"                              [크롬 웹스토어]
-│   └── extensions/              확장 3종 (+ 각 폴더에 소개페이지, 허브에서 링크됨)
-│       ├── smart-branding-supporter/   SBS: 블로그·검색 통합 도구 (③ Worker 연동)
-│       ├── naver-blog-cleaner/         블로그 글감 패널 숨기기
-│       └── youtube-script-copier/      유튜브 스크립트 복사
-│
-├─ ⚙️ 프로젝트 ③ "SB analyzer" — 로그인형 분석 웹앱               [Cloudflare]
-│   │                                          ※ 옮기면 Cloudflare '루트 디렉토리' 설정도 변경 필요
-│   ├── analyzer/                웹앱 화면 (Nuxt)  →  smartsupport.sbreport.workers.dev
-│   └── workers/                 백엔드 API        →  naver-searchad-proxy.sbreport.workers.dev
-│
-└─ 🔧 (기타) 로컬 전용 — 배포 안 함
-    └── scripts/place-review-backfill/   리뷰 데이터 백필 CLI (.mjs)
+│                       ※ 폴더 위치 = 공개 URL → 옮기면 링크 깨짐
+├── index.html · style.css   허브 첫 화면 (카드 목록 + 검색·정렬)
+├── help/                    이 가이드를 웹에서 보는 페이지
+├── docs/                    강의·문서   →  naver-logic-2605 · onboarding
+├── tools/                   웹 도구     →  keyword-combiner · youtube-report
+├── deploy/                  클라이언트 공유 보고서  [Netlify 별도배포]
+│                              →  sbreport2605 · naver-logic-update-2605 · sbs-notice
+└── extensions/              소형 확장 2종 (소개페이지 + 소스, 허브에서 직접 서빙)
+        ├── naver-blog-cleaner/      블로그 글감 패널 숨기기
+        └── youtube-script-copier/   유튜브 스크립트 복사
 ```
 
-> ⚠️ 프로젝트 ②③(`extensions/`·`analyzer/`·`workers/`)은 GitHub Pages가 아니라 **각자 다른 곳에 배포**된다. 이 가이드(§4~8)의 "페이지 추가/배포" 절차는 **프로젝트 ① (정적 허브)에만** 해당한다.
+### 분리된 독립 저장소 (허브는 "링크만" 건다)
+
+아래 제품들은 **각자 비공개 저장소 + 각자 배포처**를 갖는다. 이 허브 저장소엔 **없으므로**, 수정하려면 해당 저장소를 따로 VSCode로 열어야 한다.
+
+| 제품 | 저장소 (비공개) | 배포처 | 비고 |
+|------|----------------|--------|------|
+| SBS 크롬 확장 | `SBreport/sbs-extension` | 크롬 웹스토어 / GitHub Releases | 블로그·검색 통합 도구. Worker 연동 |
+| SB analyzer | `SBreport/sb-analyzer` | Cloudflare | 로그인형 분석 웹앱 (Nuxt 3). 리뷰 백필 CLI 포함 |
+| 네이버 API 프록시 | `SBreport/sb-worker` | Cloudflare | 백엔드 API. SBS·analyzer 공용 |
+
+> ⚠️ 이 가이드(§4~8)의 "페이지 추가/배포" 절차는 **이 허브 저장소에만** 해당한다. 위 3개 제품은 각자 저장소의 README를 따른다.
+> 새 제품(외부 팀원 작품 포함)을 허브에 올릴 땐, 그 제품의 **배포 URL·이름·한 줄 소개**만 받아 `index.html`에 카드 한 장 추가하면 된다 — 코드를 받아올 필요 없다.
 
 ### 각 폴더의 역할 요약
 
@@ -91,12 +89,9 @@ sbreport.github.io/   ← 이 저장소 = 웹사이트 루트 (https://sbreport.
 |------|------|-----------|-----------|
 | `docs/` | 문서·강의·슬라이드 (type: doc) | 🌐 GitHub Pages | 글 위주 콘텐츠, 슬라이드 |
 | `tools/` | 인터랙티브 웹 도구 (type: tool) | 🌐 GitHub Pages | JS SPA, 복잡한 도구 |
-| `extensions/` | Chrome 확장 소개 페이지 + 소스 | 🌐 GitHub Pages | 확장 배포 시 |
+| `extensions/` | 소형 Chrome 확장 소개+소스 | 🌐 GitHub Pages | 허브에서 직접 서빙하는 소형 확장 |
 | `deploy/` | 외부 공개 보고서 | 🌐 Netlify (별도) | 클라이언트 공유용 |
 | `help/` | 가이드·안내 페이지 | 🌐 GitHub Pages | 운영 문서 공개 필요 시 |
-| `analyzer/` | SB analyzer 본 웹앱 (Nuxt 3) | ⚙️ Cloudflare | 로그인 기반 분석 앱 |
-| `workers/` | 네이버 API 프록시·분석 엔진 | ⚙️ Cloudflare | 백엔드 API |
-| `scripts/` | 로컬 실행 CLI 스크립트 | 🔧 비배포 | 웹이 아닌 .mjs 도구 |
 
 ---
 
@@ -584,13 +579,13 @@ data-type="doc"         ← doc / tool 중 하나인지 확인
 
 **Q. `sb-keyword`, `sb-rank`, `sb-sbs`가 깨진 폴더처럼 보여요. 삭제해도 되나요?**
 
-이 셋은 운영 코드 폴더가 아니라 과거 병렬 작업용 Git worktree 이름입니다. `git worktree list`에서 `prunable gitdir file points to non-existent location`으로 보이면 실제 폴더는 사라지고 `.git/worktrees/` 메타데이터만 남은 상태입니다. 이 경우 원격 브랜치(`feat/keyword`, `feat/rank`, `feat/sbs`)와 현재 코드에는 영향이 없으므로 `git worktree prune`으로 정리하세요. 단, `extensions/smart-branding-supporter/`와 코드 내부 `sbs-*` 식별자는 실제 SBS 확장 기능이므로 삭제 대상이 아닙니다.
+네, 정리해도 됩니다. 이 셋은 과거 병렬 작업용 Git worktree 이름입니다. **2026-06 구조 개편**으로 SBS 확장은 별도 저장소 `SBreport/sbs-extension`으로 분리됐고, 관련 feature 브랜치(`feat/keyword`·`feat/rank`·`feat/sbs`·`feat/place-review`)의 작업은 모두 `main`에 합류 완료됐습니다. `git worktree list`에서 `prunable`로 보이면 `git worktree prune`으로 메타데이터를 정리하세요. 원격에 남은 `feat/*` 브랜치도 더 이상 필요 없으면 삭제 가능합니다(이미 main에 반영됨).
 
 ---
 
-**Q. Mac에서 `analyzer` 빌드가 `oxc-parser` native binding 오류로 실패해요.**
+**Q. `analyzer`/`workers`/SBS 확장은 어디로 갔나요?**
 
-Windows에서 설치된 `node_modules`를 Mac에서 이어 쓰면 `@oxc-parser/binding-darwin-arm64` 같은 플랫폼별 선택 의존성이 빠질 수 있습니다. `analyzer/`에서 `npm install --no-save --ignore-scripts @oxc-parser/binding-darwin-arm64@0.76.0`로 로컬 의존성을 보강한 뒤 `npm run build`를 다시 실행하세요. `node_modules`, `.nuxt`, `.output`, `.wrangler`는 ignore 대상이라 커밋하지 않습니다.
+**2026-06 구조 개편**으로 이 허브 저장소에서 분리되어 각자 독립 비공개 저장소가 됐습니다 — `SBreport/sb-analyzer`(Nuxt 웹앱), `SBreport/sb-worker`(백엔드 API), `SBreport/sbs-extension`(크롬 확장). 빌드·배포·의존성(Mac `oxc-parser` 이슈 등) 관련 문제는 **각 저장소의 README**를 참고하세요. 이 허브는 그 제품들의 배포 주소로 링크만 겁니다.
 
 ---
 
