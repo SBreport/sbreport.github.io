@@ -63,7 +63,7 @@ sbreport.github.io/   ← 이 저장소 = 웹사이트 루트 (https://sbreport.
 ├── help/                    이 가이드를 웹에서 보는 페이지
 ├── docs/                    강의·문서   →  naver-logic-2605 · onboarding
 ├── tools/                   웹 도구     →  keyword-combiner · youtube-report
-├── deploy/                  클라이언트 공유 보고서  [Netlify 별도배포]
+├── share/                   클라이언트 직접공유 보고서 (직접 URL로만 공유, 허브 카드엔 미표시)
 │                              →  sbreport2605 · naver-logic-update-2605 · sbs-notice
 └── extensions/              소형 확장 2종 (소개페이지 + 소스, 허브에서 직접 서빙)
         ├── naver-blog-cleaner/      블로그 글감 패널 숨기기
@@ -83,6 +83,28 @@ sbreport.github.io/   ← 이 저장소 = 웹사이트 루트 (https://sbreport.
 > ⚠️ 이 가이드(§4~8)의 "페이지 추가/배포" 절차는 **이 허브 저장소에만** 해당한다. 위 3개 제품은 각자 저장소의 README를 따른다.
 > 새 제품(외부 팀원 작품 포함)을 허브에 올릴 땐, 그 제품의 **배포 URL·이름·한 줄 소개**만 받아 `index.html`에 카드 한 장 추가하면 된다 — 코드를 받아올 필요 없다.
 
+### 🧭 마스터 규칙 — "새 항목은 어디에 두나"
+
+새로운 페이지·도구·제품이 생겼을 때, 아래 한 장으로 위치를 정한다. (이 규칙이 폴더 혼란을 막는다)
+
+```
+새 항목(내 것이든 팀원 것이든) 생김
+   │
+   ├─ 빌드·백엔드 필요? / 남이 관리? / 따로 배포(Cloudflare·Vercel)?
+   │      → 독립 저장소 + 허브엔 "링크만" (sb-analyzer, sb-searchad-proxy, 외부 앱…)
+   │        → index.html에 외부링크 카드(↗) 1장 추가
+   │
+   └─ 정적(HTML·CSS·JS)이고 내가 관리, GitHub Pages로 충분?
+          → 허브 안에 호스팅 + index.html에 카드 1장
+             · 읽는 자료(문서·강의)        → docs/
+             · 쓰는 웹도구(인터랙티브)      → tools/
+             · 설치형 확장(소개·다운로드)   → extensions/
+             · 운영 가이드                 → help/
+             · 클라이언트 직접공유 보고서   → share/  (카드엔 안 올림, 직접 URL만)
+```
+
+**핵심**: 제품 1개 = 저장소 1개. 한 제품 안의 여러 기능은 그 저장소 안에서 폴더/브랜치로 나눈다(기능마다 저장소를 또 쪼개지 않는다).
+
 ### 각 폴더의 역할 요약
 
 | 폴더 | 성격 | 배포 대상 | 추가 기준 |
@@ -90,7 +112,7 @@ sbreport.github.io/   ← 이 저장소 = 웹사이트 루트 (https://sbreport.
 | `docs/` | 문서·강의·슬라이드 (type: doc) | 🌐 GitHub Pages | 글 위주 콘텐츠, 슬라이드 |
 | `tools/` | 인터랙티브 웹 도구 (type: tool) | 🌐 GitHub Pages | JS SPA, 복잡한 도구 |
 | `extensions/` | 소형 Chrome 확장 소개+소스 | 🌐 GitHub Pages | 허브에서 직접 서빙하는 소형 확장 |
-| `deploy/` | 외부 공개 보고서 | 🌐 Netlify (별도) | 클라이언트 공유용 |
+| `share/` | 클라이언트 직접공유 보고서 | 🌐 GitHub Pages | 직접 URL로만 공유, 허브 카드엔 미표시 |
 | `help/` | 가이드·안내 페이지 | 🌐 GitHub Pages | 운영 문서 공개 필요 시 |
 
 ---

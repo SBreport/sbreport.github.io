@@ -1,0 +1,183 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - heading "스마트브랜딩 페이지 모음" [level=1] [ref=e4]
+      - paragraph [ref=e5]: 마케팅 실무자를 위한 자료·도구 아카이브
+    - button "다크모드 전환" [ref=e7] [cursor=pointer]: 🌙 다크
+  - main [ref=e8]:
+    - generic [ref=e9]:
+      - 'searchbox "#해시태그 검색 (예: 네이버, 유튜브, 온보딩)" [ref=e10]'
+      - combobox "정렬" [ref=e11] [cursor=pointer]:
+        - option "플랫폼순" [selected]
+        - option "유형순"
+        - option "기본순"
+    - group "유형 필터" [ref=e12]:
+      - button "전체" [ref=e13] [cursor=pointer]
+      - button "서비스" [ref=e14] [cursor=pointer]
+      - button "문서" [ref=e15] [cursor=pointer]
+      - button "도구" [ref=e16] [cursor=pointer]
+    - region "프로젝트 목록" [ref=e17]:
+      - 'link "#홈페이지 #회사 #서비스 UNI portal 마케팅 작업 결과물을 모니터링하는 사내 운영 페이지. smartbranding.synology.me 열기 ↗" [ref=e18] [cursor=pointer]':
+        - /url: http://smartbranding.synology.me:8080/
+        - generic [ref=e19]:
+          - generic [ref=e20]: "#홈페이지"
+          - generic [ref=e21]: "#회사"
+          - generic [ref=e22]: "#서비스"
+        - heading "UNI portal" [level=2] [ref=e23]: UNI portal ↗
+        - paragraph [ref=e24]: 마케팅 작업 결과물을 모니터링하는 사내 운영 페이지.
+        - generic [ref=e25]:
+          - generic [ref=e26]: smartbranding.synology.me
+          - generic [ref=e27]: 열기 ↗
+      - 'link "#홈페이지 #회사 #서비스 SBcompany 내부 직원 업무 분장과 운영을 관리하는 사내 페이지. sb-work-six.vercel.app 열기 ↗" [ref=e28] [cursor=pointer]':
+        - /url: https://sb-work-six.vercel.app/
+        - generic [ref=e29]:
+          - generic [ref=e30]: "#홈페이지"
+          - generic [ref=e31]: "#회사"
+          - generic [ref=e32]: "#서비스"
+        - heading "SBcompany" [level=2] [ref=e33]: SBcompany ↗
+        - paragraph [ref=e34]: 내부 직원 업무 분장과 운영을 관리하는 사내 페이지.
+        - generic [ref=e35]:
+          - generic [ref=e36]: sb-work-six.vercel.app
+          - generic [ref=e37]: 열기 ↗
+      - 'link "#홈페이지 #회사 #서비스 블로그배포 랭크체커 블로그 배포 순위를 실시간으로 체크하는 사내 웹사이트. blog-rank-app-production.up.railway.app 열기 ↗" [ref=e38] [cursor=pointer]':
+        - /url: https://blog-rank-app-production.up.railway.app/
+        - generic [ref=e39]:
+          - generic [ref=e40]: "#홈페이지"
+          - generic [ref=e41]: "#회사"
+          - generic [ref=e42]: "#서비스"
+        - heading "블로그배포 랭크체커" [level=2] [ref=e43]: 블로그배포 랭크체커 ↗
+        - paragraph [ref=e44]: 블로그 배포 순위를 실시간으로 체크하는 사내 웹사이트.
+        - generic [ref=e45]:
+          - generic [ref=e46]: blog-rank-app-production.up.railway.app
+          - generic [ref=e47]: 열기 ↗
+      - 'link "#홈페이지 #회사 #서비스 SB 랭크체커 플레이스·웹사이트·지식인 상위노출을 체크하고 보고서로 관리하는 사내 프로그램. sbrank.co.kr 열기 ↗" [ref=e48] [cursor=pointer]':
+        - /url: https://www.sbrank.co.kr/#/place/dashboard
+        - generic [ref=e49]:
+          - generic [ref=e50]: "#홈페이지"
+          - generic [ref=e51]: "#회사"
+          - generic [ref=e52]: "#서비스"
+        - heading "SB 랭크체커" [level=2] [ref=e53]: SB 랭크체커 ↗
+        - paragraph [ref=e54]: 플레이스·웹사이트·지식인 상위노출을 체크하고 보고서로 관리하는 사내 프로그램.
+        - generic [ref=e55]:
+          - generic [ref=e56]: sbrank.co.kr
+          - generic [ref=e57]: 열기 ↗
+      - 'link "#홈페이지 #회사 #서비스 메디컨텐츠 AI로 의료 콘텐츠를 제작·관리하는 사내 프로그램. medicontent-web.vercel.app 열기 ↗" [ref=e58] [cursor=pointer]':
+        - /url: https://medicontent-web.vercel.app/dashboard
+        - generic [ref=e59]:
+          - generic [ref=e60]: "#홈페이지"
+          - generic [ref=e61]: "#회사"
+          - generic [ref=e62]: "#서비스"
+        - heading "메디컨텐츠" [level=2] [ref=e63]: 메디컨텐츠 ↗
+        - paragraph [ref=e64]: AI로 의료 콘텐츠를 제작·관리하는 사내 프로그램.
+        - generic [ref=e65]:
+          - generic [ref=e66]: medicontent-web.vercel.app
+          - generic [ref=e67]: 열기 ↗
+      - 'link "#홈페이지 #회사 #서비스 SB analyzer 네이버 키워드·구좌 분석과 플레이스 리뷰 분석 정식 사이트. 확장과 연동. (로그인) smartsupport.sbreport.workers.dev 열기 ↗" [ref=e68] [cursor=pointer]':
+        - /url: https://smartsupport.sbreport.workers.dev
+        - generic [ref=e69]:
+          - generic [ref=e70]: "#홈페이지"
+          - generic [ref=e71]: "#회사"
+          - generic [ref=e72]: "#서비스"
+        - heading "SB analyzer" [level=2] [ref=e73]: SB analyzer ↗
+        - paragraph [ref=e74]: 네이버 키워드·구좌 분석과 플레이스 리뷰 분석 정식 사이트. 확장과 연동. (로그인)
+        - generic [ref=e75]:
+          - generic [ref=e76]: smartsupport.sbreport.workers.dev
+          - generic [ref=e77]: 열기 ↗
+      - 'link "#홈페이지 #회사 #서비스 InBlog Auto SaaS 블로그 콘텐츠 자동 미러링·SEO 최적화를 원클릭으로 제공하는 B2B SaaS 플랫폼. auto-blog.kr 열기 ↗" [ref=e78] [cursor=pointer]':
+        - /url: https://auto-blog.kr/
+        - generic [ref=e79]:
+          - generic [ref=e80]: "#홈페이지"
+          - generic [ref=e81]: "#회사"
+          - generic [ref=e82]: "#서비스"
+        - heading "InBlog Auto SaaS" [level=2] [ref=e83]: InBlog Auto SaaS ↗
+        - paragraph [ref=e84]: 블로그 콘텐츠 자동 미러링·SEO 최적화를 원클릭으로 제공하는 B2B SaaS 플랫폼.
+        - generic [ref=e85]:
+          - generic [ref=e86]: auto-blog.kr
+          - generic [ref=e87]: 열기 ↗
+      - 'link "#온보딩 #문서 #신입 신규 직원 온보딩 자료 신규 입사자용 온보딩 슬라이드 모음. 회사·조직·문화·실무까지 7개 섹션. 16:9 슬라이드 + 사이드바. 7 PART · 17 슬라이드 열기 →" [ref=e88] [cursor=pointer]':
+        - /url: ./docs/onboarding/
+        - generic [ref=e89]:
+          - generic [ref=e90]: "#온보딩"
+          - generic [ref=e91]: "#문서"
+          - generic [ref=e92]: "#신입"
+        - heading "신규 직원 온보딩 자료" [level=2] [ref=e93]
+        - paragraph [ref=e94]: 신규 입사자용 온보딩 슬라이드 모음. 회사·조직·문화·실무까지 7개 섹션. 16:9 슬라이드 + 사이드바.
+        - generic [ref=e95]:
+          - generic [ref=e96]: 7 PART · 17 슬라이드
+          - generic [ref=e97]: 열기 →
+      - 'link "#네이버 #문서 #내부용 네이버 AI 검색 대응법 정리 네이버 검색이 AI 기반으로 바뀌면서 무엇이 달라졌는지, 블로그 콘텐츠를 어떻게 설계해야 하는지 정리한 내용. 5 PART · 부록 3종 열기 →" [ref=e98] [cursor=pointer]':
+        - /url: ./docs/naver-logic-2605/playbook/
+        - generic [ref=e99]:
+          - generic [ref=e100]: "#네이버"
+          - generic [ref=e101]: "#문서"
+          - generic [ref=e102]: "#내부용"
+        - heading "네이버 AI 검색 대응법 정리" [level=2] [ref=e103]
+        - paragraph [ref=e104]: 네이버 검색이 AI 기반으로 바뀌면서 무엇이 달라졌는지, 블로그 콘텐츠를 어떻게 설계해야 하는지 정리한 내용.
+        - generic [ref=e105]:
+          - generic [ref=e106]: 5 PART · 부록 3종
+          - generic [ref=e107]: 열기 →
+      - 'link "#네이버 #도구 #키워드 네이버 키워드 조합기 지점·시술·키워드를 조합해 마케팅 키워드 목록을 한 번에 생성하는 웹 도구. txt·md·csv·xlsx 입력 + 엑셀/CSV 저장 지원. 브라우저 단독 실행 · SheetJS 열기 →" [ref=e108] [cursor=pointer]':
+        - /url: ./tools/keyword-combiner/
+        - generic [ref=e109]:
+          - generic [ref=e110]: "#네이버"
+          - generic [ref=e111]: "#도구"
+          - generic [ref=e112]: "#키워드"
+        - heading "네이버 키워드 조합기" [level=2] [ref=e113]
+        - paragraph [ref=e114]: 지점·시술·키워드를 조합해 마케팅 키워드 목록을 한 번에 생성하는 웹 도구. txt·md·csv·xlsx 입력 + 엑셀/CSV 저장 지원.
+        - generic [ref=e115]:
+          - generic [ref=e116]: 브라우저 단독 실행 · SheetJS
+          - generic [ref=e117]: 열기 →
+      - 'link "#네이버 #도구 #확장 네이버 키워드 분석 확장프로그램 네이버 검색 결과 좌측에 키워드 검색량(PC/모바일/합계)·연관 키워드를 표시하고, 통합검색 카드 구성(블로그·카페·지식인·광고) 분석에 블로그 글 전체 캡처까지 더한 Chrome 확장. 스마트 브랜딩 서포터 v0.5.0. → 정식 분석 사이트 ''SB analyzer''와 연동. 스마트브랜딩 베타 자세히 ↗" [ref=e118] [cursor=pointer]':
+        - /url: https://sbsupport.netlify.app/
+        - generic [ref=e119]:
+          - generic [ref=e120]: "#네이버"
+          - generic [ref=e121]: "#도구"
+          - generic [ref=e122]: "#확장"
+        - heading "네이버 키워드 분석 확장프로그램" [level=2] [ref=e123]: 네이버 키워드 분석 확장프로그램 ↗
+        - paragraph [ref=e124]: 네이버 검색 결과 좌측에 키워드 검색량(PC/모바일/합계)·연관 키워드를 표시하고, 통합검색 카드 구성(블로그·카페·지식인·광고) 분석에 블로그 글 전체 캡처까지 더한 Chrome 확장. 스마트 브랜딩 서포터 v0.5.0. → 정식 분석 사이트 'SB analyzer'와 연동.
+        - generic [ref=e125]:
+          - generic [ref=e126]: 스마트브랜딩 베타
+          - generic [ref=e127]: 자세히 ↗
+      - 'link "#네이버 #도구 #확장 네이버 블로그 글감 숨기기 네이버 블로그 에디터의 글감 패널을 원클릭으로 숨기는 Chrome 확장. v1.1.0 · Manifest V3. README + ZIP 열기 →" [ref=e128] [cursor=pointer]':
+        - /url: ./extensions/naver-blog-cleaner/
+        - generic [ref=e129]:
+          - generic [ref=e130]: "#네이버"
+          - generic [ref=e131]: "#도구"
+          - generic [ref=e132]: "#확장"
+        - heading "네이버 블로그 글감 숨기기" [level=2] [ref=e133]
+        - paragraph [ref=e134]: 네이버 블로그 에디터의 글감 패널을 원클릭으로 숨기는 Chrome 확장. v1.1.0 · Manifest V3.
+        - generic [ref=e135]:
+          - generic [ref=e136]: README + ZIP
+          - generic [ref=e137]: 열기 →
+      - 'link "#유튜브 #도구 #월간보고서 유튜브 월간 보고서 생성기 YouTube Data API + AI로 채널 월간 성과를 자동 정리해 보고서로 만드는 웹 도구. 유입·유지율 분석, 전략 제안 포함. SPA · YouTube API 열기 →" [ref=e138] [cursor=pointer]':
+        - /url: ./tools/youtube-report/
+        - generic [ref=e139]:
+          - generic [ref=e140]: "#유튜브"
+          - generic [ref=e141]: "#도구"
+          - generic [ref=e142]: "#월간보고서"
+        - heading "유튜브 월간 보고서 생성기" [level=2] [ref=e143]
+        - paragraph [ref=e144]: YouTube Data API + AI로 채널 월간 성과를 자동 정리해 보고서로 만드는 웹 도구. 유입·유지율 분석, 전략 제안 포함.
+        - generic [ref=e145]:
+          - generic [ref=e146]: SPA · YouTube API
+          - generic [ref=e147]: 열기 →
+      - 'link "#유튜브 #도구 #확장 유튜브 스크립트 카피 확장 프로그램 유튜브 영상의 메타데이터와 자막을 클립보드에 복사하는 Chrome 확장. InnerTube API 활용 · 문단 자동 분리. README + ZIP 열기 →" [ref=e148] [cursor=pointer]':
+        - /url: ./extensions/youtube-script-copier/
+        - generic [ref=e149]:
+          - generic [ref=e150]: "#유튜브"
+          - generic [ref=e151]: "#도구"
+          - generic [ref=e152]: "#확장"
+        - heading "유튜브 스크립트 카피 확장 프로그램" [level=2] [ref=e153]
+        - paragraph [ref=e154]: 유튜브 영상의 메타데이터와 자막을 클립보드에 복사하는 Chrome 확장. InnerTube API 활용 · 문단 자동 분리.
+        - generic [ref=e155]:
+          - generic [ref=e156]: README + ZIP
+          - generic [ref=e157]: 열기 →
+  - contentinfo [ref=e158]:
+    - generic [ref=e159]: 스마트브랜딩
+    - generic [ref=e160]: ·
+    - link "유지보수 가이드" [ref=e161] [cursor=pointer]:
+      - /url: ./help/
+    - generic [ref=e162]: ·
+    - link "GitHub" [ref=e163] [cursor=pointer]:
+      - /url: https://github.com/SBreport/sbreport.github.io
+    - generic [ref=e164]: ·
+    - generic [ref=e165]: 최종 업데이트 2026-06-06
