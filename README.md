@@ -78,7 +78,7 @@ sbreport.github.io/   ← 이 저장소 = 웹사이트 루트 (https://sbreport.
 |------|----------------|--------|------|
 | SBS 크롬 확장 | `SBreport/sbs-extension` | 크롬 웹스토어 / GitHub Releases | 블로그·검색 통합 도구. Worker 연동 |
 | SB analyzer | `SBreport/sb-analyzer` | Cloudflare | 로그인형 분석 웹앱 (Nuxt 3). 리뷰 백필 CLI 포함 |
-| 네이버 API 프록시 | `SBreport/sb-worker` | Cloudflare | 백엔드 API. SBS·analyzer 공용 |
+| 네이버 API 프록시 | `SBreport/sb-searchad-proxy` | Cloudflare | 백엔드 API(검색광고 프록시). SBS·analyzer 공용 |
 
 > ⚠️ 이 가이드(§4~8)의 "페이지 추가/배포" 절차는 **이 허브 저장소에만** 해당한다. 위 3개 제품은 각자 저장소의 README를 따른다.
 > 새 제품(외부 팀원 작품 포함)을 허브에 올릴 땐, 그 제품의 **배포 URL·이름·한 줄 소개**만 받아 `index.html`에 카드 한 장 추가하면 된다 — 코드를 받아올 필요 없다.
@@ -585,7 +585,7 @@ data-type="doc"         ← doc / tool 중 하나인지 확인
 
 **Q. `analyzer`/`workers`/SBS 확장은 어디로 갔나요?**
 
-**2026-06 구조 개편**으로 이 허브 저장소에서 분리되어 각자 독립 비공개 저장소가 됐습니다 — `SBreport/sb-analyzer`(Nuxt 웹앱), `SBreport/sb-worker`(백엔드 API), `SBreport/sbs-extension`(크롬 확장). 빌드·배포·의존성(Mac `oxc-parser` 이슈 등) 관련 문제는 **각 저장소의 README**를 참고하세요. 이 허브는 그 제품들의 배포 주소로 링크만 겁니다.
+**2026-06 구조 개편**으로 이 허브 저장소에서 분리되어 각자 독립 비공개 저장소가 됐습니다 — `SBreport/sb-analyzer`(Nuxt 웹앱), `SBreport/sb-searchad-proxy`(백엔드 API), `SBreport/sbs-extension`(크롬 확장). 빌드·배포·의존성(Mac `oxc-parser` 이슈 등) 관련 문제는 **각 저장소의 README**를 참고하세요. 이 허브는 그 제품들의 배포 주소로 링크만 겁니다.
 
 ---
 
