@@ -16,7 +16,7 @@ interface AdminUser {
   created_at: string
   last_login_at: string | null
   approved_at: string | null
-  role: 'user' | 'researcher' | 'admin'
+  role: 'user' | 'researcher' | 'admin' | 'tester'
   admin_memo: string | null
 }
 
@@ -44,7 +44,65 @@ type LoadStatus = 'idle' | 'loading' | 'done' | 'error'
 type SortKey = 'name' | 'role' | 'status' | 'collect_count' | 'sample_count' | 'report_count' | 'total_cost_usd' | 'created_at'
 type SortDir = 'asc' | 'desc'
 
-// ─── 상태 ────────────────────────────────────────────────────────────────────
+// ─── 블라인드 평가 타입 ───────────────────────────────────────────────────────
+
+interface BlindPoolResult {
+  pool: string
+  pool_real: number
+  pool_gen: number
+  per_rater_real: number
+  per_rater_gen: number
+  n_real: number
+  n_gen: number
+  total: number
+}
+
+interface BlindPoolListItem {
+  pool: string
+  created_at: string
+  n_real: number
+  n_gen: number
+  total_items: number
+  total_ratings: number
+  raters: number
+}
+
+interface BlindDistribution {
+  1?: number; 2?: number; 3?: number; 4?: number; 5?: number
+}
+
+interface BlindGroupStats {
+  n: number
+  mean: number
+  dist: BlindDistribution
+}
+
+interface BlindMannWhitney {
+  U: number
+  z: number
+  p_approx: number
+  note?: string
+}
+
+interface BlindResultData {
+  pool: string
+  real: BlindGroupStats
+  gen: BlindGroupStats
+  mean_diff: number
+  raters: number
+  mann_whitney: BlindMannWhitney
+}
+
+// ─── 서브탭 상태 ─────────────────────────────────────────────────────────────
+
+type AdminSubTab = 'users' | 'blind-test' | 'labeling'
+const activeSubTab = ref<AdminSubTab>('users')
+
+// 라벨링 서브탭 내부 토글
+type LabelingTab = 'sprint' | 'iaa'
+const activeLabelingTab = ref<LabelingTab>('sprint')
+
+// ─── 사용자 섹션 상태 ─────────────────────────────────────────────────────────
 
 const authStore = useAuthStore()
 const toast = useToast()
@@ -114,7 +172,7 @@ const filteredRows = computed<MergedRow[]>(() => {
       va = (a.name || a.email).toLowerCase()
       vb = (b.name || b.email).toLowerCase()
     } else if (k === 'role') {
-      const order = { admin: 0, researcher: 1, user: 2 }
+      const order: Record<string, number> = { admin: 0, researcher: 1, tester: 2, user: 3 }
       va = order[a.role] ?? 99
       vb = order[b.role] ?? 99
     } else if (k === 'status') {
@@ -219,7 +277,7 @@ function onMemoKeydown(e: KeyboardEvent, user: AdminUser) {
   }
 }
 
-// ─── API 호출 ─────────────────────────────────────────────────────────────────
+// ─── 사용자 API 호출 ──────────────────────────────────────────────────────────
 
 async function fetchUsers() {
   try {
@@ -325,7 +383,7 @@ async function changeStatus(user: AdminUser, newStatus: 'approved' | 'suspended'
   }
 }
 
-async function changeRole(user: AdminUser, newRole: 'user' | 'researcher' | 'admin') {
+async function changeRole(user: AdminUser, newRole: 'user' | 'researcher' | 'admin' | 'tester') {
   if (roleLoading.value[user.id]) return
   if (newRole === user.role) return
 
@@ -355,10 +413,10 @@ async function changeRole(user: AdminUser, newRole: 'user' | 'researcher' | 'adm
       return
     }
 
-    const updated = await res.json() as { id: string; role: 'user' | 'researcher' | 'admin' }
+    const updated = await res.json() as { id: string; role: 'user' | 'researcher' | 'admin' | 'tester' }
     users.value = users.value.map(u => u.id === updated.id ? { ...u, role: updated.role } : u)
 
-    const roleLabel: Record<string, string> = { user: '일반', researcher: '연구원', admin: '관리자' }
+    const roleLabel: Record<string, string> = { user: '일반', researcher: '연구원', admin: '관리자', tester: '테스터' }
     toast.add({
       title: '역할 변경 완료',
       description: `${user.name || user.email} → ${roleLabel[updated.role] ?? updated.role}`,
@@ -426,6 +484,606 @@ async function saveMemo(user: AdminUser) {
   }
 }
 
+// ─── 블라인드 평가 상태 ───────────────────────────────────────────────────────
+
+// 접근코드
+const blindAccessCode = ref<string | null>(null)
+const blindAccessCodeCopied = ref(false)
+const rateLinkCopied = ref(false)
+const labelLinkCopied = ref(false)
+const iaaAccessCodeCopied = ref(false)
+
+function copyAccessCode() {
+  if (!blindAccessCode.value) return
+  copyToClipboard(
+    blindAccessCode.value,
+    () => { blindAccessCodeCopied.value = true },
+    () => { blindAccessCodeCopied.value = false },
+  )
+}
+
+function copyRateLink() {
+  copyToClipboard(
+    window.location.origin + '/rate',
+    () => { rateLinkCopied.value = true },
+    () => { rateLinkCopied.value = false },
+  )
+}
+
+function copyLabelLink() {
+  copyToClipboard(
+    window.location.origin + '/label',
+    () => { labelLinkCopied.value = true },
+    () => { labelLinkCopied.value = false },
+  )
+}
+
+function copyIaaAccessCode() {
+  if (!blindAccessCode.value) return
+  copyToClipboard(
+    blindAccessCode.value,
+    () => { iaaAccessCodeCopied.value = true },
+    () => { iaaAccessCodeCopied.value = false },
+  )
+}
+
+// 풀 구성
+const blindNReal = ref(15)
+const blindNGen = ref(15)
+const blindGenSince = ref<string>('')
+const blindPoolStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
+const blindPoolError = ref<string | null>(null)
+const blindPoolResult = ref<BlindPoolResult | null>(null)
+
+// 풀 목록
+const blindPoolsStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
+const blindPoolsError = ref<string | null>(null)
+const blindPools = ref<BlindPoolListItem[]>([])
+
+// 풀 삭제 중인 pool id 집합
+const blindDeletingPools = ref<Set<string>>(new Set())
+
+// 결과 패널
+const blindResultStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
+const blindResultError = ref<string | null>(null)
+const blindResult = ref<BlindResultData | null>(null)
+const blindResultPool = ref<string | null>(null)  // 현재 결과를 보고 있는 pool id
+
+// ─── 블라인드 평가 API ────────────────────────────────────────────────────────
+
+async function createBlindPool() {
+  blindPoolStatus.value = 'loading'
+  blindPoolError.value = null
+  blindPoolResult.value = null
+  try {
+    const body: Record<string, unknown> = {
+      n_real: blindNReal.value,
+      n_gen: blindNGen.value,
+    }
+    if (blindGenSince.value) {
+      body.gen_since = new Date(blindGenSince.value).toISOString()
+    }
+    // 글로벌(전체) 컨텍스트: place_row_id 미전송
+    const res = await fetch(`${WORKER_BASE}/api/blind-test/pool`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      blindPoolError.value = msg
+      blindPoolStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as BlindPoolResult
+    blindPoolResult.value = data
+    blindPoolStatus.value = 'done'
+    // 풀 목록 갱신
+    await fetchBlindPools()
+  } catch (e: unknown) {
+    blindPoolError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    blindPoolStatus.value = 'error'
+  }
+}
+
+async function fetchBlindPools() {
+  blindPoolsStatus.value = 'loading'
+  blindPoolsError.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/blind-test/pools`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      blindPoolsError.value = msg
+      blindPoolsStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as { pools: BlindPoolListItem[] }
+    blindPools.value = data.pools
+    blindPoolsStatus.value = 'done'
+  } catch (e: unknown) {
+    blindPoolsError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    blindPoolsStatus.value = 'error'
+  }
+}
+
+async function fetchBlindAccessCode() {
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/blind-test/access-code`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) return
+    const data = await res.json() as { code: string | null }
+    blindAccessCode.value = data.code
+  } catch { /* 접근코드 조회 실패는 무시 */ }
+}
+
+async function deleteBlindPool(pool: string) {
+  if (blindDeletingPools.value.has(pool)) return
+  const confirmed = confirm('이 풀과 해당 풀의 평가를 모두 삭제합니다. 되돌릴 수 없습니다.')
+  if (!confirmed) return
+
+  blindDeletingPools.value = new Set([...blindDeletingPools.value, pool])
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/blind-test/pools/${encodeURIComponent(pool)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `삭제 실패 (${res.status})`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      toast.add({ title: '오류', description: msg, color: 'error' })
+      return
+    }
+    // 결과 패널이 이 풀을 보고 있었다면 초기화
+    if (blindResultPool.value === pool) {
+      blindResultStatus.value = 'idle'
+      blindResultError.value = null
+      blindResult.value = null
+      blindResultPool.value = null
+    }
+    toast.add({ title: '삭제 완료', description: `풀 "${pool}"과 해당 평가가 삭제되었습니다.`, color: 'success' })
+    await fetchBlindPools()
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '알 수 없는 오류'
+    toast.add({ title: '오류', description: msg, color: 'error' })
+  } finally {
+    const next = new Set(blindDeletingPools.value)
+    next.delete(pool)
+    blindDeletingPools.value = next
+  }
+}
+
+async function copyToClipboard(text: string, onCopied: () => void, onReset: () => void) {
+  try {
+    await navigator.clipboard.writeText(text)
+    onCopied()
+    setTimeout(onReset, 1500)
+  } catch { /* ignore */ }
+}
+
+async function fetchBlindResults(poolId: string) {
+  blindResultStatus.value = 'loading'
+  blindResultError.value = null
+  blindResult.value = null
+  blindResultPool.value = poolId
+  try {
+    const params = new URLSearchParams()
+    if (poolId.trim()) params.set('pool', poolId.trim())
+    const res = await fetch(`${WORKER_BASE}/api/blind-test/results?${params}`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      blindResultError.value = msg
+      blindResultStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as BlindResultData
+    blindResult.value = data
+    blindResultStatus.value = 'done'
+  } catch (e: unknown) {
+    blindResultError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    blindResultStatus.value = 'error'
+  }
+}
+
+// 블라인드 분포 막대 너비 계산
+function blindDistPct(count: number | undefined, total: number): number {
+  if (!count || !total) return 0
+  return Math.round((count / total) * 100)
+}
+
+function formatBlindDate(s: string): string {
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return s
+  return d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+// 서브탭 전환 시 블라인드 탭 데이터 로드
+function switchToBlindTab() {
+  activeSubTab.value = 'blind-test'
+  if (blindPoolsStatus.value === 'idle') {
+    fetchBlindPools()
+  }
+  if (blindAccessCode.value === null) {
+    fetchBlindAccessCode()
+  }
+}
+
+// ─── IAA 타입 ────────────────────────────────────────────────────────────────
+
+interface IaaSetListItem {
+  set_id: string
+  created_at: string
+  item_count: number
+  annotator_count: number
+  label_count: number
+}
+
+interface IaaPairwise {
+  a: string
+  b: string
+  kappa: number | null
+  n: number
+}
+
+interface IaaAnnotator {
+  name: string
+  count: number
+}
+
+interface IaaResults {
+  set: string
+  n_reviews_multi: number | null
+  annotators: IaaAnnotator[]
+  fleiss_kappa: number | null
+  interpretation: string | null
+  pairwise: IaaPairwise[]
+  raw_agreement: number | null
+  class_dist: Record<string, number> | null
+  note?: string
+}
+
+// ─── IAA 상태 ────────────────────────────────────────────────────────────────
+
+// 세트 생성
+const iaaN = ref(60)
+const iaaCreateStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
+const iaaCreateError = ref<string | null>(null)
+const iaaCreateResult = ref<{ set_id: string; count: number } | null>(null)
+
+// 세트 목록
+const iaaSetsStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
+const iaaSetsError = ref<string | null>(null)
+const iaaSets = ref<IaaSetListItem[]>([])
+
+// 결과 패널
+const iaaResultStatus = ref<'idle' | 'loading' | 'done' | 'error'>('idle')
+const iaaResultError = ref<string | null>(null)
+const iaaResult = ref<IaaResults | null>(null)
+const iaaResultSetId = ref<string | null>(null)
+
+// ─── IAA API 함수 ─────────────────────────────────────────────────────────────
+
+async function createIaaSet() {
+  iaaCreateStatus.value = 'loading'
+  iaaCreateError.value = null
+  iaaCreateResult.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/iaa/set`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ n: iaaN.value }),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      iaaCreateError.value = msg
+      iaaCreateStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as { set_id: string; count: number }
+    iaaCreateResult.value = data
+    iaaCreateStatus.value = 'done'
+    await fetchIaaSets()
+  } catch (e: unknown) {
+    iaaCreateError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    iaaCreateStatus.value = 'error'
+  }
+}
+
+async function fetchIaaSets() {
+  iaaSetsStatus.value = 'loading'
+  iaaSetsError.value = null
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/iaa/sets`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      iaaSetsError.value = msg
+      iaaSetsStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as { sets: IaaSetListItem[] }
+    iaaSets.value = data.sets
+    iaaSetsStatus.value = 'done'
+  } catch (e: unknown) {
+    iaaSetsError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    iaaSetsStatus.value = 'error'
+  }
+}
+
+async function fetchIaaResults(setId: string) {
+  iaaResultStatus.value = 'loading'
+  iaaResultError.value = null
+  iaaResult.value = null
+  iaaResultSetId.value = setId
+  try {
+    const res = await fetch(
+      `${WORKER_BASE}/api/iaa/results?set=${encodeURIComponent(setId)}`,
+      { headers: authHeaders() }
+    )
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { error?: string; message?: string }
+        if (b.message) msg = b.message
+        else if (b.error) msg = b.error
+      } catch { /* ignore */ }
+      iaaResultError.value = msg
+      iaaResultStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as IaaResults
+    iaaResult.value = data
+    iaaResultStatus.value = 'done'
+  } catch (e: unknown) {
+    iaaResultError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    iaaResultStatus.value = 'error'
+  }
+}
+
+// IAA κ 해석 밴드
+function kappaInterpretation(k: number | null): string {
+  if (k === null) return '—'
+  if (k < 0) return '우연보다 낮음'
+  if (k < 0.2) return 'slight(미미)'
+  if (k < 0.4) return 'fair(약간)'
+  if (k < 0.6) return 'moderate(보통)'
+  if (k < 0.8) return 'substantial(상당)'
+  return 'almost perfect(거의 완벽)'
+}
+
+function kappaColorClass(k: number | null): string {
+  if (k === null) return 'text-gray-400 dark:text-slate-500'
+  if (k >= 0.6) return 'text-emerald-600 dark:text-emerald-400'
+  if (k >= 0.4) return 'text-amber-600 dark:text-amber-400'
+  return 'text-red-500 dark:text-red-400'
+}
+
+function classDist(dist: Record<string, number> | null): Array<{ label: string; count: number; pct: number }> {
+  if (!dist) return []
+  const total = Object.values(dist).reduce((s, v) => s + v, 0)
+  const labelMap: Record<string, string> = {
+    genuine: '진짜손님',
+    ad: '사람마케팅',
+    ai: 'AI조립',
+    unsure: '모름',
+  }
+  return Object.entries(dist).map(([k, v]) => ({
+    label: labelMap[k] ?? k,
+    count: v,
+    pct: total > 0 ? Math.round((v / total) * 100) : 0,
+  }))
+}
+
+function formatIaaDate(s: string): string {
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return s
+  return d.toLocaleDateString('ko-KR', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+function switchToLabelingTab(inner?: LabelingTab) {
+  activeSubTab.value = 'labeling'
+  if (inner) activeLabelingTab.value = inner
+  if (activeLabelingTab.value === 'iaa' && iaaSetsStatus.value === 'idle') {
+    fetchIaaSets()
+  }
+  if (activeLabelingTab.value === 'iaa' && blindAccessCode.value === null) {
+    fetchBlindAccessCode()
+  }
+  if (activeLabelingTab.value === 'sprint' && sprintStatsStatus.value === 'idle') {
+    fetchSprintStats()
+  }
+}
+
+// ─── 라벨링 스프린트 타입 ─────────────────────────────────────────────────────
+
+interface SprintItem {
+  review_id: string
+  body: string
+  place_row_id: number
+  place_name: string
+  length_bucket: 'short' | 'medium' | 'long'
+  body_length: number
+  review_date: string | null
+}
+
+interface SprintStats {
+  total: number
+  by_label: { human: number; ad: number; ai: number; unsure: number }
+  by_place: { place_row_id: number; place_name: string; labeled_count: number }[]
+}
+
+// ─── 라벨링 스프린트 상태 ─────────────────────────────────────────────────────
+
+const sprintItems = ref<SprintItem[]>([])
+const sprintStatus = ref<LoadStatus>('idle')
+const sprintError = ref<string | null>(null)
+const sprintIndex = ref(0)
+const sprintNote = ref('')
+const sprintSavingId = ref<string | null>(null)
+const sprintSaveError = ref<string | null>(null)
+const sprintLimit = ref(200)
+
+const sprintStats = ref<SprintStats | null>(null)
+const sprintStatsStatus = ref<LoadStatus>('idle')
+
+const sprintCurrent = computed<SprintItem | null>(() => sprintItems.value[sprintIndex.value] ?? null)
+const sprintLabeledInSession = ref(0)
+const sprintDoneIds = ref<Set<string>>(new Set())
+
+const SPRINT_LABEL_MAP: Record<string, { text: string; short: string; cls: string }> = {
+  human:  { text: '진짜손님',   short: '사람',  cls: 'bg-emerald-500 hover:bg-emerald-600 text-white' },
+  ad:     { text: '사람마케팅', short: '광고',  cls: 'bg-red-500 hover:bg-red-600 text-white' },
+  ai:     { text: 'AI조립',     short: 'AI',    cls: 'bg-amber-500 hover:bg-amber-600 text-white' },
+  unsure: { text: '모름',       short: '?',     cls: 'bg-slate-400 hover:bg-slate-500 text-white' },
+}
+
+// ─── 라벨링 스프린트 API 함수 ────────────────────────────────────────────────
+
+async function fetchSprintSample() {
+  sprintStatus.value = 'loading'
+  sprintError.value = null
+  sprintItems.value = []
+  sprintIndex.value = 0
+  sprintNote.value = ''
+  sprintLabeledInSession.value = 0
+  sprintDoneIds.value = new Set()
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/review-sprint-sample?limit=${sprintLimit.value}`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      let msg = `오류 ${res.status}`
+      try {
+        const b = await res.json() as { message?: string }
+        if (b.message) msg = b.message
+      } catch { /* ignore */ }
+      sprintError.value = msg
+      sprintStatus.value = 'error'
+      return
+    }
+    const data = await res.json() as { total: number; items: SprintItem[] }
+    sprintItems.value = data.items
+    sprintStatus.value = 'done'
+  } catch (e: unknown) {
+    sprintError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+    sprintStatus.value = 'error'
+  }
+}
+
+async function fetchSprintStats() {
+  sprintStatsStatus.value = 'loading'
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/places/review-sprint-stats`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      sprintStatsStatus.value = 'error'
+      return
+    }
+    sprintStats.value = await res.json() as SprintStats
+    sprintStatsStatus.value = 'done'
+  } catch {
+    sprintStatsStatus.value = 'error'
+  }
+}
+
+type HumanLabelSprint = 'human' | 'ad' | 'ai' | 'unsure' | null
+
+async function sprintLabel(label: HumanLabelSprint) {
+  const item = sprintCurrent.value
+  if (!item || sprintSavingId.value) return
+  sprintSavingId.value = item.review_id
+  sprintSaveError.value = null
+  try {
+    const res = await fetch(
+      `${WORKER_BASE}/api/places/${item.place_row_id}/reviews/${item.review_id}/label`,
+      {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ label, note: sprintNote.value.trim() || null }),
+      }
+    )
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({})) as { message?: string }
+      sprintSaveError.value = b.message ?? `저장 실패 (${res.status})`
+      return
+    }
+    // 성공: 다음으로 이동
+    sprintDoneIds.value = new Set([...sprintDoneIds.value, item.review_id])
+    sprintLabeledInSession.value++
+    sprintNote.value = ''
+    sprintIndex.value++
+    // 통계 낙관적 반영
+    if (sprintStats.value && label) {
+      sprintStats.value = {
+        ...sprintStats.value,
+        total: sprintStats.value.total + 1,
+        by_label: {
+          ...sprintStats.value.by_label,
+          [label]: (sprintStats.value.by_label[label] ?? 0) + 1,
+        },
+      }
+    }
+  } catch (e: unknown) {
+    sprintSaveError.value = e instanceof Error ? e.message : '저장 중 오류'
+  } finally {
+    sprintSavingId.value = null
+  }
+}
+
+function sprintSkip() {
+  if (sprintIndex.value < sprintItems.value.length - 1) {
+    sprintIndex.value++
+    sprintNote.value = ''
+    sprintSaveError.value = null
+  }
+}
+
+function sprintPrev() {
+  if (sprintIndex.value > 0) {
+    sprintIndex.value--
+    sprintNote.value = ''
+    sprintSaveError.value = null
+  }
+}
+
 // ─── 초기 로드 ────────────────────────────────────────────────────────────────
 
 onMounted(() => {
@@ -436,25 +1094,15 @@ onMounted(() => {
 <template>
   <!--
     height 체인: default 레이아웃 main(flex-1 min-h-0 overflow-y-auto p-6) → h-full flex flex-col
-    고정 헤더/카드 shrink-0 / 표 영역 flex-1 min-h-0 overflow-y-auto
+    고정 헤더/서브탭/카드 shrink-0 / 본문 영역 flex-1 min-h-0 overflow-y-auto
   -->
   <div class="h-full flex flex-col gap-3 overflow-hidden max-w-7xl">
 
     <!-- ── 페이지 헤더 (shrink-0) ──────────────────────────────────────────── -->
     <div class="shrink-0 flex items-center justify-between">
-      <div class="flex flex-col gap-0.5">
-        <h1 class="text-base font-semibold text-gray-900 dark:text-slate-100">사용자 관리</h1>
-        <p v-if="loadStatus === 'done'" class="text-xs text-gray-400 dark:text-slate-500">
-          전체 {{ totalCount }}명
-          <template v-if="pendingCount > 0">
-            · <span class="text-amber-600 dark:text-amber-400 font-medium">대기 {{ pendingCount }}명</span>
-          </template>
-          <template v-if="searchQuery.trim()">
-            · 검색 결과 {{ filteredRows.length }}명
-          </template>
-        </p>
-      </div>
+      <h1 class="text-base font-semibold text-gray-900 dark:text-slate-100">사용자 관리</h1>
       <UButton
+        v-if="activeSubTab === 'users'"
         icon="i-heroicons-arrow-path"
         size="sm"
         color="neutral"
@@ -463,303 +1111,1360 @@ onMounted(() => {
         label="새로고침"
         @click="loadAll"
       />
-    </div>
-
-    <!-- ── 요약 카드 (shrink-0) ────────────────────────────────────────────── -->
-    <div
-      v-if="loadStatus === 'done'"
-      class="shrink-0 grid grid-cols-6 gap-2"
-    >
-      <!-- 전체 사용자 -->
-      <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
-        <span class="text-[10px] text-gray-400 dark:text-slate-500 whitespace-nowrap">전체 사용자</span>
-        <span class="text-lg font-semibold text-gray-900 dark:text-slate-100 tabular-nums leading-tight">{{ totalCount }}</span>
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">명</span>
-      </div>
-      <!-- 연구원/관리자 -->
-      <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
-        <span class="text-[10px] text-gray-400 dark:text-slate-500 whitespace-nowrap">연구원+관리자</span>
-        <span class="text-lg font-semibold text-blue-700 dark:text-blue-400 tabular-nums leading-tight">{{ researcherCount }}</span>
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">명</span>
-      </div>
-      <!-- 총 수집 -->
-      <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">총 수집</span>
-        <span class="text-lg font-semibold text-gray-900 dark:text-slate-100 tabular-nums leading-tight">{{ totalCollect.toLocaleString() }}</span>
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">건</span>
-      </div>
-      <!-- 총 예시 생성 -->
-      <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">총 예시 생성</span>
-        <span class="text-lg font-semibold text-gray-900 dark:text-slate-100 tabular-nums leading-tight">{{ totalSample.toLocaleString() }}</span>
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">건</span>
-      </div>
-      <!-- 총 리포트 -->
-      <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">총 리포트</span>
-        <span class="text-lg font-semibold text-gray-900 dark:text-slate-100 tabular-nums leading-tight">{{ totalReport.toLocaleString() }}</span>
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">건</span>
-      </div>
-      <!-- 총 API 비용 -->
-      <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">총 API 비용</span>
-        <span class="text-lg font-semibold text-orange-600 dark:text-orange-400 tabular-nums leading-tight font-mono">{{ formatCostUsd(totalCostUsd) }}</span>
-        <span class="text-[10px] text-gray-400 dark:text-slate-500">USD</span>
-      </div>
-    </div>
-
-    <!-- ── 검색 바 (shrink-0) ───────────────────────────────────────────────── -->
-    <div v-if="loadStatus === 'done'" class="shrink-0">
-      <UInput
-        v-model="searchQuery"
-        icon="i-heroicons-magnifying-glass"
-        placeholder="이름·이메일 검색..."
+      <UButton
+        v-else-if="activeSubTab === 'blind-test'"
+        icon="i-heroicons-arrow-path"
         size="sm"
-        class="w-72"
+        color="neutral"
+        variant="outline"
+        :loading="blindPoolsStatus === 'loading'"
+        label="새로고침"
+        @click="fetchBlindPools"
+      />
+      <UButton
+        v-else-if="activeSubTab === 'labeling' && activeLabelingTab === 'iaa'"
+        icon="i-heroicons-arrow-path"
+        size="sm"
+        color="neutral"
+        variant="outline"
+        :loading="iaaSetsStatus === 'loading'"
+        label="새로고침"
+        @click="fetchIaaSets"
+      />
+      <UButton
+        v-else-if="activeSubTab === 'labeling' && activeLabelingTab === 'sprint'"
+        icon="i-heroicons-arrow-path"
+        size="sm"
+        color="neutral"
+        variant="outline"
+        :loading="sprintStatus === 'loading'"
+        label="새로고침"
+        @click="fetchSprintSample(); fetchSprintStats()"
       />
     </div>
 
-    <!-- ── 본문 표 영역 (flex-1 min-h-0) ──────────────────────────────────── -->
-    <div class="flex-1 min-h-0 flex flex-col border border-gray-200 dark:border-slate-700 rounded-lg overflow-hidden">
-
-      <!-- Loading / Idle -->
-      <div v-if="loadStatus === 'loading' || loadStatus === 'idle'" class="flex-1 flex items-center justify-center">
-        <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 dark:text-slate-500 animate-spin" />
-      </div>
-
-      <!-- Error -->
-      <div v-else-if="loadStatus === 'error'" class="flex-1 flex flex-col items-center justify-center gap-3">
-        <p class="text-sm text-red-500 dark:text-red-400">{{ loadError }}</p>
-        <UButton label="재시도" size="sm" color="neutral" variant="outline" @click="loadAll" />
-      </div>
-
-      <!-- Empty (users 없음) -->
-      <div v-else-if="loadStatus === 'done' && users.length === 0" class="flex-1 flex items-center justify-center">
-        <p class="text-sm text-gray-400 dark:text-slate-500">등록된 사용자가 없습니다.</p>
-      </div>
-
-      <!-- Empty (검색 결과 없음) -->
-      <div v-else-if="loadStatus === 'done' && filteredRows.length === 0" class="flex-1 flex items-center justify-center">
-        <p class="text-sm text-gray-400 dark:text-slate-500">"{{ searchQuery }}"에 해당하는 사용자가 없습니다.</p>
-      </div>
-
-      <!-- Success: 통합 표 -->
-      <template v-else>
-        <div class="flex-1 min-h-0 overflow-auto">
-          <table class="w-full text-xs border-collapse">
-            <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-slate-900">
-              <tr class="h-8">
-                <!-- 사용자: 남은 공간 차지 -->
-                <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 min-w-0">
-                  <button class="flex items-center gap-1 hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('name')">
-                    사용자
-                    <UIcon :name="sortIcon('name')" class="w-3 h-3" />
-                  </button>
-                </th>
-                <!-- 상태 -->
-                <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">
-                  <button class="flex items-center gap-1 hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('status')">
-                    상태
-                    <UIcon :name="sortIcon('status')" class="w-3 h-3" />
-                  </button>
-                </th>
-                <!-- 역할 (select로 변경, 정렬 버튼 유지) -->
-                <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-24">
-                  <button class="flex items-center gap-1 hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('role')">
-                    역할
-                    <UIcon :name="sortIcon('role')" class="w-3 h-3" />
-                  </button>
-                </th>
-                <!-- 수집 -->
-                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">
-                  <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('collect_count')">
-                    수집
-                    <UIcon :name="sortIcon('collect_count')" class="w-3 h-3" />
-                  </button>
-                </th>
-                <!-- 예시 -->
-                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">
-                  <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('sample_count')">
-                    예시
-                    <UIcon :name="sortIcon('sample_count')" class="w-3 h-3" />
-                  </button>
-                </th>
-                <!-- 리포트 -->
-                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">
-                  <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('report_count')">
-                    리포트
-                    <UIcon :name="sortIcon('report_count')" class="w-3 h-3" />
-                  </button>
-                </th>
-                <!-- API 비용 -->
-                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-20">
-                  <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('total_cost_usd')">
-                    API비용
-                    <UIcon :name="sortIcon('total_cost_usd')" class="w-3 h-3" />
-                  </button>
-                </th>
-                <!-- 메모 -->
-                <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-32">메모</th>
-                <!-- 작업 -->
-                <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">작업</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in filteredRows"
-                :key="row.id"
-                class="border-b border-gray-100 dark:border-slate-700 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
-                :class="isHighCost(row) ? 'bg-orange-50/40 dark:bg-orange-950/20' : ''"
-              >
-                <!-- 사용자: picture + name + email -->
-                <td class="px-2 py-1.5 align-middle max-w-0">
-                  <div class="flex items-center gap-1.5">
-                    <img
-                      v-if="row.picture"
-                      :src="row.picture"
-                      :alt="row.name"
-                      class="w-6 h-6 rounded-full shrink-0 object-cover bg-gray-100 dark:bg-slate-700"
-                    />
-                    <span v-else class="w-6 h-6 rounded-full shrink-0 bg-gray-200 dark:bg-slate-700 flex items-center justify-center">
-                      <UIcon name="i-heroicons-user" class="w-3 h-3 text-gray-400 dark:text-slate-500" />
-                    </span>
-                    <div class="flex flex-col leading-snug min-w-0">
-                      <span class="text-xs font-medium text-gray-900 dark:text-slate-100 truncate">{{ row.name || '—' }}</span>
-                      <span class="text-[10px] text-gray-400 dark:text-slate-500 truncate">{{ row.email }}</span>
-                    </div>
-                  </div>
-                </td>
-
-                <!-- 상태 뱃지 -->
-                <td class="px-2 py-1.5 align-middle whitespace-nowrap">
-                  <UBadge v-if="row.status === 'approved'" label="승인" color="success" variant="subtle" size="sm" />
-                  <UBadge v-else-if="row.status === 'pending'" label="대기" color="warning" variant="subtle" size="sm" />
-                  <UBadge v-else-if="row.status === 'suspended'" label="정지" color="error" variant="subtle" size="sm" />
-                </td>
-
-                <!-- 역할: select 드롭다운 -->
-                <td class="px-2 py-1.5 align-middle">
-                  <!-- 본인(admin) 행: 변경 불가 표시 -->
-                  <span v-if="row.id === authStore.user?.id" class="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400">
-                    <span>관리자</span><span class="text-gray-300 dark:text-slate-600">(본인)</span>
-                  </span>
-                  <!-- 다른 사용자: select -->
-                  <div v-else class="relative">
-                    <select
-                      :value="row.role"
-                      :disabled="roleLoading[row.id]"
-                      class="h-7 w-full rounded border text-[11px] px-1.5 pr-5 appearance-none cursor-pointer bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-slate-300 hover:border-gray-400 dark:hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
-                      @change="(e) => changeRole(row, (e.target as HTMLSelectElement).value as 'user' | 'researcher' | 'admin')"
-                    >
-                      <option value="user">일반</option>
-                      <option value="researcher">연구원</option>
-                      <option value="admin">관리자</option>
-                    </select>
-                    <UIcon
-                      v-if="roleLoading[row.id]"
-                      name="i-heroicons-arrow-path"
-                      class="w-3 h-3 animate-spin absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
-                    />
-                  </div>
-                </td>
-
-                <!-- 수집 -->
-                <td class="px-2 py-1.5 align-middle text-right tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
-                  {{ row.has_activity ? row.collect_count.toLocaleString() : '—' }}
-                </td>
-
-                <!-- 예시 생성 -->
-                <td class="px-2 py-1.5 align-middle text-right tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
-                  {{ row.has_activity ? row.sample_count.toLocaleString() : '—' }}
-                </td>
-
-                <!-- 리포트 -->
-                <td class="px-2 py-1.5 align-middle text-right tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
-                  {{ row.has_activity ? row.report_count.toLocaleString() : '—' }}
-                </td>
-
-                <!-- API 비용 -->
-                <td class="px-2 py-1.5 align-middle text-right tabular-nums font-mono whitespace-nowrap"
-                  :class="isHighCost(row)
-                    ? 'text-orange-600 dark:text-orange-400 font-semibold'
-                    : row.has_activity
-                      ? 'text-gray-700 dark:text-slate-300'
-                      : 'text-gray-300 dark:text-slate-600'"
-                >
-                  <template v-if="row.has_activity">
-                    {{ formatCostUsd(row.total_cost_usd) }}
-                    <UIcon
-                      v-if="isHighCost(row)"
-                      name="i-heroicons-exclamation-triangle"
-                      class="w-3 h-3 text-orange-500 dark:text-orange-400 inline-block ml-0.5 align-middle"
-                    />
-                  </template>
-                  <template v-else>—</template>
-                </td>
-
-                <!-- 메모 셀 -->
-                <td class="px-2 py-1.5 align-middle w-32 max-w-32">
-                  <!-- 편집 모드 -->
-                  <div v-if="getMemo(row.id).editing" class="flex items-center gap-1">
-                    <UInput
-                      :model-value="getMemo(row.id).draft"
-                      size="xs"
-                      placeholder="메모..."
-                      class="flex-1 min-w-0"
-                      :disabled="getMemo(row.id).saving"
-                      @update:model-value="val => memoState[row.id] = { ...getMemo(row.id), draft: String(val) }"
-                      @keydown="onMemoKeydown($event, row)"
-                    />
-                    <UButton size="xs" color="neutral" variant="solid" label="저장" :loading="getMemo(row.id).saving" :disabled="getMemo(row.id).saving" @click="saveMemo(row)" />
-                    <UButton size="xs" color="neutral" variant="ghost" icon="i-heroicons-x-mark" :disabled="getMemo(row.id).saving" @click="cancelEditMemo(row.id)" />
-                  </div>
-                  <!-- 표시 모드 -->
-                  <button v-else class="w-full text-left group" @click="startEditMemo(row)">
-                    <span v-if="row.admin_memo" class="text-[10px] text-gray-600 dark:text-slate-400 group-hover:text-gray-900 dark:group-hover:text-slate-100 truncate block">{{ row.admin_memo }}</span>
-                    <span v-else class="text-[10px] text-gray-300 dark:text-slate-600 group-hover:text-gray-400 dark:group-hover:text-slate-500">메모 추가</span>
-                  </button>
-                </td>
-
-                <!-- 작업 버튼 -->
-                <td class="px-2 py-1.5 align-middle text-right whitespace-nowrap">
-                  <UBadge v-if="row.role === 'admin'" label="관리자" color="neutral" variant="outline" size="sm" />
-                  <UButton
-                    v-else-if="row.status === 'pending'"
-                    label="승인"
-                    size="xs"
-                    color="success"
-                    variant="soft"
-                    :loading="actionLoading[row.id]"
-                    :disabled="actionLoading[row.id]"
-                    @click="changeStatus(row, 'approved')"
-                  />
-                  <UButton
-                    v-else-if="row.status === 'approved'"
-                    label="정지"
-                    size="xs"
-                    color="error"
-                    variant="soft"
-                    :loading="actionLoading[row.id]"
-                    :disabled="actionLoading[row.id]"
-                    @click="changeStatus(row, 'suspended')"
-                  />
-                  <UButton
-                    v-else-if="row.status === 'suspended'"
-                    label="재승인"
-                    size="xs"
-                    color="success"
-                    variant="soft"
-                    :loading="actionLoading[row.id]"
-                    :disabled="actionLoading[row.id]"
-                    @click="changeStatus(row, 'approved')"
-                  />
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </template>
+    <!-- ── 서브탭 바 (shrink-0) ────────────────────────────────────────────── -->
+    <div class="shrink-0 flex border-b border-gray-200 dark:border-slate-700">
+      <button
+        class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+        :class="activeSubTab === 'users'
+          ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+          : 'border-transparent text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
+        @click="activeSubTab = 'users'"
+      >
+        사용자
+      </button>
+      <button
+        class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+        :class="activeSubTab === 'blind-test'
+          ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+          : 'border-transparent text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
+        @click="switchToBlindTab"
+      >
+        생성물 블라인드 평가
+      </button>
+      <button
+        class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+        :class="activeSubTab === 'labeling'
+          ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+          : 'border-transparent text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
+        @click="switchToLabelingTab()"
+      >
+        라벨링
+      </button>
     </div>
+
+    <!-- ════════════════════════════════════════════════════════════════════════ -->
+    <!-- 섹션 1: 사용자 -->
+    <!-- ════════════════════════════════════════════════════════════════════════ -->
+    <template v-if="activeSubTab === 'users'">
+
+      <!-- ── 요약 서브헤더 ────────────────────────────────────────────────── -->
+      <p v-if="loadStatus === 'done'" class="shrink-0 text-xs text-gray-400 dark:text-slate-500">
+        전체 {{ totalCount }}명
+        <template v-if="pendingCount > 0">
+          · <span class="text-amber-600 dark:text-amber-400 font-medium">대기 {{ pendingCount }}명</span>
+        </template>
+        <template v-if="searchQuery.trim()">
+          · 검색 결과 {{ filteredRows.length }}명
+        </template>
+      </p>
+
+      <!-- ── 요약 카드 (shrink-0) ────────────────────────────────────────── -->
+      <div
+        v-if="loadStatus === 'done'"
+        class="shrink-0 grid grid-cols-6 gap-2"
+      >
+        <!-- 전체 사용자 -->
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
+          <span class="text-[10px] text-gray-400 dark:text-slate-500 whitespace-nowrap">전체 사용자</span>
+          <span class="text-lg font-semibold text-gray-900 dark:text-slate-100 tabular-nums leading-tight">{{ totalCount }}</span>
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">명</span>
+        </div>
+        <!-- 연구원/관리자 -->
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
+          <span class="text-[10px] text-gray-400 dark:text-slate-500 whitespace-nowrap">연구원+관리자</span>
+          <span class="text-lg font-semibold text-blue-700 dark:text-blue-400 tabular-nums leading-tight">{{ researcherCount }}</span>
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">명</span>
+        </div>
+        <!-- 총 수집 -->
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">총 수집</span>
+          <span class="text-lg font-semibold text-gray-900 dark:text-slate-100 tabular-nums leading-tight">{{ totalCollect.toLocaleString() }}</span>
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">건</span>
+        </div>
+        <!-- 총 예시 생성 -->
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">총 예시 생성</span>
+          <span class="text-lg font-semibold text-gray-900 dark:text-slate-100 tabular-nums leading-tight">{{ totalSample.toLocaleString() }}</span>
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">건</span>
+        </div>
+        <!-- 총 리포트 -->
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">총 리포트</span>
+          <span class="text-lg font-semibold text-gray-900 dark:text-slate-100 tabular-nums leading-tight">{{ totalReport.toLocaleString() }}</span>
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">건</span>
+        </div>
+        <!-- 총 API 비용 -->
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 flex flex-col gap-0.5">
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">총 API 비용</span>
+          <span class="text-lg font-semibold text-orange-600 dark:text-orange-400 tabular-nums leading-tight font-mono">{{ formatCostUsd(totalCostUsd) }}</span>
+          <span class="text-[10px] text-gray-400 dark:text-slate-500">USD</span>
+        </div>
+      </div>
+
+      <!-- ── 검색 바 (shrink-0) ─────────────────────────────────────────── -->
+      <div v-if="loadStatus === 'done'" class="shrink-0">
+        <UInput
+          v-model="searchQuery"
+          icon="i-heroicons-magnifying-glass"
+          placeholder="이름·이메일 검색..."
+          size="sm"
+          class="w-72"
+        />
+      </div>
+
+      <!-- ── 본문 표 영역 (flex-1 min-h-0) ─────────────────────────────── -->
+      <div class="flex-1 min-h-0 flex flex-col border border-gray-200 dark:border-slate-700 rounded-lg overflow-hidden">
+
+        <!-- Loading / Idle -->
+        <div v-if="loadStatus === 'loading' || loadStatus === 'idle'" class="flex-1 flex items-center justify-center">
+          <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 text-gray-400 dark:text-slate-500 animate-spin" />
+        </div>
+
+        <!-- Error -->
+        <div v-else-if="loadStatus === 'error'" class="flex-1 flex flex-col items-center justify-center gap-3">
+          <p class="text-sm text-red-500 dark:text-red-400">{{ loadError }}</p>
+          <UButton label="재시도" size="sm" color="neutral" variant="outline" @click="loadAll" />
+        </div>
+
+        <!-- Empty (users 없음) -->
+        <div v-else-if="loadStatus === 'done' && users.length === 0" class="flex-1 flex items-center justify-center">
+          <p class="text-sm text-gray-400 dark:text-slate-500">등록된 사용자가 없습니다.</p>
+        </div>
+
+        <!-- Empty (검색 결과 없음) -->
+        <div v-else-if="loadStatus === 'done' && filteredRows.length === 0" class="flex-1 flex items-center justify-center">
+          <p class="text-sm text-gray-400 dark:text-slate-500">"{{ searchQuery }}"에 해당하는 사용자가 없습니다.</p>
+        </div>
+
+        <!-- Success: 통합 표 -->
+        <template v-else>
+          <div class="flex-1 min-h-0 overflow-auto">
+            <table class="w-full text-xs border-collapse">
+              <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-slate-900">
+                <tr class="h-8">
+                  <!-- 사용자: 남은 공간 차지 -->
+                  <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 min-w-0">
+                    <button class="flex items-center gap-1 hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('name')">
+                      사용자
+                      <UIcon :name="sortIcon('name')" class="w-3 h-3" />
+                    </button>
+                  </th>
+                  <!-- 상태 -->
+                  <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">
+                    <button class="flex items-center gap-1 hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('status')">
+                      상태
+                      <UIcon :name="sortIcon('status')" class="w-3 h-3" />
+                    </button>
+                  </th>
+                  <!-- 역할 (select로 변경, 정렬 버튼 유지) -->
+                  <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-24">
+                    <button class="flex items-center gap-1 hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('role')">
+                      역할
+                      <UIcon :name="sortIcon('role')" class="w-3 h-3" />
+                    </button>
+                  </th>
+                  <!-- 수집 -->
+                  <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">
+                    <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('collect_count')">
+                      수집
+                      <UIcon :name="sortIcon('collect_count')" class="w-3 h-3" />
+                    </button>
+                  </th>
+                  <!-- 예시 -->
+                  <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">
+                    <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('sample_count')">
+                      예시
+                      <UIcon :name="sortIcon('sample_count')" class="w-3 h-3" />
+                    </button>
+                  </th>
+                  <!-- 리포트 -->
+                  <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">
+                    <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('report_count')">
+                      리포트
+                      <UIcon :name="sortIcon('report_count')" class="w-3 h-3" />
+                    </button>
+                  </th>
+                  <!-- API 비용 -->
+                  <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-20">
+                    <button class="flex items-center justify-end gap-1 w-full hover:text-gray-900 dark:hover:text-slate-100 transition-colors" @click="setSort('total_cost_usd')">
+                      API비용
+                      <UIcon :name="sortIcon('total_cost_usd')" class="w-3 h-3" />
+                    </button>
+                  </th>
+                  <!-- 메모 -->
+                  <th class="px-2 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-32">메모</th>
+                  <!-- 작업 -->
+                  <th class="px-2 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">작업</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in filteredRows"
+                  :key="row.id"
+                  class="border-b border-gray-100 dark:border-slate-700 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
+                  :class="isHighCost(row) ? 'bg-orange-50/40 dark:bg-orange-950/20' : ''"
+                >
+                  <!-- 사용자: picture + name + email -->
+                  <td class="px-2 py-1.5 align-middle max-w-0">
+                    <div class="flex items-center gap-1.5">
+                      <img
+                        v-if="row.picture"
+                        :src="row.picture"
+                        :alt="row.name"
+                        class="w-6 h-6 rounded-full shrink-0 object-cover bg-gray-100 dark:bg-slate-700"
+                      />
+                      <span v-else class="w-6 h-6 rounded-full shrink-0 bg-gray-200 dark:bg-slate-700 flex items-center justify-center">
+                        <UIcon name="i-heroicons-user" class="w-3 h-3 text-gray-400 dark:text-slate-500" />
+                      </span>
+                      <div class="flex flex-col leading-snug min-w-0">
+                        <span class="text-xs font-medium text-gray-900 dark:text-slate-100 truncate">{{ row.name || '—' }}</span>
+                        <span class="text-[10px] text-gray-400 dark:text-slate-500 truncate">{{ row.email }}</span>
+                      </div>
+                    </div>
+                  </td>
+
+                  <!-- 상태 뱃지 -->
+                  <td class="px-2 py-1.5 align-middle whitespace-nowrap">
+                    <UBadge v-if="row.status === 'approved'" label="승인" color="success" variant="subtle" size="sm" />
+                    <UBadge v-else-if="row.status === 'pending'" label="대기" color="warning" variant="subtle" size="sm" />
+                    <UBadge v-else-if="row.status === 'suspended'" label="정지" color="error" variant="subtle" size="sm" />
+                  </td>
+
+                  <!-- 역할: select 드롭다운 -->
+                  <td class="px-2 py-1.5 align-middle">
+                    <!-- 본인(admin) 행: 변경 불가 표시 -->
+                    <span v-if="row.id === authStore.user?.id" class="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400">
+                      <span>관리자</span><span class="text-gray-300 dark:text-slate-600">(본인)</span>
+                    </span>
+                    <!-- 다른 사용자: select -->
+                    <div v-else class="relative">
+                      <select
+                        :value="row.role"
+                        :disabled="roleLoading[row.id]"
+                        class="h-7 w-full rounded border text-[11px] px-1.5 pr-5 appearance-none cursor-pointer bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-slate-300 hover:border-gray-400 dark:hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        @change="(e) => changeRole(row, (e.target as HTMLSelectElement).value as 'user' | 'researcher' | 'admin' | 'tester')"
+                      >
+                        <option value="user">일반</option>
+                        <option value="tester">테스터</option>
+                        <option value="researcher">연구원</option>
+                        <option value="admin">관리자</option>
+                      </select>
+                      <UIcon
+                        v-if="roleLoading[row.id]"
+                        name="i-heroicons-arrow-path"
+                        class="w-3 h-3 animate-spin absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
+                      />
+                    </div>
+                  </td>
+
+                  <!-- 수집 -->
+                  <td class="px-2 py-1.5 align-middle text-right tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
+                    {{ row.has_activity ? row.collect_count.toLocaleString() : '—' }}
+                  </td>
+
+                  <!-- 예시 생성 -->
+                  <td class="px-2 py-1.5 align-middle text-right tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
+                    {{ row.has_activity ? row.sample_count.toLocaleString() : '—' }}
+                  </td>
+
+                  <!-- 리포트 -->
+                  <td class="px-2 py-1.5 align-middle text-right tabular-nums" :class="row.has_activity ? 'text-gray-700 dark:text-slate-300' : 'text-gray-300 dark:text-slate-600'">
+                    {{ row.has_activity ? row.report_count.toLocaleString() : '—' }}
+                  </td>
+
+                  <!-- API 비용 -->
+                  <td class="px-2 py-1.5 align-middle text-right tabular-nums font-mono whitespace-nowrap"
+                    :class="isHighCost(row)
+                      ? 'text-orange-600 dark:text-orange-400 font-semibold'
+                      : row.has_activity
+                        ? 'text-gray-700 dark:text-slate-300'
+                        : 'text-gray-300 dark:text-slate-600'"
+                  >
+                    <template v-if="row.has_activity">
+                      {{ formatCostUsd(row.total_cost_usd) }}
+                      <UIcon
+                        v-if="isHighCost(row)"
+                        name="i-heroicons-exclamation-triangle"
+                        class="w-3 h-3 text-orange-500 dark:text-orange-400 inline-block ml-0.5 align-middle"
+                      />
+                    </template>
+                    <template v-else>—</template>
+                  </td>
+
+                  <!-- 메모 셀 -->
+                  <td class="px-2 py-1.5 align-middle w-32 max-w-32">
+                    <!-- 편집 모드 -->
+                    <div v-if="getMemo(row.id).editing" class="flex items-center gap-1">
+                      <UInput
+                        :model-value="getMemo(row.id).draft"
+                        size="xs"
+                        placeholder="메모..."
+                        class="flex-1 min-w-0"
+                        :disabled="getMemo(row.id).saving"
+                        @update:model-value="val => memoState[row.id] = { ...getMemo(row.id), draft: String(val) }"
+                        @keydown="onMemoKeydown($event, row)"
+                      />
+                      <UButton size="xs" color="neutral" variant="solid" label="저장" :loading="getMemo(row.id).saving" :disabled="getMemo(row.id).saving" @click="saveMemo(row)" />
+                      <UButton size="xs" color="neutral" variant="ghost" icon="i-heroicons-x-mark" :disabled="getMemo(row.id).saving" @click="cancelEditMemo(row.id)" />
+                    </div>
+                    <!-- 표시 모드 -->
+                    <button v-else class="w-full text-left group" @click="startEditMemo(row)">
+                      <span v-if="row.admin_memo" class="text-[10px] text-gray-600 dark:text-slate-400 group-hover:text-gray-900 dark:group-hover:text-slate-100 truncate block">{{ row.admin_memo }}</span>
+                      <span v-else class="text-[10px] text-gray-300 dark:text-slate-600 group-hover:text-gray-400 dark:group-hover:text-slate-500">메모 추가</span>
+                    </button>
+                  </td>
+
+                  <!-- 작업 버튼 -->
+                  <td class="px-2 py-1.5 align-middle text-right whitespace-nowrap">
+                    <UBadge v-if="row.role === 'admin'" label="관리자" color="neutral" variant="outline" size="sm" />
+                    <UButton
+                      v-else-if="row.status === 'pending'"
+                      label="승인"
+                      size="xs"
+                      color="success"
+                      variant="soft"
+                      :loading="actionLoading[row.id]"
+                      :disabled="actionLoading[row.id]"
+                      @click="changeStatus(row, 'approved')"
+                    />
+                    <UButton
+                      v-else-if="row.status === 'approved'"
+                      label="정지"
+                      size="xs"
+                      color="error"
+                      variant="soft"
+                      :loading="actionLoading[row.id]"
+                      :disabled="actionLoading[row.id]"
+                      @click="changeStatus(row, 'suspended')"
+                    />
+                    <UButton
+                      v-else-if="row.status === 'suspended'"
+                      label="재승인"
+                      size="xs"
+                      color="success"
+                      variant="soft"
+                      :loading="actionLoading[row.id]"
+                      :disabled="actionLoading[row.id]"
+                      @click="changeStatus(row, 'approved')"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+
+    </template>
+    <!-- /섹션 1: 사용자 -->
+
+    <!-- ════════════════════════════════════════════════════════════════════════ -->
+    <!-- 섹션 2: 블라인드 평가 -->
+    <!-- ════════════════════════════════════════════════════════════════════════ -->
+    <template v-else-if="activeSubTab === 'blind-test'">
+
+      <!-- 전체 영역을 스크롤 가능하게 -->
+      <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4">
+
+        <!-- 안내 배너 -->
+        <div class="shrink-0 text-xs text-gray-500 dark:text-slate-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-3 py-2 flex flex-col gap-1.5">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span>평가 페이지:</span>
+            <code class="font-mono text-amber-700 dark:text-amber-400">/rate</code>
+            <button
+              class="text-[11px] px-1.5 py-0.5 border border-amber-300 dark:border-amber-700 rounded text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors"
+              @click="copyRateLink"
+            >{{ rateLinkCopied ? '복사됨' : 'URL 복사' }}</button>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <span>접근코드:</span>
+            <code class="font-mono text-amber-700 dark:text-amber-400 select-all">{{ blindAccessCode ?? '(미설정)' }}</code>
+            <button
+              v-if="blindAccessCode"
+              class="text-[11px] px-1.5 py-0.5 border border-amber-300 dark:border-amber-700 rounded text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors"
+              @click="copyAccessCode"
+            >{{ blindAccessCodeCopied ? '복사됨' : '복사' }}</button>
+          </div>
+        </div>
+
+        <!-- ─ 풀 만들기 카드 ─ -->
+        <div class="shrink-0 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg p-4 flex flex-col gap-3">
+          <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">풀 만들기</h3>
+          <p class="text-[11px] text-gray-400 dark:text-slate-500">전체(글로벌) 리뷰 풀에서 무작위 샘플링합니다. 지점 필터 없음.</p>
+
+          <!-- n_real / n_gen 입력 -->
+          <div class="flex flex-col gap-2">
+            <label class="text-xs font-medium text-gray-600 dark:text-slate-300">평가자당 테스트 건수(진짜/생성)</label>
+            <div class="flex gap-4 flex-wrap">
+              <div class="flex flex-col gap-1">
+                <label class="text-[11px] text-gray-400 dark:text-slate-500">진짜 후기</label>
+                <input
+                  v-model.number="blindNReal"
+                  type="number"
+                  min="1"
+                  max="100"
+                  class="w-24 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-[11px] text-gray-400 dark:text-slate-500">생성 후기</label>
+                <input
+                  v-model.number="blindNGen"
+                  type="number"
+                  min="1"
+                  max="100"
+                  class="w-24 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+            </div>
+            <p class="text-[11px] text-gray-400 dark:text-slate-500">풀은 2배수로 생성됩니다(예: 15 → 풀 30). 평가자마다 서로 다른 5:5 문항을 봅니다.</p>
+            <p class="text-[11px] text-amber-600 dark:text-amber-400">생성물이 있는 지점에서만 추출됩니다.</p>
+          </div>
+
+          <!-- gen_since 필터 -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs text-gray-500 dark:text-slate-400">생성물: 이 시각 이후 생성분만 <span class="text-gray-400 dark:text-slate-500 font-normal">(선택)</span></label>
+            <input
+              v-model="blindGenSince"
+              type="datetime-local"
+              class="w-56 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <p class="text-[11px] text-gray-400 dark:text-slate-500">현재 생성기를 평가하려면, 새 로직으로 생성한 뒤 그 시각 이후로 거르세요. (비우면 과거 생성물 포함)</p>
+          </div>
+
+          <p v-if="blindPoolError" class="text-xs text-red-500 dark:text-red-400">{{ blindPoolError }}</p>
+
+          <div class="flex items-center gap-3">
+            <UButton
+              label="풀 만들기"
+              size="sm"
+              color="primary"
+              variant="solid"
+              icon="i-heroicons-squares-plus"
+              :loading="blindPoolStatus === 'loading'"
+              :disabled="blindPoolStatus === 'loading'"
+              @click="createBlindPool"
+            />
+          </div>
+
+          <!-- 풀 생성 성공 -->
+          <div v-if="blindPoolStatus === 'done' && blindPoolResult" class="flex items-center gap-3 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded px-3 py-2">
+            <UIcon name="i-heroicons-check-circle" class="w-4 h-4 text-green-600 dark:text-green-400 shrink-0" />
+            <div class="flex flex-col gap-0.5">
+              <span class="font-medium text-green-700 dark:text-green-300">풀 생성 완료</span>
+              <span class="text-green-600 dark:text-green-400 font-mono text-[11px]">{{ blindPoolResult.pool }}</span>
+              <span class="text-green-600 dark:text-green-400">
+                풀 {{ blindPoolResult.pool_real ?? blindPoolResult.n_real }}+{{ blindPoolResult.pool_gen ?? blindPoolResult.n_gen }} 생성 /
+                평가자당 {{ blindPoolResult.per_rater_real ?? blindPoolResult.n_real }}+{{ blindPoolResult.per_rater_gen ?? blindPoolResult.n_gen }}
+              </span>
+              <span v-if="blindGenSince" class="text-green-600 dark:text-green-400 text-[11px]">
+                생성물 필터: {{ blindGenSince }} 이후
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ─ 풀 목록 ─ -->
+        <div class="shrink-0 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg overflow-hidden flex flex-col">
+          <div class="px-4 py-3 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">풀 목록</h3>
+            <UButton
+              icon="i-heroicons-arrow-path"
+              size="xs"
+              color="neutral"
+              variant="ghost"
+              :loading="blindPoolsStatus === 'loading'"
+              @click="fetchBlindPools"
+            />
+          </div>
+
+          <!-- Loading -->
+          <div v-if="blindPoolsStatus === 'loading' || blindPoolsStatus === 'idle'" class="flex items-center justify-center py-6">
+            <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 text-gray-400 dark:text-slate-500 animate-spin" />
+          </div>
+
+          <!-- Error -->
+          <div v-else-if="blindPoolsStatus === 'error'" class="flex flex-col items-center gap-2 py-6">
+            <p class="text-xs text-red-500 dark:text-red-400">{{ blindPoolsError }}</p>
+            <UButton label="재시도" size="xs" color="neutral" variant="outline" @click="fetchBlindPools" />
+          </div>
+
+          <!-- Empty -->
+          <div v-else-if="blindPools.length === 0" class="flex items-center justify-center py-6">
+            <p class="text-xs text-gray-400 dark:text-slate-500">생성된 풀이 없습니다.</p>
+          </div>
+
+          <!-- 풀 표 -->
+          <div v-else class="overflow-x-auto">
+            <table class="w-full text-xs border-collapse">
+              <thead class="bg-gray-50 dark:bg-slate-900">
+                <tr class="h-7">
+                  <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700">Pool ID</th>
+                  <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700">생성일</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">진짜</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-12">생성</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">평가수</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">평가자</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-32"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="p in blindPools"
+                  :key="p.pool"
+                  class="border-b border-gray-100 dark:border-slate-700 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors"
+                  :class="blindResultPool === p.pool ? 'bg-blue-50/40 dark:bg-blue-900/10' : ''"
+                >
+                  <td class="px-3 py-1.5 align-middle font-mono text-[11px] text-gray-600 dark:text-slate-300 whitespace-nowrap">{{ p.pool }}</td>
+                  <td class="px-3 py-1.5 align-middle text-gray-500 dark:text-slate-400 whitespace-nowrap">{{ formatBlindDate(p.created_at) }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ p.n_real }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ p.n_gen }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ p.total_ratings }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ p.raters }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right">
+                    <div class="flex items-center justify-end gap-1.5">
+                      <UButton
+                        label="결과보기"
+                        size="xs"
+                        color="neutral"
+                        variant="outline"
+                        :loading="blindResultStatus === 'loading' && blindResultPool === p.pool"
+                        @click="fetchBlindResults(p.pool)"
+                      />
+                      <UButton
+                        label="삭제"
+                        size="xs"
+                        color="error"
+                        variant="outline"
+                        :loading="blindDeletingPools.has(p.pool)"
+                        :disabled="blindDeletingPools.has(p.pool)"
+                        @click="deleteBlindPool(p.pool)"
+                      />
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ─ 결과 패널 ─ -->
+        <div v-if="blindResultStatus !== 'idle'" class="shrink-0 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg p-4 flex flex-col gap-3">
+          <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">
+            결과
+            <span v-if="blindResultPool" class="text-[11px] font-mono font-normal text-gray-400 dark:text-slate-500 ml-2">{{ blindResultPool }}</span>
+          </h3>
+
+          <!-- Loading -->
+          <div v-if="blindResultStatus === 'loading'" class="flex items-center gap-2 py-2">
+            <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 animate-spin text-gray-400 dark:text-slate-500" />
+            <span class="text-xs text-gray-400 dark:text-slate-500">불러오는 중...</span>
+          </div>
+
+          <!-- Error -->
+          <p v-else-if="blindResultStatus === 'error'" class="text-xs text-red-500 dark:text-red-400">{{ blindResultError }}</p>
+
+          <!-- Done -->
+          <template v-else-if="blindResultStatus === 'done' && blindResult">
+
+            <!-- ── 쉬운 해석 박스 ───────────────────────────────────────────── -->
+            <div
+              class="border rounded-lg px-3 py-2.5 flex flex-col gap-2"
+              :class="
+                (blindResult.mean_diff == null || blindResult.mann_whitney.p_approx == null || blindResult.real.n === 0 || blindResult.gen.n === 0)
+                  ? 'bg-gray-50 dark:bg-slate-700/30 border-gray-200 dark:border-slate-600'
+                  : blindResult.mann_whitney.p_approx >= 0.05
+                    ? 'bg-gray-50 dark:bg-slate-700/30 border-gray-200 dark:border-slate-600'
+                    : blindResult.real.mean > blindResult.gen.mean
+                      ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'
+                      : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800'
+              "
+            >
+              <!-- (A) 한 줄 결론 -->
+              <p
+                class="text-sm font-semibold leading-snug"
+                :class="
+                  (blindResult.mean_diff == null || blindResult.mann_whitney.p_approx == null || blindResult.real.n === 0 || blindResult.gen.n === 0)
+                    ? 'text-gray-500 dark:text-slate-400'
+                    : blindResult.mann_whitney.p_approx >= 0.05
+                      ? 'text-gray-600 dark:text-slate-300'
+                      : blindResult.real.mean > blindResult.gen.mean
+                        ? 'text-amber-700 dark:text-amber-400'
+                        : 'text-emerald-700 dark:text-emerald-400'
+                "
+              >
+                <template v-if="blindResult.mean_diff == null || blindResult.mann_whitney.p_approx == null || blindResult.real.n === 0 || blindResult.gen.n === 0">
+                  아직 결과를 낼 데이터가 부족해요. (평가가 더 쌓여야 함)
+                </template>
+                <template v-else-if="blindResult.mann_whitney.p_approx >= 0.05">
+                  통계적으로 뚜렷한 차이는 없어요 — 단, 표본·평가자가 적어서일 수 있어요('구별 안 됨' 아님).
+                </template>
+                <template v-else-if="blindResult.real.mean > blindResult.gen.mean">
+                  사람들이 진짜 후기를 더 자연스럽다고 평가했어요 → 생성물이 아직 구별됩니다(개선 여지).
+                </template>
+                <template v-else>
+                  생성물이 진짜만큼(또는 그 이상) 자연스럽게 평가됐어요 → 좋은 신호(표본 확인 필요).
+                </template>
+              </p>
+
+              <!-- (B) 줄별 쉬운 설명 -->
+              <ul class="flex flex-col gap-1 text-xs text-gray-600 dark:text-slate-400">
+                <li>
+                  <span class="font-medium text-gray-700 dark:text-slate-300">평가 점수:</span>
+                  진짜 {{ blindResult.real.mean != null ? blindResult.real.mean.toFixed(2) : '—' }}점 vs 생성 {{ blindResult.gen.mean != null ? blindResult.gen.mean.toFixed(2) : '—' }}점
+                  <span class="text-gray-400 dark:text-slate-500"> — 5점 만점, 높을수록 '사람이 쓴 것 같다'</span>
+                </li>
+                <li>
+                  <span class="font-medium text-gray-700 dark:text-slate-300">차이:</span>
+                  진짜가 {{ blindResult.mean_diff != null ? (blindResult.mean_diff >= 0 ? '+' : '') + blindResult.mean_diff.toFixed(2) : '—' }}점
+                  <span class="text-gray-400 dark:text-slate-500"> — 양수면 진짜를 더 자연스럽게(= 생성이 덜 자연스러움)</span>
+                </li>
+                <li>
+                  <span class="font-medium text-gray-700 dark:text-slate-300">우연일 확률(p={{ blindResult.mann_whitney.p_approx != null ? blindResult.mann_whitney.p_approx.toFixed(3) : '—' }}):</span>
+                  <template v-if="blindResult.mann_whitney.p_approx != null && blindResult.mann_whitney.p_approx < 0.05">
+                    <span class="text-gray-400 dark:text-slate-500"> p가 0.05보다 작으므로 "이 차이는 우연이 아니라 실제 차이(진짜·생성이 구별됨)"</span>
+                  </template>
+                  <template v-else>
+                    <span class="text-gray-400 dark:text-slate-500"> 차이가 우연일 수 있음 = 아직 확실치 않음</span>
+                  </template>
+                </li>
+                <li>
+                  <span class="font-medium text-gray-700 dark:text-slate-300">평가자 {{ blindResult.raters }}명</span>
+                  <span v-if="blindResult.raters < 3" class="text-gray-400 dark:text-slate-500"> — 적어요. 여러 명 쌓이면 신뢰도가 올라갑니다.</span>
+                </li>
+              </ul>
+
+              <!-- (C) 용어 한 줄 -->
+              <p class="text-[11px] text-gray-400 dark:text-slate-500 leading-snug border-t border-gray-200 dark:border-slate-600 pt-1.5">
+                Mann-Whitney U 검정 = 두 점수 분포가 같은지 비교하는 통계 방법. p값 = 결과가 우연일 확률.
+              </p>
+            </div>
+            <!-- /쉬운 해석 박스 -->
+
+            <!-- 평가자 수 -->
+            <div class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-slate-400">
+              <UIcon name="i-heroicons-users" class="w-3.5 h-3.5 shrink-0" />
+              <span>평가자 {{ blindResult.raters }}명</span>
+            </div>
+
+            <!-- 아직 평가가 0건인 풀 -->
+            <p v-if="(blindResult.real.n + blindResult.gen.n) === 0" class="text-xs text-amber-600 dark:text-amber-400">
+              아직 제출된 평가가 없습니다. <code class="font-mono">/rate</code> 에서 이 풀을 평가하면 결과가 집계됩니다.
+            </p>
+
+            <!-- 진짜 vs 생성 비교 -->
+            <div class="grid grid-cols-2 gap-3">
+              <!-- 진짜 -->
+              <div class="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-slate-700/50 rounded">
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                  <span class="text-xs font-semibold text-gray-700 dark:text-slate-300">진짜 후기</span>
+                  <span class="text-xs text-gray-400 dark:text-slate-500 ml-auto tabular-nums">n={{ blindResult.real.n }}</span>
+                </div>
+                <div class="text-2xl font-bold tabular-nums text-gray-800 dark:text-slate-100">
+                  {{ blindResult.real.mean != null ? blindResult.real.mean.toFixed(2) : '—' }}<span class="text-sm font-normal text-gray-400 dark:text-slate-500">/5</span>
+                </div>
+                <!-- 1~5 분포 바 -->
+                <div class="flex flex-col gap-1">
+                  <div v-for="s in [1,2,3,4,5]" :key="s" class="flex items-center gap-1.5">
+                    <span class="text-[11px] tabular-nums text-gray-400 dark:text-slate-500 w-3 shrink-0">{{ s }}</span>
+                    <div class="flex-1 h-2 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden">
+                      <div
+                        class="h-full bg-emerald-400 rounded-full"
+                        :style="{ width: blindDistPct((blindResult.real.dist as BlindDistribution)[s as 1|2|3|4|5], blindResult.real.n) + '%' }"
+                      />
+                    </div>
+                    <span class="text-[11px] tabular-nums text-gray-400 dark:text-slate-500 w-5 text-right shrink-0">
+                      {{ (blindResult.real.dist as BlindDistribution)[s as 1|2|3|4|5] ?? 0 }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 생성 -->
+              <div class="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-slate-700/50 rounded">
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                  <span class="text-xs font-semibold text-gray-700 dark:text-slate-300">생성 후기</span>
+                  <span class="text-xs text-gray-400 dark:text-slate-500 ml-auto tabular-nums">n={{ blindResult.gen.n }}</span>
+                </div>
+                <div class="text-2xl font-bold tabular-nums text-gray-800 dark:text-slate-100">
+                  {{ blindResult.gen.mean != null ? blindResult.gen.mean.toFixed(2) : '—' }}<span class="text-sm font-normal text-gray-400 dark:text-slate-500">/5</span>
+                </div>
+                <!-- 1~5 분포 바 -->
+                <div class="flex flex-col gap-1">
+                  <div v-for="s in [1,2,3,4,5]" :key="s" class="flex items-center gap-1.5">
+                    <span class="text-[11px] tabular-nums text-gray-400 dark:text-slate-500 w-3 shrink-0">{{ s }}</span>
+                    <div class="flex-1 h-2 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden">
+                      <div
+                        class="h-full bg-amber-400 rounded-full"
+                        :style="{ width: blindDistPct((blindResult.gen.dist as BlindDistribution)[s as 1|2|3|4|5], blindResult.gen.n) + '%' }"
+                      />
+                    </div>
+                    <span class="text-[11px] tabular-nums text-gray-400 dark:text-slate-500 w-5 text-right shrink-0">
+                      {{ (blindResult.gen.dist as BlindDistribution)[s as 1|2|3|4|5] ?? 0 }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 평균 차이 -->
+            <div class="flex items-center gap-2 text-xs">
+              <span class="text-gray-500 dark:text-slate-400">평균 차이 (진짜 - 생성):</span>
+              <span
+                class="font-semibold tabular-nums"
+                :class="blindResult.mean_diff > 0 ? 'text-emerald-600 dark:text-emerald-400' : blindResult.mean_diff < 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-slate-300'"
+              >
+                {{ blindResult.mean_diff == null ? '—' : (blindResult.mean_diff >= 0 ? '+' : '') + blindResult.mean_diff.toFixed(2) }}
+              </span>
+            </div>
+
+            <!-- Mann-Whitney -->
+            <div class="border-t border-gray-100 dark:border-slate-700 pt-3 flex flex-col gap-1.5">
+              <span class="text-xs font-semibold text-gray-700 dark:text-slate-300">Mann-Whitney U 검정</span>
+              <div v-if="blindResult.mann_whitney.z != null" class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-gray-600 dark:text-slate-400">
+                <span>U = <span class="tabular-nums font-medium text-gray-800 dark:text-slate-200">{{ blindResult.mann_whitney.U }}</span></span>
+                <span>z = <span class="tabular-nums font-medium text-gray-800 dark:text-slate-200">{{ blindResult.mann_whitney.z.toFixed(3) }}</span></span>
+                <span>p ≈ <span class="tabular-nums font-medium" :class="blindResult.mann_whitney.p_approx < 0.05 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-800 dark:text-slate-200'">{{ blindResult.mann_whitney.p_approx.toFixed(3) }}</span></span>
+              </div>
+              <p v-if="blindResult.mann_whitney.note" class="text-[11px] text-amber-600 dark:text-amber-400">{{ blindResult.mann_whitney.note }}</p>
+              <p class="text-[11px] text-gray-400 dark:text-slate-500 leading-relaxed">
+                이 검정은 두 그룹의 평점 분포가 같은지 비교합니다.
+                "구분불가(p &gt; 0.05)"는 좋음이 아니라 표본 미달이거나 실제로 차이가 없다는 뜻입니다.
+              </p>
+            </div>
+          </template>
+        </div>
+
+      </div>
+    </template>
+    <!-- /섹션 2: 블라인드 평가 -->
+
+    <!-- ════════════════════════════════════════════════════════════════════════ -->
+    <!-- 섹션 3: 라벨링 (스프린트 + IAA) -->
+    <!-- ════════════════════════════════════════════════════════════════════════ -->
+    <template v-else-if="activeSubTab === 'labeling'">
+
+      <!-- ── 내부 토글 (스프린트 | IAA) ─────────────────────────────────── -->
+      <div class="shrink-0 flex items-center gap-1 bg-gray-100 dark:bg-slate-800 rounded-lg p-1 w-fit">
+        <button
+          class="px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap"
+          :class="activeLabelingTab === 'sprint'
+            ? 'bg-white dark:bg-slate-700 text-gray-900 dark:text-slate-100 shadow-sm'
+            : 'text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
+          @click="activeLabelingTab = 'sprint'; fetchSprintStats()"
+        >
+          스프린트
+        </button>
+        <button
+          class="px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap"
+          :class="activeLabelingTab === 'iaa'
+            ? 'bg-white dark:bg-slate-700 text-gray-900 dark:text-slate-100 shadow-sm'
+            : 'text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200'"
+          @click="activeLabelingTab = 'iaa'; if (iaaSetsStatus === 'idle') fetchIaaSets(); if (blindAccessCode === null) fetchBlindAccessCode()"
+        >
+          IAA
+        </button>
+      </div>
+
+      <!-- ── 라벨링이란? 공통 설명 카드 (스프린트·IAA 항상 표시) ──────── -->
+      <div class="shrink-0 bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2.5 flex flex-col gap-1.5 text-xs text-gray-600 dark:text-slate-300">
+        <p class="leading-snug">
+          <span class="font-semibold text-gray-800 dark:text-slate-100">라벨링이란?</span>
+          모은 실제 후기를 사람이 4가지로 분류(진짜손님 / 광고 / AI / 모름)하는 작업.
+        </p>
+        <ul class="flex flex-col gap-0.5 pl-0 leading-snug text-gray-500 dark:text-slate-400">
+          <li class="flex gap-1.5">
+            <span class="font-semibold text-gray-700 dark:text-slate-300 shrink-0">스프린트</span>
+            <span>— 혼자 후기를 하나씩 분류해서 <em>정답지</em>를 만든다.</span>
+          </li>
+          <li class="flex gap-1.5">
+            <span class="font-semibold text-gray-700 dark:text-slate-300 shrink-0">IAA</span>
+            <span>— 여러 명이 같은 후기를 따로 분류 → <em>서로 얼마나 일치하는지</em>로 그 정답지가 믿을 만한지 검증한다. (혼자 매긴 답은 주관일 수 있으니까.)</span>
+          </li>
+        </ul>
+      </div>
+
+      <!-- ── 라벨링 > 스프린트 ──────────────────────────────────────────── -->
+      <template v-if="activeLabelingTab === 'sprint'">
+      <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
+
+        <!-- 상단 컨트롤 바 (shrink-0) -->
+        <div class="shrink-0 flex items-center gap-3 px-3 py-2 border border-gray-200 dark:border-slate-700 rounded-lg bg-gray-50 dark:bg-slate-800 flex-wrap mb-3">
+          <span class="text-xs font-semibold text-gray-700 dark:text-slate-200 shrink-0">라벨링 스프린트</span>
+          <span class="text-[11px] text-gray-400 dark:text-slate-500">|</span>
+          <!-- 표본 크기 -->
+          <div class="flex items-center gap-1.5 shrink-0">
+            <span class="text-[11px] text-gray-500 dark:text-slate-400">표본</span>
+            <select
+              v-model.number="sprintLimit"
+              class="text-xs rounded border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 px-1.5 py-0.5 focus:outline-none"
+            >
+              <option :value="100">100건</option>
+              <option :value="200">200건</option>
+              <option :value="300">300건</option>
+            </select>
+          </div>
+          <UButton
+            label="표본 불러오기"
+            size="xs"
+            color="primary"
+            variant="outline"
+            icon="i-heroicons-arrow-down-tray"
+            :loading="sprintStatus === 'loading'"
+            :disabled="sprintStatus === 'loading'"
+            @click="fetchSprintSample(); fetchSprintStats()"
+          />
+          <div class="ml-auto flex items-center gap-2 shrink-0">
+            <span class="text-xs tabular-nums text-gray-500 dark:text-slate-400">
+              이번 세션 {{ sprintLabeledInSession }}건 라벨 완료
+              <template v-if="sprintItems.length > 0">
+                / 표본 {{ sprintItems.length }}건 중 {{ sprintIndex }}/{{ sprintItems.length }}
+              </template>
+            </span>
+          </div>
+        </div>
+
+        <!-- 본문 2분할 -->
+        <div class="flex-1 min-h-0 flex flex-row gap-0 overflow-hidden border border-gray-200 dark:border-slate-700 rounded-lg">
+
+          <!-- ── 좌측: 카드 뷰어 ── -->
+          <div class="flex-1 min-h-0 flex flex-col overflow-hidden border-r border-gray-100 dark:border-slate-700">
+
+            <!-- Loading -->
+            <div v-if="sprintStatus === 'loading'" class="flex-1 flex items-center justify-center">
+              <UIcon name="i-heroicons-arrow-path" class="w-6 h-6 text-gray-400 animate-spin" />
+            </div>
+
+            <!-- Error -->
+            <div v-else-if="sprintStatus === 'error'" class="flex-1 flex flex-col items-center justify-center gap-2 p-4">
+              <UIcon name="i-heroicons-exclamation-circle" class="w-6 h-6 text-red-400" />
+              <p class="text-xs text-red-500 text-center">{{ sprintError }}</p>
+              <button class="text-xs text-primary-600 hover:text-primary-800 dark:hover:text-primary-300" @click="fetchSprintSample()">재시도</button>
+            </div>
+
+            <!-- Idle/Empty -->
+            <div v-else-if="sprintStatus === 'idle' || sprintItems.length === 0" class="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <UIcon name="i-heroicons-tag" class="w-10 h-10 text-gray-200 dark:text-slate-700" />
+              <p class="text-sm font-medium text-gray-500 dark:text-slate-400">라벨링 스프린트</p>
+              <p class="text-[11px] text-gray-400 dark:text-slate-500 leading-snug max-w-xs">
+                수집된 리뷰를 층화 표본 추출하여<br>
+                4분류 라벨링을 빠르게 진행합니다.<br>
+                이미 라벨된 리뷰는 제외됩니다.
+              </p>
+              <UButton
+                label="표본 불러오기"
+                size="sm"
+                color="primary"
+                variant="outline"
+                icon="i-heroicons-arrow-down-tray"
+                :loading="(sprintStatus as string) === 'loading'"
+                @click="fetchSprintSample(); fetchSprintStats()"
+              />
+            </div>
+
+            <!-- 모두 완료 -->
+            <div v-else-if="sprintStatus === 'done' && sprintIndex >= sprintItems.length" class="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <UIcon name="i-heroicons-check-circle" class="w-10 h-10 text-emerald-400" />
+              <p class="text-sm font-semibold text-gray-700 dark:text-slate-200">표본 {{ sprintItems.length }}건 완료!</p>
+              <p class="text-xs text-gray-400 dark:text-slate-500">이번 세션에서 {{ sprintLabeledInSession }}건 라벨했습니다.</p>
+              <UButton
+                label="새 표본 불러오기"
+                size="sm"
+                color="primary"
+                variant="outline"
+                icon="i-heroicons-arrow-path"
+                @click="fetchSprintSample(); fetchSprintStats()"
+              />
+            </div>
+
+            <!-- 카드 -->
+            <template v-else-if="sprintStatus === 'done' && sprintCurrent">
+              <div class="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-3">
+
+                <!-- 진행 바 -->
+                <div class="shrink-0 flex items-center gap-2">
+                  <div class="flex-1 h-1.5 bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                    <div
+                      class="h-full bg-primary-500 rounded-full transition-all"
+                      :style="{ width: `${Math.round(sprintIndex / sprintItems.length * 100)}%` }"
+                    />
+                  </div>
+                  <span class="text-[11px] tabular-nums text-gray-400 dark:text-slate-500 shrink-0">{{ sprintIndex }}/{{ sprintItems.length }}</span>
+                </div>
+
+                <!-- 메타 정보 -->
+                <div class="shrink-0 flex items-center gap-2 flex-wrap">
+                  <span class="text-[11px] font-medium text-gray-500 dark:text-slate-400 px-2 py-0.5 rounded bg-gray-100 dark:bg-slate-700">{{ sprintCurrent.place_name }}</span>
+                  <span class="text-[11px] text-gray-400 dark:text-slate-500">{{ sprintCurrent.length_bucket === 'short' ? '단문' : sprintCurrent.length_bucket === 'medium' ? '중문' : '장문' }} ({{ sprintCurrent.body_length }}자)</span>
+                  <span v-if="sprintCurrent.review_date" class="text-[11px] text-gray-400 dark:text-slate-500">{{ sprintCurrent.review_date }}</span>
+                  <span v-if="sprintDoneIds.has(sprintCurrent.review_id)" class="text-[11px] text-emerald-500 font-medium">라벨 완료</span>
+                </div>
+
+                <!-- 본문 -->
+                <div class="rounded border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-3 text-sm text-gray-800 dark:text-slate-100 leading-relaxed min-h-[80px] whitespace-pre-wrap">{{ sprintCurrent.body }}</div>
+
+                <!-- 라벨 버튼 -->
+                <div class="shrink-0 flex flex-col gap-2">
+                  <div class="flex gap-2 flex-wrap">
+                    <button
+                      v-for="(cfg, key) in SPRINT_LABEL_MAP"
+                      :key="key"
+                      class="px-4 py-2 rounded text-sm font-semibold transition-colors disabled:opacity-50"
+                      :class="cfg.cls"
+                      :disabled="!!sprintSavingId"
+                      @click="sprintLabel(key as HumanLabelSprint)"
+                    >
+                      <span v-if="sprintSavingId === sprintCurrent.review_id" class="flex items-center gap-1.5">
+                        <UIcon name="i-heroicons-arrow-path" class="w-3.5 h-3.5 animate-spin" />
+                        저장 중
+                      </span>
+                      <span v-else>{{ cfg.text }}</span>
+                    </button>
+                  </div>
+
+                  <!-- 메모 -->
+                  <input
+                    v-model="sprintNote"
+                    type="text"
+                    placeholder="메모 (선택 사항)"
+                    maxlength="200"
+                    class="w-full text-xs rounded border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-primary-400 placeholder-gray-300 dark:placeholder-slate-600"
+                    @keydown.enter.prevent
+                  />
+
+                  <!-- 저장 오류 -->
+                  <p v-if="sprintSaveError" class="text-xs text-red-500">{{ sprintSaveError }}</p>
+                </div>
+
+                <!-- 이전/다음 네비게이션 -->
+                <div class="shrink-0 flex items-center justify-between">
+                  <button
+                    class="text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 disabled:opacity-30 transition-colors"
+                    :disabled="sprintIndex === 0"
+                    @click="sprintPrev"
+                  >
+                    이전
+                  </button>
+                  <button
+                    class="text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 disabled:opacity-30 transition-colors"
+                    :disabled="sprintIndex >= sprintItems.length - 1"
+                    @click="sprintSkip"
+                  >
+                    건너뛰기
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- ── 우측: 진행 통계 패널 (240px) ── -->
+          <div class="w-60 shrink-0 overflow-y-auto flex flex-col gap-3 p-3 bg-gray-50 dark:bg-slate-800/50">
+            <!-- 통계 헤더 -->
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-semibold text-gray-600 dark:text-slate-300">전체 라벨 통계</span>
+              <button
+                class="text-[11px] text-primary-500 hover:text-primary-700 dark:hover:text-primary-300 transition-colors"
+                :class="sprintStatsStatus === 'loading' ? 'opacity-50 pointer-events-none' : ''"
+                @click="fetchSprintStats()"
+              >새로고침</button>
+            </div>
+
+            <!-- 통계 로딩 -->
+            <div v-if="sprintStatsStatus === 'loading'" class="flex items-center justify-center py-4">
+              <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 text-gray-400 animate-spin" />
+            </div>
+
+            <!-- 통계 결과 -->
+            <template v-else-if="sprintStats">
+              <!-- 전체 합계 -->
+              <div class="rounded border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2.5 flex flex-col gap-1">
+                <div class="flex items-baseline gap-1">
+                  <span class="text-2xl font-bold tabular-nums text-gray-800 dark:text-slate-100">{{ sprintStats.total.toLocaleString('ko-KR') }}</span>
+                  <span class="text-xs text-gray-400 dark:text-slate-500">건 라벨 완료</span>
+                </div>
+
+                <!-- 분류별 바 -->
+                <div class="flex h-3 rounded overflow-hidden gap-px mt-1" v-if="sprintStats.total > 0">
+                  <div
+                    v-if="sprintStats.by_label.human > 0"
+                    class="h-full bg-emerald-500"
+                    :style="{ width: `${Math.round(sprintStats.by_label.human / sprintStats.total * 100)}%` }"
+                    :title="`진짜손님 ${sprintStats.by_label.human}건`"
+                  />
+                  <div
+                    v-if="sprintStats.by_label.ad > 0"
+                    class="h-full bg-red-500"
+                    :style="{ width: `${Math.round(sprintStats.by_label.ad / sprintStats.total * 100)}%` }"
+                    :title="`사람마케팅 ${sprintStats.by_label.ad}건`"
+                  />
+                  <div
+                    v-if="sprintStats.by_label.ai > 0"
+                    class="h-full bg-amber-500"
+                    :style="{ width: `${Math.round(sprintStats.by_label.ai / sprintStats.total * 100)}%` }"
+                    :title="`AI조립 ${sprintStats.by_label.ai}건`"
+                  />
+                  <div
+                    v-if="sprintStats.by_label.unsure > 0"
+                    class="h-full bg-slate-400"
+                    :style="{ width: `${Math.round(sprintStats.by_label.unsure / sprintStats.total * 100)}%` }"
+                    :title="`모름 ${sprintStats.by_label.unsure}건`"
+                  />
+                </div>
+              </div>
+
+              <!-- 분류별 수치 -->
+              <div class="flex flex-col gap-1">
+                <div v-for="([key, cfg]) in Object.entries(SPRINT_LABEL_MAP)" :key="key" class="flex items-center gap-1.5">
+                  <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="key === 'human' ? 'bg-emerald-500' : key === 'ad' ? 'bg-red-500' : key === 'ai' ? 'bg-amber-500' : 'bg-slate-400'" />
+                  <span class="text-[11px] text-gray-600 dark:text-slate-400 flex-1">{{ cfg.text }}</span>
+                  <span class="text-[11px] tabular-nums font-medium text-gray-700 dark:text-slate-300">
+                    {{ ((sprintStats.by_label as Record<string, number>)[key] ?? 0).toLocaleString('ko-KR') }}
+                  </span>
+                  <span v-if="sprintStats.total > 0" class="text-[11px] tabular-nums text-gray-400 dark:text-slate-500 w-8 text-right">
+                    {{ Math.round(((sprintStats.by_label as Record<string, number>)[key] ?? 0) / sprintStats.total * 100) }}%
+                  </span>
+                </div>
+              </div>
+
+              <!-- 지점별 소계 (top 10) -->
+              <div class="flex flex-col gap-1 pt-1 border-t border-gray-100 dark:border-slate-700">
+                <span class="text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-1">지점별</span>
+                <div
+                  v-for="p in sprintStats.by_place.filter(x => x.labeled_count > 0).slice(0, 10)"
+                  :key="p.place_row_id"
+                  class="flex items-center gap-1.5"
+                >
+                  <span class="text-[11px] text-gray-600 dark:text-slate-400 flex-1 truncate" :title="p.place_name">{{ p.place_name }}</span>
+                  <span class="text-[11px] tabular-nums font-medium text-gray-700 dark:text-slate-300">{{ p.labeled_count }}</span>
+                </div>
+                <p v-if="sprintStats.by_place.every(x => x.labeled_count === 0)" class="text-[11px] text-gray-400 dark:text-slate-500">아직 없음</p>
+              </div>
+            </template>
+
+            <!-- 통계 없음 -->
+            <div v-else-if="sprintStatsStatus === 'idle'" class="flex flex-col items-center justify-center gap-2 py-4">
+              <p class="text-[11px] text-gray-400 dark:text-slate-500 text-center">표본을 불러오면<br>통계가 표시됩니다</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      </template>
+      <!-- /라벨링 > 스프린트 -->
+
+      <!-- ── 라벨링 > IAA ────────────────────────────────────────────────── -->
+      <template v-else-if="activeLabelingTab === 'iaa'">
+      <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4">
+
+        <!-- IAA 운영 안내 (정의는 위 공통 카드 참조, 여기선 진행 방법만) -->
+        <div class="shrink-0 bg-gray-50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2.5 flex flex-col gap-1 text-xs text-gray-500 dark:text-slate-400">
+          <p class="font-semibold text-gray-700 dark:text-slate-300 mb-0.5">진행 방법</p>
+          <ol class="flex flex-col gap-0.5 pl-4 list-decimal leading-snug">
+            <li>여기서 <strong class="text-gray-700 dark:text-slate-200">세트 만들기</strong> (평가할 후기 묶음 생성)</li>
+            <li>연구원들이 <code class="font-mono text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-1 rounded">/label</code> 페이지에서 접근코드 + 닉네임으로 들어가 각자 분류</li>
+            <li><strong class="text-gray-700 dark:text-slate-200">결과보기</strong> → Fleiss κ(일치도) 확인 — <strong class="text-emerald-600 dark:text-emerald-400">κ ≥ 0.6이면 신뢰 가능</strong></li>
+          </ol>
+          <p class="text-[11px] text-gray-400 dark:text-slate-500 pl-4 mt-0.5">※ κ는 <strong>2명 이상</strong>이 같은 세트를 라벨해야 계산됨.</p>
+        </div>
+
+        <!-- 연구원 공유 배너 -->
+        <div class="shrink-0 text-xs text-gray-500 dark:text-slate-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded px-3 py-2 flex flex-col gap-1.5">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span>라벨링 페이지:</span>
+            <code class="font-mono text-blue-700 dark:text-blue-400">/label</code>
+            <button
+              class="text-[11px] px-1.5 py-0.5 border border-blue-300 dark:border-blue-700 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+              @click="copyLabelLink"
+            >{{ labelLinkCopied ? '복사됨' : 'URL 복사' }}</button>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <span>접근코드:</span>
+            <code class="font-mono text-blue-700 dark:text-blue-400 select-all">{{ blindAccessCode ?? '(미설정)' }}</code>
+            <button
+              v-if="blindAccessCode"
+              class="text-[11px] px-1.5 py-0.5 border border-blue-300 dark:border-blue-700 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+              @click="copyIaaAccessCode"
+            >{{ iaaAccessCodeCopied ? '복사됨' : '복사' }}</button>
+          </div>
+          <p class="text-[11px] text-gray-400 dark:text-slate-500">블라인드 평가와 같은 코드입니다 · 연구원에게 <code class="font-mono">/label</code> 주소와 코드를 공유하세요.</p>
+        </div>
+
+        <!-- ─ 세트 만들기 카드 ─ -->
+        <div class="shrink-0 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg p-4 flex flex-col gap-3">
+          <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">세트 만들기</h3>
+          <div class="flex items-end gap-3 flex-wrap">
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-gray-500 dark:text-slate-400">문항 수 (n)</label>
+              <input
+                v-model.number="iaaN"
+                type="number"
+                min="1"
+                max="500"
+                class="w-24 border border-gray-300 dark:border-slate-600 rounded px-2.5 py-1.5 text-sm bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+            <UButton
+              label="세트 만들기"
+              size="sm"
+              color="primary"
+              variant="solid"
+              icon="i-heroicons-squares-plus"
+              :loading="iaaCreateStatus === 'loading'"
+              :disabled="iaaCreateStatus === 'loading'"
+              @click="createIaaSet"
+            />
+          </div>
+
+          <p v-if="iaaCreateError" class="text-xs text-red-500 dark:text-red-400">{{ iaaCreateError }}</p>
+
+          <!-- 생성 성공 -->
+          <div
+            v-if="iaaCreateStatus === 'done' && iaaCreateResult"
+            class="flex items-center gap-2 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded px-3 py-2"
+          >
+            <UIcon name="i-heroicons-check-circle" class="w-4 h-4 text-green-600 dark:text-green-400 shrink-0" />
+            <div class="flex flex-col gap-0.5">
+              <span class="font-medium text-green-700 dark:text-green-300">세트 생성 완료</span>
+              <span class="font-mono text-[11px] text-green-600 dark:text-green-400">{{ iaaCreateResult.set_id }}</span>
+              <span class="text-green-600 dark:text-green-400">문항 {{ iaaCreateResult.count }}건</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ─ 세트 목록 ─ -->
+        <div class="shrink-0 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg overflow-hidden flex flex-col">
+          <div class="px-4 py-3 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">세트 목록</h3>
+            <UButton
+              icon="i-heroicons-arrow-path"
+              size="xs"
+              color="neutral"
+              variant="ghost"
+              :loading="iaaSetsStatus === 'loading'"
+              @click="fetchIaaSets"
+            />
+          </div>
+
+          <!-- Loading -->
+          <div v-if="iaaSetsStatus === 'loading' || iaaSetsStatus === 'idle'" class="flex items-center justify-center py-6">
+            <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 text-gray-400 dark:text-slate-500 animate-spin" />
+          </div>
+
+          <!-- Error -->
+          <div v-else-if="iaaSetsStatus === 'error'" class="flex flex-col items-center gap-2 py-6">
+            <p class="text-xs text-red-500 dark:text-red-400">{{ iaaSetsError }}</p>
+            <UButton label="재시도" size="xs" color="neutral" variant="outline" @click="fetchIaaSets" />
+          </div>
+
+          <!-- Empty -->
+          <div v-else-if="iaaSets.length === 0" class="flex items-center justify-center py-6">
+            <p class="text-xs text-gray-400 dark:text-slate-500">생성된 세트가 없습니다.</p>
+          </div>
+
+          <!-- 세트 표 -->
+          <div v-else class="overflow-x-auto">
+            <table class="w-full text-xs border-collapse">
+              <thead class="bg-gray-50 dark:bg-slate-900">
+                <tr class="h-7">
+                  <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700">Set ID</th>
+                  <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700">생성일</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">문항수</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">평가자</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14">라벨수</th>
+                  <th class="px-3 text-right font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-20"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="s in iaaSets"
+                  :key="s.set_id"
+                  class="border-b border-gray-100 dark:border-slate-700 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors"
+                  :class="iaaResultSetId === s.set_id ? 'bg-blue-50/40 dark:bg-blue-900/10' : ''"
+                >
+                  <td class="px-3 py-1.5 align-middle font-mono text-[11px] text-gray-600 dark:text-slate-300 whitespace-nowrap">{{ s.set_id }}</td>
+                  <td class="px-3 py-1.5 align-middle text-gray-500 dark:text-slate-400 whitespace-nowrap">{{ formatIaaDate(s.created_at) }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ s.item_count }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ s.annotator_count }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right tabular-nums text-gray-700 dark:text-slate-300">{{ s.label_count }}</td>
+                  <td class="px-3 py-1.5 align-middle text-right">
+                    <UButton
+                      label="결과보기"
+                      size="xs"
+                      color="neutral"
+                      variant="outline"
+                      :loading="iaaResultStatus === 'loading' && iaaResultSetId === s.set_id"
+                      @click="fetchIaaResults(s.set_id)"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ─ 결과 패널 ─ -->
+        <div v-if="iaaResultStatus !== 'idle'" class="shrink-0 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg p-4 flex flex-col gap-4">
+          <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">
+            IAA 결과
+            <span v-if="iaaResultSetId" class="text-[11px] font-mono font-normal text-gray-400 dark:text-slate-500 ml-2">{{ iaaResultSetId }}</span>
+          </h3>
+
+          <!-- Loading -->
+          <div v-if="iaaResultStatus === 'loading'" class="flex items-center gap-2 py-2">
+            <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 animate-spin text-gray-400 dark:text-slate-500" />
+            <span class="text-xs text-gray-400 dark:text-slate-500">불러오는 중...</span>
+          </div>
+
+          <!-- Error -->
+          <p v-else-if="iaaResultStatus === 'error'" class="text-xs text-red-500 dark:text-red-400">{{ iaaResultError }}</p>
+
+          <!-- Done -->
+          <template v-else-if="iaaResultStatus === 'done' && iaaResult">
+
+            <!-- 평가자 미달 경고 -->
+            <div
+              v-if="iaaResult.fleiss_kappa === null"
+              class="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-3 py-2"
+            >
+              평가자가 2명 이상이어야 κ를 계산할 수 있습니다.
+              현재 {{ iaaResult.annotators.length }}명이 라벨링했습니다.
+            </div>
+
+            <!-- Fleiss κ 메인 카드 -->
+            <div v-if="iaaResult.fleiss_kappa !== null" class="flex flex-col gap-2 p-4 bg-gray-50 dark:bg-slate-700/50 rounded-lg">
+              <p class="text-xs font-semibold text-gray-600 dark:text-slate-400">Fleiss κ</p>
+              <div class="flex items-baseline gap-2">
+                <span
+                  class="text-3xl font-bold tabular-nums"
+                  :class="kappaColorClass(iaaResult.fleiss_kappa)"
+                >
+                  {{ iaaResult.fleiss_kappa.toFixed(3) }}
+                </span>
+                <span class="text-xs text-gray-500 dark:text-slate-400">
+                  — {{ iaaResult.interpretation ?? kappaInterpretation(iaaResult.fleiss_kappa) }}
+                </span>
+              </div>
+              <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-gray-500 dark:text-slate-400">
+                <span>다중라벨 문항: <span class="text-gray-700 dark:text-slate-300 font-medium tabular-nums">{{ iaaResult.n_reviews_multi ?? '—' }}</span></span>
+                <span>평가자: <span class="text-gray-700 dark:text-slate-300 font-medium tabular-nums">{{ iaaResult.annotators.length }}명</span></span>
+                <span v-if="iaaResult.raw_agreement !== null">완전일치율: <span class="text-gray-700 dark:text-slate-300 font-medium tabular-nums">{{ (iaaResult.raw_agreement * 100).toFixed(1) }}%</span></span>
+              </div>
+              <p class="text-[11px] text-gray-400 dark:text-slate-500 leading-relaxed mt-1">
+                κ ≥ 0.6이면 라벨 신뢰 가능. A2의 LLM 37% 기준을 사람 한계(κ)와 비교해 평가 품질을 판단하세요.
+              </p>
+            </div>
+
+            <!-- 평가자 목록 -->
+            <div v-if="iaaResult.annotators.length > 0" class="flex flex-col gap-1.5">
+              <p class="text-xs font-semibold text-gray-600 dark:text-slate-400">평가자</p>
+              <div class="flex flex-wrap gap-2">
+                <span
+                  v-for="ann in iaaResult.annotators"
+                  :key="ann.name"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded border border-gray-200 dark:border-slate-600 text-gray-600 dark:text-slate-300 bg-gray-50 dark:bg-slate-700"
+                >
+                  {{ ann.name }}
+                  <span class="text-gray-400 dark:text-slate-500 tabular-nums">({{ ann.count }}건)</span>
+                </span>
+              </div>
+            </div>
+
+            <!-- 쌍별 Cohen κ -->
+            <div v-if="iaaResult.pairwise && iaaResult.pairwise.length > 0" class="flex flex-col gap-2">
+              <p class="text-xs font-semibold text-gray-600 dark:text-slate-400">쌍별 Cohen κ</p>
+              <div class="overflow-x-auto">
+                <table class="text-xs border-collapse">
+                  <thead>
+                    <tr class="h-6">
+                      <th class="px-3 text-left font-medium text-gray-500 dark:text-slate-400 border-b border-gray-200 dark:border-slate-700 whitespace-nowrap">평가자 쌍</th>
+                      <th class="px-3 text-right font-medium text-gray-500 dark:text-slate-400 border-b border-gray-200 dark:border-slate-700 w-14">n</th>
+                      <th class="px-3 text-right font-medium text-gray-500 dark:text-slate-400 border-b border-gray-200 dark:border-slate-700 w-16">κ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="pw in iaaResult.pairwise"
+                      :key="`${pw.a}-${pw.b}`"
+                      class="border-b border-gray-100 dark:border-slate-700 last:border-0"
+                    >
+                      <td class="px-3 py-1 align-middle text-gray-700 dark:text-slate-300 whitespace-nowrap">{{ pw.a }} – {{ pw.b }}</td>
+                      <td class="px-3 py-1 align-middle text-right tabular-nums text-gray-500 dark:text-slate-400">{{ pw.n }}</td>
+                      <td class="px-3 py-1 align-middle text-right tabular-nums font-medium" :class="kappaColorClass(pw.kappa)">
+                        {{ pw.kappa !== null ? pw.kappa.toFixed(3) : '—' }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- 클래스 분포 -->
+            <div v-if="iaaResult.class_dist && classDist(iaaResult.class_dist).length > 0" class="flex flex-col gap-2">
+              <p class="text-xs font-semibold text-gray-600 dark:text-slate-400">클래스 분포</p>
+              <div class="flex flex-col gap-1.5">
+                <div v-for="cd in classDist(iaaResult.class_dist)" :key="cd.label" class="flex items-center gap-2">
+                  <span class="text-xs text-gray-500 dark:text-slate-400 w-20 shrink-0">{{ cd.label }}</span>
+                  <div class="flex-1 h-2.5 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden">
+                    <div
+                      class="h-full bg-primary-400 rounded-full"
+                      :style="{ width: cd.pct + '%' }"
+                    />
+                  </div>
+                  <span class="text-xs tabular-nums text-gray-500 dark:text-slate-400 w-10 text-right shrink-0">
+                    {{ cd.count }} ({{ cd.pct }}%)
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 노트 -->
+            <p v-if="iaaResult.note" class="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-3 py-2">
+              {{ iaaResult.note }}
+            </p>
+
+          </template>
+        </div>
+
+      </div>
+      </template>
+      <!-- /라벨링 > IAA -->
+
+    </template>
+    <!-- /섹션 3: 라벨링 -->
 
   </div>
 </template>

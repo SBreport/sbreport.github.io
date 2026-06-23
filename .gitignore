@@ -19,3 +19,18 @@ _세션/
 pc_serp_*.html
 Program.lnk
 .gstack/
+
+# 의존성·빌드 산출물 (Cloudflare/Nuxt가 자동 생성 — git 포함 금지)
+node_modules/
+**/node_modules/
+.output/
+.nuxt/
+dist/
+dist-dry/
+
+# 내부 기획·조직 문서 (제품 기획서·조직 개편안 등 — public repo 노출 금지)
+analyzer/plan/
+
+# macOS가 폴더마다 자동 생성하는 잡파일
+.DS_Store
+**/.DS_Store

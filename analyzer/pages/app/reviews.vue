@@ -16,6 +16,7 @@ interface Place {
   backfill_done: number | null
   created_at: string
   auto_collect: number  // 1 = on, 0 = off
+  generated_count?: number
 }
 
 interface Review {
@@ -166,6 +167,10 @@ const csvProgress = ref<{ current: number; total: number } | null>(null)
 // CSV 다운로드 (다중)
 const multiCsvLoading = ref(false)
 const multiCsvProgress = ref<{ placeIndex: number; placeTotal: number; rowCount: number } | null>(null)
+const multiSamplesCsvLoading = ref(false)
+const multiSamplesCsvProgress = ref<{ placeIndex: number; placeTotal: number; rowCount: number } | null>(null)
+const multiSampleDeleteLoading = ref(false)
+const multiSampleDeleteProgress = ref<{ placeIndex: number; placeTotal: number } | null>(null)
 
 // 삭제
 const deleteConfirmOpen = ref(false)
@@ -242,6 +247,35 @@ interface ReviewSample {
   model?: string
   provider?: string  // 이번 생성 배치의 provider (openai | anthropic | xai)
   created_at?: string
+  // R2: 자연스러움 채점 (배치 추이 감시용 — 개별 합불 판단 아님)
+  naturalness?: number   // 0~100 정수
+  slop_hits?: number     // 감지된 slop n-gram 수
+  slop_top?: string[]    // 상위 slop 표현 최대 3개
+  // 환각 탐지 soft-flag (표면 정규식 조기경보 — 재생성 아님)
+  hallucination?: {
+    risk: 'none' | 'low' | 'high'
+    flags: Array<{ type: string; text: string }>
+  }
+}
+
+interface NaturalnessSummary {
+  count: number
+  mean: number
+  median: number
+  min: number
+  mean_slop_hits: number
+}
+
+interface HallucinationSummary {
+  high: number
+  low: number
+}
+
+interface BatchDiversity {
+  distinct2: number
+  avgSimilarity: number
+  maxSimilarity: number
+  count: number
 }
 
 interface GenerateSamplesResponse {
@@ -250,19 +284,30 @@ interface GenerateSamplesResponse {
   model: string
   generated_at: string
   samples: ReviewSample[]
+  diversity?: BatchDiversity | null
 }
 
 // 리뷰 예시 생성 상태
 const sampleCount = ref(10)
-const sampleProvider = ref<'openai' | 'anthropic' | 'xai'>('openai')
+const sampleProvider = ref<'openai' | 'anthropic' | 'xai'>('anthropic')
+const sampleModel = ref<string>('claude-sonnet-4-6')
+const sampleLength = ref<'auto' | 'short' | 'medium' | 'long'>('auto')
+const sampleIncludeNames = ref(false)
+const sampleHumanizeLevel = ref<'auto' | 'off' | 'light' | 'medium' | 'strong'>('medium')
 const samples = ref<ReviewSample[]>([])
 const samplesStatus = ref<'idle' | 'loading' | 'generating' | 'empty' | 'error' | 'done'>('idle')
 const samplesError = ref<string | null>(null)
 const samplesErrorCode = ref<string | null>(null)
 const samplesGenerating = ref(false)
+// R2: 배치 자연스러움 요약 (fetchSamples 응답에서)
+const naturalnessSummary = ref<NaturalnessSummary | null>(null)
+// 환각 탐지 배치 요약 (fetchSamples 응답에서)
+const hallucinationSummary = ref<HallucinationSummary | null>(null)
 
 // 마지막 생성 배치 provider/model 기록 (결과 헤더 표시용)
 const lastGenerationInfo = ref<{ provider: string; model: string } | null>(null)
+// 마지막 생성 배치 다양성 지표
+const lastDiversity = ref<BatchDiversity | null>(null)
 
 // 제공자 표시명 매핑
 const providerLabel: Record<string, string> = {
@@ -271,11 +316,22 @@ const providerLabel: Record<string, string> = {
   xai: 'Grok',
 }
 
-const PROVIDER_OPTIONS = [
-  { value: 'openai' as const, label: 'OpenAI (gpt-5.4-mini)' },
-  { value: 'anthropic' as const, label: 'Claude (haiku-4.5)' },
-  { value: 'xai' as const, label: 'Grok (grok-4.3)' },
+type ModelOption = { provider: 'openai' | 'anthropic' | 'xai'; model: string; label: string }
+const PROVIDER_OPTIONS: ModelOption[] = [
+  { provider: 'openai',    model: 'gpt-5.4-mini',            label: 'OpenAI · gpt-5.4-mini' },
+  { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', label: 'Claude · Haiku 4.5' },
+  { provider: 'anthropic', model: 'claude-sonnet-4-6',         label: 'Claude · Sonnet 4.6' },
+  { provider: 'anthropic', model: 'claude-opus-4-8',           label: 'Claude · Opus 4.8 (느림·고비용)' },
+  { provider: 'xai',       model: 'grok-4.3',                  label: 'Grok 4.3' },
 ]
+
+function onModelSelect(modelValue: string) {
+  const opt = PROVIDER_OPTIONS.find(o => o.model === modelValue)
+  if (opt) {
+    sampleModel.value = opt.model
+    sampleProvider.value = opt.provider
+  }
+}
 
 // 예시 관리 상태
 type SampleFilter = 'all' | 'kept' | 'active'
@@ -287,7 +343,7 @@ const sampleDeleteLoading = ref(false)
 
 // ─── 예시 테이블 정렬 ────────────────────────────────────────────────────────
 
-type SampleSortKey = 'created_at' | 'length' | 'tone' | 'focus' | 'provider' | 'status'
+type SampleSortKey = 'created_at' | 'length' | 'provider' | 'status'
 const sampleSortKey = ref<SampleSortKey>('created_at')
 const sampleSortAsc = ref(false)  // 기본: 생성시각 desc
 
@@ -296,20 +352,18 @@ function toggleSampleSort(key: SampleSortKey) {
     sampleSortAsc.value = !sampleSortAsc.value
   } else {
     sampleSortKey.value = key
-    sampleSortAsc.value = key !== 'created_at'  // created_at은 desc 기본, 나머진 asc 기본
+    sampleSortAsc.value = key !== 'created_at'  // created_at은 desc 기본, 나머지 asc 기본
   }
 }
 
 // 태그 필터 (다중 선택)
 const filterLengths = ref<Set<string>>(new Set())
-const filterTones = ref<Set<string>>(new Set())
-const filterFocuses = ref<Set<string>>(new Set())
 
-function toggleFilterTag(set: Ref<Set<string>>, value: string) {
-  const next = new Set(set.value)
+function toggleLengthFilter(value: string) {
+  const next = new Set(filterLengths.value)
   if (next.has(value)) next.delete(value)
   else next.add(value)
-  set.value = next
+  filterLengths.value = next
 }
 
 // 본문 펼침 상태
@@ -323,7 +377,7 @@ function toggleExpandSample(id: string) {
 
 // ─── AI 진단 (Phase 4-2) 타입 ────────────────────────────────────────────────
 
-type HumanLabel = 'human' | 'ad' | 'unsure' | null
+type HumanLabel = 'human' | 'ad' | 'ai' | 'unsure' | null
 
 interface AiDiagnosisSuspectReview {
   review_id: string
@@ -336,6 +390,7 @@ interface AiDiagnosisSuspectReview {
   review_date: string | null
   human_label?: HumanLabel
   human_note?: string | null
+  kind?: 'ad' | 'ai' | null
 }
 
 interface AiDiagnosisAgreement {
@@ -364,7 +419,7 @@ interface AiDiagnosisResult {
   distribution: Record<string, number>
   flag_breakdown: Record<string, number>
   sample_suspect: AiDiagnosisSuspectReview[]
-  human_counts: { human: number; ad: number; unsure: number }
+  human_counts: { human: number; ad: number; ai: number; unsure: number }
   agreement: AiDiagnosisAgreement
 }
 
@@ -381,6 +436,7 @@ interface AiReviewItem {
   heuristic_score: number | null
   human_label: HumanLabel
   human_note: string | null
+  kind?: 'ad' | 'ai' | null
 }
 
 // AI 진단 상태
@@ -404,6 +460,15 @@ const aiRejudgeSummary = ref<{
   gpt_called: number
   cost_usd: number
 } | null>(null)
+
+// LLM 판별기 상태 (잠정·검증전) — 관리자 전용
+const llmClassifyRunning = ref(false)
+const llmClassifyError = ref<string | null>(null)
+const llmClassifySummary = ref<{
+  classified: number
+  cost_usd: number | null
+} | null>(null)
+const llmClassifyModel = ref('gpt-5.4-mini')  // 기본 저가 모델
 
 // AI 리뷰 목록 (우측 패널)
 type AiBucket = 'low_quality' | 'presumed_human' | 'judged' | 'suspect' | 'all'
@@ -477,7 +542,7 @@ const aiSuspectLevelClass: Record<string, string> = {
 // 현재 필터 라벨 (우측 헤더용)
 const aiReviewsFilterLabel = computed(() => {
   if (activeHumanLabel.value !== null) {
-    const humanLabelMap: Record<string, string> = { human: '사람 라벨', ad: '광고·AI 라벨', unsure: '애매 라벨' }
+    const humanLabelMap: Record<string, string> = { human: '사람 라벨', ad: '광고 라벨', ai: 'AI 라벨', unsure: '애매 라벨' }
     return humanLabelMap[activeHumanLabel.value] ?? activeHumanLabel.value
   }
   if (activeScoreMin.value !== null || activeScoreMax.value !== null) {
@@ -524,8 +589,6 @@ const placeUsageStatus = ref<LoadStatus>('idle')
 
 // enum → 한글 매핑
 const lengthLabel: Record<string, string> = { short: '한줄', medium: '중간', long: '장문' }
-const toneLabel: Record<string, string> = { friendly: '친근', polite: '정중', emotional: '감성', plain: '담백' }
-const focusLabel: Record<string, string> = { outcome: '결과·효과', service: '응대·서비스', space: '시설·분위기', price: '가격·혜택', revisit: '재방문·추천', taste: '맛·품질', mood: '분위기' }
 
 // ─── 신규 리뷰 판별 (cron 자동 수집으로 처음 적재된 리뷰만 신규로 표시) ─────
 
@@ -1095,6 +1158,49 @@ async function runAiRejudge(placeId: number) {
   }
 }
 
+// LLM 판별기 실행 — admin 전용, 잠정(단일 평가자 대비)
+async function runLLMClassify() {
+  if (llmClassifyRunning.value) return
+  const ok = confirm(`사람 라벨된 리뷰 전체를 ${llmClassifyModel.value} 모델로 4분류합니다.\nAI API 비용이 소액 발생합니다. 진행하시겠습니까?`)
+  if (!ok) return
+  llmClassifyRunning.value = true
+  llmClassifyError.value = null
+  llmClassifySummary.value = null
+  // 모델명 → provider 유도 (워커가 provider별 API 키로 분기)
+  const m = llmClassifyModel.value
+  const provider = m.startsWith('claude') ? 'anthropic'
+    : m.startsWith('grok') ? 'xai'
+    : 'openai'
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/labels/llm-classify`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ model: m, provider }),
+    })
+    if (!res.ok) {
+      let msg = `LLM 판별 실패 (${res.status})`
+      try {
+        const errBody = await res.json() as { message?: string }
+        if (errBody.message) msg = errBody.message
+      } catch { /* ignore */ }
+      llmClassifyError.value = msg
+      return
+    }
+    const data = await res.json() as {
+      classified?: number
+      cost_usd?: number | null
+    }
+    llmClassifySummary.value = {
+      classified: data.classified ?? 0,
+      cost_usd:   data.cost_usd ?? null,
+    }
+  } catch (e: unknown) {
+    llmClassifyError.value = e instanceof Error ? e.message : '알 수 없는 오류'
+  } finally {
+    llmClassifyRunning.value = false
+  }
+}
+
 async function fetchSamples(placeId: number) {
   samplesStatus.value = 'loading'
   samplesError.value = null
@@ -1115,8 +1221,10 @@ async function fetchSamples(placeId: number) {
       samplesStatus.value = 'error'
       return
     }
-    const data = await res.json() as { samples: ReviewSample[] }
+    const data = await res.json() as { samples: ReviewSample[]; naturalness_summary?: NaturalnessSummary | null; hallucination_summary?: HallucinationSummary | null }
     samples.value = data.samples ?? []
+    naturalnessSummary.value = data.naturalness_summary ?? null
+    hallucinationSummary.value = data.hallucination_summary ?? null
     samplesStatus.value = samples.value.length > 0 ? 'done' : 'empty'
   } catch (e: unknown) {
     samplesError.value = e instanceof Error ? e.message : '알 수 없는 오류'
@@ -1134,7 +1242,14 @@ async function generateSamples(placeId: number) {
     const res = await fetch(`${WORKER_BASE}/api/places/${placeId}/generate-samples`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ count: sampleCount.value, provider: sampleProvider.value }),
+      body: JSON.stringify({
+        count: sampleCount.value,
+        provider: sampleProvider.value,
+        model: sampleModel.value,
+        length: sampleLength.value,
+        includeNames: sampleIncludeNames.value,
+        humanizeLevel: sampleHumanizeLevel.value,
+      }),
     })
     if (!res.ok) {
       let code = ''
@@ -1168,6 +1283,7 @@ async function generateSamples(placeId: number) {
     samples.value = [...newItems, ...samples.value]
     samplesUsage.value = data.usage ?? null
     lastGenerationInfo.value = { provider: batchProvider, model: batchModel }
+    lastDiversity.value = data.diversity ?? null
     samplesStatus.value = samples.value.length > 0 ? 'done' : 'empty'
   } catch (e: unknown) {
     samplesError.value = e instanceof Error ? e.message : '알 수 없는 오류'
@@ -1257,8 +1373,6 @@ const filteredSamples = computed(() => {
       if (sampleFilter.value === 'active') return status === 'active'
       // 태그 필터 (다중 선택 — 각 필터 내 OR, 필터 간 AND)
       if (filterLengths.value.size > 0 && !filterLengths.value.has(s.length)) return false
-      if (filterTones.value.size > 0 && !filterTones.value.has(s.tone)) return false
-      if (filterFocuses.value.size > 0 && !filterFocuses.value.has(s.focus)) return false
       return true
     })
     .sort((a, b) => {
@@ -1268,10 +1382,6 @@ const filteredSamples = computed(() => {
         cmp = (a.created_at ?? '').localeCompare(b.created_at ?? '')
       } else if (k === 'length') {
         cmp = (sortOrder[a.length] ?? 99) - (sortOrder[b.length] ?? 99)
-      } else if (k === 'tone') {
-        cmp = (a.tone ?? '').localeCompare(b.tone ?? '')
-      } else if (k === 'focus') {
-        cmp = (a.focus ?? '').localeCompare(b.focus ?? '')
       } else if (k === 'provider') {
         cmp = (a.provider ?? '').localeCompare(b.provider ?? '')
       } else if (k === 'status') {
@@ -1294,14 +1404,20 @@ function copySampleBody(body: string) {
 
 function exportSamplesCsv() {
   if (samples.value.length === 0) return
-  const headers = ['본문', '길이', '어조', '초점']
+  // 선택된 것이 있으면 선택분만, 없으면 전체
+  const target = checkedSampleIds.value.size > 0
+    ? samples.value.filter(s => checkedSampleIds.value.has(s.id))
+    : samples.value
+  if (target.length === 0) return
+  const headers = ['본문', '길이', '제공자', '상태', '생성시각']
   const lines = [headers.join(',')]
-  for (const s of samples.value) {
+  for (const s of target) {
     lines.push([
       csvEscape(s.body),
       csvEscape(lengthLabel[s.length] ?? s.length),
-      csvEscape(toneLabel[s.tone] ?? s.tone),
-      csvEscape(focusLabel[s.focus] ?? s.focus),
+      csvEscape(providerLabel[s.provider ?? ''] ?? s.provider ?? ''),
+      csvEscape(s.status ?? 'active'),
+      csvEscape(s.created_at ? new Date(s.created_at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''),
     ].join(','))
   }
   const bom = '﻿'
@@ -1401,6 +1517,9 @@ function selectPlace(place: Place) {
   checkedSampleIds.value = new Set()
   sampleDeleteLoading.value = false
   lastGenerationInfo.value = null
+  lastDiversity.value = null
+  naturalnessSummary.value = null
+  hallucinationSummary.value = null
   aiDiagnosis.value = null
   aiDiagnosisStatus.value = 'idle'
   aiDiagnosisError.value = null
@@ -1427,7 +1546,8 @@ function selectPlace(place: Place) {
   fetchPlaceStats(place.id)
   fetchPlaceReport(place.id)
   fetchPlaceUsage(place.id)
-  if (authStore.isResearcher) fetchSamples(place.id)
+  // tester도 예시 생성 접근 허용
+  if (authStore.isResearcher || authStore.isTester) fetchSamples(place.id)
   if (authStore.isResearcher) {
     fetchAiDiagnosis(place.id)
     fetchAiReviews(place.id)
@@ -1813,6 +1933,137 @@ async function exportMultiCsv() {
   }
 }
 
+// 다중 지점 생성 리뷰 CSV 다운로드
+async function exportMultiSamplesCsv() {
+  if (checkedPlaces.value.length === 0 || multiSamplesCsvLoading.value) return
+
+  const targets = [...checkedPlaces.value]
+  multiSamplesCsvLoading.value = true
+  multiSamplesCsvProgress.value = { placeIndex: 0, placeTotal: targets.length, rowCount: 0 }
+
+  const allRows: string[] = []
+
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      const place = targets[i]
+      multiSamplesCsvProgress.value = { placeIndex: i + 1, placeTotal: targets.length, rowCount: allRows.length }
+
+      let placeSamples: ReviewSample[]
+      try {
+        const res = await fetch(`${WORKER_BASE}/api/places/${place.id}/samples`, {
+          headers: authHeaders(),
+        })
+        if (!res.ok) {
+          console.warn(`[exportMultiSamplesCsv] ${placeName(place)} fetch 실패: ${res.status}`)
+          continue
+        }
+        const data = await res.json() as { samples: ReviewSample[] }
+        placeSamples = data.samples ?? []
+      } catch (e: unknown) {
+        console.warn(`[exportMultiSamplesCsv] ${placeName(place)} fetch 예외:`, e)
+        continue
+      }
+
+      if (placeSamples.length === 0) continue
+
+      for (const s of placeSamples) {
+        allRows.push([
+          csvEscape(placeName(place)),
+          csvEscape(s.body),
+          csvEscape(lengthLabel[s.length] ?? s.length),
+          csvEscape(providerLabel[s.provider ?? ''] ?? s.provider ?? ''),
+          csvEscape(s.naturalness != null ? String(s.naturalness) : ''),
+          csvEscape(s.slop_hits != null ? String(s.slop_hits) : ''),
+          csvEscape((s.slop_top ?? []).join(';')),
+          csvEscape(s.created_at ? new Date(s.created_at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''),
+        ].join(','))
+      }
+    }
+
+    if (allRows.length === 0) {
+      collectToast.value = { type: 'warn', message: '생성된 리뷰가 없습니다' }
+      return
+    }
+
+    const headers = ['지점명', '본문', '길이', '모델(provider)', '자연도', 'slop수', '상위slop', '생성일']
+    const csvLines = [headers.join(','), ...allRows]
+
+    const bom = '﻿'
+    const blob = new Blob([bom + csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `generated_reviews_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e: unknown) {
+    collectToast.value = {
+      type: 'error',
+      message: `생성 리뷰 CSV 다운로드 실패: ${e instanceof Error ? e.message : '알 수 없는 오류'}`,
+    }
+  } finally {
+    multiSamplesCsvLoading.value = false
+    multiSamplesCsvProgress.value = null
+  }
+}
+
+// ─── 선택 지점 생성 예시 일괄 삭제 ──────────────────────────────────────────
+
+async function deleteMultiSamples() {
+  if (checkedPlaces.value.length === 0 || multiSampleDeleteLoading.value) return
+
+  const targets = [...checkedPlaces.value]
+  const confirmed = window.confirm(
+    `선택한 ${targets.length}개 지점의 생성 예시를 모두 삭제합니다. 되돌릴 수 없습니다. 계속할까요?`
+  )
+  if (!confirmed) return
+
+  multiSampleDeleteLoading.value = true
+  multiSampleDeleteProgress.value = { placeIndex: 0, placeTotal: targets.length }
+
+  let totalDeleted = 0
+  const failedPlaces: string[] = []
+
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      const place = targets[i]
+      multiSampleDeleteProgress.value = { placeIndex: i + 1, placeTotal: targets.length }
+
+      try {
+        const res = await fetch(`${WORKER_BASE}/api/places/${place.id}/samples/delete-all`, {
+          method: 'POST',
+          headers: authHeaders(),
+        })
+        if (!res.ok) {
+          console.warn(`[deleteMultiSamples] ${placeName(place)} 실패: ${res.status}`)
+          failedPlaces.push(placeName(place))
+          continue
+        }
+        const data = await res.json() as { deleted?: number }
+        totalDeleted += data.deleted ?? 0
+      } catch (e: unknown) {
+        console.warn(`[deleteMultiSamples] ${placeName(place)} 예외:`, e)
+        failedPlaces.push(placeName(place))
+      }
+    }
+
+    if (failedPlaces.length === 0) {
+      collectToast.value = {
+        type: 'success',
+        message: `${targets.length}개 지점에서 생성 예시 ${totalDeleted}건 삭제됨`,
+      }
+    } else {
+      collectToast.value = {
+        type: 'warn',
+        message: `생성 예시 ${totalDeleted}건 삭제됨, ${failedPlaces.length}개 지점 실패: ${failedPlaces[0]}`,
+      }
+    }
+  } finally {
+    multiSampleDeleteLoading.value = false
+    multiSampleDeleteProgress.value = null
+  }
+}
+
 // ─── 삭제 ────────────────────────────────────────────────────────────────────
 
 function openDeleteConfirm() {
@@ -1960,8 +2211,8 @@ onUnmounted(() => {
   -->
   <div class="h-full flex flex-col gap-3">
 
-    <!-- ── 등록 폼 (shrink-0) ──────────────────────────────────────── -->
-    <div class="shrink-0 flex flex-col gap-1.5">
+    <!-- ── 등록 폼 (shrink-0) — tester는 지점 등록 불가 ──────────────── -->
+    <div v-if="!authStore.isTester" class="shrink-0 flex flex-col gap-1.5">
       <div class="flex items-center gap-2">
         <UInput
           v-model="urlInput"
@@ -2061,31 +2312,35 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 선택 지점 전체 수집 버튼 + 삭제 버튼 -->
+        <!-- 선택 지점 전체 수집 버튼 + 삭제 버튼 — tester는 수집/삭제 숨김 -->
         <div
           v-if="checkedPlaces.length > 0"
           class="shrink-0 px-2 py-1.5 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 flex flex-col gap-1"
         >
-          <UButton
-            v-if="!multiBackfillRunning"
-            :label="`선택 지점 전체 수집 (${checkedPlaces.length})`"
-            size="xs"
-            color="primary"
-            variant="soft"
-            icon="i-heroicons-archive-box-arrow-down"
-            class="w-full"
-            @click="startMultiBackfill"
-          />
-          <UButton
-            v-else
-            label="수집 중... (멈춤)"
-            size="xs"
-            color="warning"
-            variant="soft"
-            icon="i-heroicons-pause-circle"
-            class="w-full"
-            @click="stopMultiBackfill"
-          />
+          <!-- 수집 버튼: tester 차단 -->
+          <template v-if="!authStore.isTester">
+            <UButton
+              v-if="!multiBackfillRunning"
+              :label="`선택 지점 전체 수집 (${checkedPlaces.length})`"
+              size="xs"
+              color="primary"
+              variant="soft"
+              icon="i-heroicons-archive-box-arrow-down"
+              class="w-full"
+              @click="startMultiBackfill"
+            />
+            <UButton
+              v-else
+              label="수집 중... (멈춤)"
+              size="xs"
+              color="warning"
+              variant="soft"
+              icon="i-heroicons-pause-circle"
+              class="w-full"
+              @click="stopMultiBackfill"
+            />
+          </template>
+          <!-- CSV: tester 허용 -->
           <UButton
             :label="multiCsvLoading
               ? (multiCsvProgress ? `받는 중... (지점 ${multiCsvProgress.placeIndex}/${multiCsvProgress.placeTotal})` : '받는 중...')
@@ -2100,6 +2355,35 @@ onUnmounted(() => {
             @click="exportMultiCsv"
           />
           <UButton
+            :label="multiSamplesCsvLoading
+              ? (multiSamplesCsvProgress ? `받는 중... (지점 ${multiSamplesCsvProgress.placeIndex}/${multiSamplesCsvProgress.placeTotal})` : '받는 중...')
+              : `생성 리뷰 CSV (${checkedPlaces.length})`"
+            size="xs"
+            color="neutral"
+            variant="outline"
+            icon="i-heroicons-document-arrow-down"
+            class="w-full"
+            :disabled="checkedPlaces.length === 0 || multiSamplesCsvLoading || multiBackfillRunning"
+            :loading="multiSamplesCsvLoading"
+            @click="exportMultiSamplesCsv"
+          />
+          <!-- 생성 예시 일괄 삭제 버튼: researcher 이상 허용 -->
+          <UButton
+            :label="multiSampleDeleteLoading
+              ? (multiSampleDeleteProgress ? `삭제 중... (${multiSampleDeleteProgress.placeIndex}/${multiSampleDeleteProgress.placeTotal})` : '삭제 중...')
+              : `선택 지점 생성 예시 삭제 (${checkedPlaces.length})`"
+            size="xs"
+            color="error"
+            variant="soft"
+            icon="i-heroicons-sparkles"
+            class="w-full"
+            :disabled="multiSampleDeleteLoading || multiBackfillRunning"
+            :loading="multiSampleDeleteLoading"
+            @click="deleteMultiSamples"
+          />
+          <!-- 삭제 버튼: tester 차단 -->
+          <UButton
+            v-if="!authStore.isTester"
             :label="`선택 삭제 (${checkedPlaces.length})`"
             size="xs"
             color="error"
@@ -2166,36 +2450,40 @@ onUnmounted(() => {
                 <UIcon name="i-heroicons-arrow-top-right-on-square" class="w-3.5 h-3.5" />
               </a>
             </div>
-            <div class="flex items-center gap-2 mt-0.5 pl-5">
-              <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums">
-                리뷰 {{ place.total_reviews != null ? place.total_reviews.toLocaleString('ko-KR') : '—' }}
-              </span>
-              <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
-              <span class="text-xs text-gray-400 dark:text-slate-500">갱신: {{ place.last_collected_at ? formatDate(place.last_collected_at) : '전' }}</span>
-              <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
-              <!-- 자동갱신 토글 -->
-              <button
-                class="flex items-center gap-1 shrink-0"
-                :class="autoCollectTogglingIds.has(place.id) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'"
-                :title="place.auto_collect === 1 ? '자동갱신 켜짐 — 클릭해서 끄기' : '자동갱신 꺼짐 — 클릭해서 켜기'"
-                :disabled="autoCollectTogglingIds.has(place.id)"
-                @click.stop="toggleAutoCollect(place)"
-              >
-                <!-- 토글 트랙 -->
-                <span
-                  class="relative inline-flex h-3 w-5 shrink-0 rounded-full transition-colors duration-150"
-                  :class="place.auto_collect === 1 ? 'bg-primary-500' : 'bg-gray-300 dark:bg-slate-600'"
+            <div class="flex flex-col gap-0.5 mt-0.5 pl-5">
+              <!-- 줄1: 데이터 수치 (리뷰·생성) -->
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums whitespace-nowrap">
+                  리뷰 {{ place.total_reviews != null ? place.total_reviews.toLocaleString('ko-KR') : '—' }}
+                </span>
+                <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
+                <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums whitespace-nowrap">
+                  생성 {{ place.generated_count != null && place.generated_count > 0 ? place.generated_count : '—' }}
+                </span>
+              </div>
+              <!-- 줄2: 수집 상태 (갱신 월.일 · 토글 스위치만) -->
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs text-gray-400 dark:text-slate-500 tabular-nums whitespace-nowrap">갱신 {{ place.last_collected_at ? place.last_collected_at.slice(5, 10).replace('-', '.') : '전' }}</span>
+                <span class="text-xs text-gray-300 dark:text-slate-600">·</span>
+                <!-- 자동갱신 토글 (스위치만, 글자 제거) -->
+                <button
+                  class="flex items-center shrink-0"
+                  :class="autoCollectTogglingIds.has(place.id) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'"
+                  :title="place.auto_collect === 1 ? '자동갱신 켜짐 — 클릭해서 끄기' : '자동갱신 꺼짐 — 클릭해서 켜기'"
+                  :disabled="autoCollectTogglingIds.has(place.id)"
+                  @click.stop="toggleAutoCollect(place)"
                 >
                   <span
-                    class="absolute top-0.5 h-2 w-2 rounded-full bg-white shadow transition-transform duration-150"
-                    :class="place.auto_collect === 1 ? 'translate-x-2.5' : 'translate-x-0.5'"
-                  />
-                </span>
-                <span
-                  class="text-xs"
-                  :class="place.auto_collect === 1 ? 'text-primary-600 dark:text-primary-400' : 'text-gray-400 dark:text-slate-500'"
-                >{{ place.auto_collect === 1 ? '자동' : '수동' }}</span>
-              </button>
+                    class="relative inline-flex h-3 w-5 shrink-0 rounded-full transition-colors duration-150"
+                    :class="place.auto_collect === 1 ? 'bg-primary-500' : 'bg-gray-300 dark:bg-slate-600'"
+                  >
+                    <span
+                      class="absolute top-0.5 h-2 w-2 rounded-full bg-white shadow transition-transform duration-150"
+                      :class="place.auto_collect === 1 ? 'translate-x-2.5' : 'translate-x-0.5'"
+                    />
+                  </span>
+                </button>
+              </div>
             </div>
           </li>
         </ul>
@@ -2219,9 +2507,9 @@ onUnmounted(() => {
               <template v-else>리뷰</template>
             </span>
             <div class="flex items-center gap-2 shrink-0">
-              <!-- 지금 수집 버튼 -->
+              <!-- 지금 수집 버튼 — tester 차단 -->
               <UButton
-                v-if="selectedPlace"
+                v-if="selectedPlace && !authStore.isTester"
                 label="지금 수집"
                 size="xs"
                 color="primary"
@@ -2231,8 +2519,8 @@ onUnmounted(() => {
                 :disabled="backfillRunning"
                 @click="collectNow"
               />
-              <!-- 전체 수집(백필) 버튼 -->
-              <template v-if="selectedPlace">
+              <!-- 전체 수집(백필) 버튼 — tester 차단 -->
+              <template v-if="selectedPlace && !authStore.isTester">
                 <UButton
                   v-if="backfillStatus === 'done'"
                   label="전체 수집 완료"
@@ -2262,7 +2550,7 @@ onUnmounted(() => {
                   @click="backfillAll"
                 />
               </template>
-              <!-- CSV 다운로드 버튼 -->
+              <!-- CSV 다운로드 버튼 — tester 허용 -->
               <UButton
                 v-if="reviewsStatus === 'done' && reviewsTotal > 0"
                 :label="csvLoading ? (csvProgress ? `${csvProgress.current}/${csvProgress.total}` : '받는 중...') : 'CSV'"
@@ -2362,12 +2650,15 @@ onUnmounted(() => {
           <p class="text-sm text-gray-400 dark:text-slate-500">좌측에서 플레이스를 선택하세요.</p>
         </div>
 
-        <!-- 플레이스 선택 시: 탭 바 + 탭 콘텐츠 -->
-        <template v-else>
+        <!-- 탭 바 + 탭 콘텐츠 (플레이스 선택 시) -->
+        <template v-if="selectedPlace">
 
           <!-- ── 탭 바 (shrink-0) ─────────────────────────────────── -->
-          <div class="shrink-0 flex border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+          <!-- tester: 리뷰 + 예시 생성만 표시 / researcher·admin: 전체 표시 -->
+          <div class="shrink-0 flex border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-x-auto">
+            <!-- 리뷰 탭: 모두 허용 -->
             <button
+              v-if="selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'reviews'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2376,7 +2667,9 @@ onUnmounted(() => {
             >
               리뷰
             </button>
+            <!-- 통계 탭: tester 차단 -->
             <button
+              v-if="selectedPlace && !authStore.isTester"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'stats'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2385,8 +2678,9 @@ onUnmounted(() => {
             >
               통계
             </button>
+            <!-- AI 진단 탭: researcher/admin만 -->
             <button
-              v-if="authStore.isResearcher"
+              v-if="authStore.isResearcher && selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'ai-diagnosis'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2395,8 +2689,9 @@ onUnmounted(() => {
             >
               AI 진단
             </button>
+            <!-- 예시 생성 탭: researcher/admin/tester 허용 -->
             <button
-              v-if="authStore.isResearcher"
+              v-if="(authStore.isResearcher || authStore.isTester) && selectedPlace"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'samples'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2405,7 +2700,9 @@ onUnmounted(() => {
             >
               예시 생성
             </button>
+            <!-- 수집 이력 탭: tester 차단 -->
             <button
+              v-if="selectedPlace && !authStore.isTester"
               class="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
               :class="activeTab === 'collections'
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -2814,30 +3111,63 @@ onUnmounted(() => {
           </div>
           <!-- ══ /탭 2: 통계 · AI 인사이트 ════════════════════════════ -->
 
-          <!-- ══ 탭 3: 예시 생성 (researcher/admin 전용) ════════════════ -->
-          <div v-if="authStore.isResearcher" v-show="activeTab === 'samples'" class="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <!-- ══ 탭 3: 예시 생성 (researcher/admin/tester) ════════════════ -->
+          <div v-if="authStore.isResearcher || authStore.isTester" v-show="activeTab === 'samples'" class="flex-1 min-h-0 w-full flex flex-col overflow-hidden">
 
             <!-- 탭 상단 고정 영역 (shrink-0) -->
             <div class="shrink-0 flex flex-col divide-y divide-gray-100 dark:divide-slate-700 border-b border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800">
               <!-- 타이틀 행 + 생성 컨트롤 -->
-              <div class="flex items-center justify-between gap-3 px-3 py-2">
-                <div class="flex items-center gap-1.5 min-w-0">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2">
+                <div class="flex items-center gap-1.5 shrink-0">
                   <UIcon name="i-heroicons-beaker" class="w-3.5 h-3.5 text-gray-500 dark:text-slate-400 shrink-0" />
-                  <span class="text-xs font-medium text-gray-700 dark:text-slate-300">리뷰 예시 생성</span>
+                  <span class="text-xs font-medium text-gray-700 dark:text-slate-300 whitespace-nowrap">리뷰 예시 생성</span>
                   <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 whitespace-nowrap">AI 합성·연구용</span>
                 </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <!-- 제공자 선택 드롭다운 -->
+                <div class="flex items-center gap-2 flex-wrap">
+                  <!-- 모델 선택 드롭다운 -->
                   <select
-                    v-model="sampleProvider"
+                    :value="sampleModel"
                     class="h-7 px-2 py-0 text-xs border border-gray-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 focus:outline-none focus:border-primary-400 cursor-pointer"
                     :disabled="samplesGenerating"
+                    @change="onModelSelect(($event.target as HTMLSelectElement).value)"
                   >
                     <option
                       v-for="opt in PROVIDER_OPTIONS"
-                      :key="opt.value"
-                      :value="opt.value"
+                      :key="opt.model"
+                      :value="opt.model"
                     >{{ opt.label }}</option>
+                  </select>
+                  <!-- 길이 선택 -->
+                  <select
+                    v-model="sampleLength"
+                    class="h-7 px-2 py-0 text-xs border border-gray-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 focus:outline-none focus:border-primary-400 cursor-pointer"
+                    :disabled="samplesGenerating"
+                  >
+                    <option value="auto">길이 자동</option>
+                    <option value="short">한줄</option>
+                    <option value="medium">중간</option>
+                    <option value="long">장문</option>
+                  </select>
+                  <!-- 이름 포함 여부 -->
+                  <select
+                    v-model="sampleIncludeNames"
+                    class="h-7 px-2 py-0 text-xs border border-gray-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 focus:outline-none focus:border-primary-400 cursor-pointer"
+                    :disabled="samplesGenerating"
+                  >
+                    <option :value="true">이름 포함</option>
+                    <option :value="false">이름 제외</option>
+                  </select>
+                  <!-- 휴머나이즈 강도 -->
+                  <select
+                    v-model="sampleHumanizeLevel"
+                    class="h-7 px-2 py-0 text-xs border border-gray-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 focus:outline-none focus:border-primary-400 cursor-pointer"
+                    :disabled="samplesGenerating"
+                  >
+                    <option value="auto">자동(랜덤)</option>
+                    <option value="off">휴머나이즈 끔</option>
+                    <option value="light">약</option>
+                    <option value="medium">중</option>
+                    <option value="strong">강</option>
                   </select>
                   <span class="text-xs text-gray-500 dark:text-slate-400">개수</span>
                   <input
@@ -2894,33 +3224,7 @@ onUnmounted(() => {
                     :class="filterLengths.has(val)
                       ? 'bg-gray-700 dark:bg-slate-500 text-white'
                       : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-gray-200 dark:hover:bg-slate-600'"
-                    @click="toggleFilterTag(filterLengths, val)"
-                  >{{ lbl }}</button>
-                </div>
-                <span class="text-gray-200 dark:text-slate-600 text-xs">|</span>
-                <!-- 어조 태그 필터 -->
-                <div class="flex items-center gap-1">
-                  <button
-                    v-for="[val, lbl] in [['friendly','친근'],['polite','정중'],['emotional','감성'],['plain','담백']] as const"
-                    :key="val"
-                    class="px-2 py-0.5 rounded text-xs transition-colors whitespace-nowrap"
-                    :class="filterTones.has(val)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-gray-200 dark:hover:bg-slate-600'"
-                    @click="toggleFilterTag(filterTones, val)"
-                  >{{ lbl }}</button>
-                </div>
-                <span class="text-gray-200 dark:text-slate-600 text-xs">|</span>
-                <!-- 초점 태그 필터 -->
-                <div class="flex items-center gap-1">
-                  <button
-                    v-for="[val, lbl] in [['outcome','결과'],['service','응대'],['space','시설'],['price','가격'],['revisit','재방문']] as const"
-                    :key="val"
-                    class="px-2 py-0.5 rounded text-xs transition-colors whitespace-nowrap"
-                    :class="filterFocuses.has(val)
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-gray-200 dark:hover:bg-slate-600'"
-                    @click="toggleFilterTag(filterFocuses, val)"
+                    @click="toggleLengthFilter(val)"
                   >{{ lbl }}</button>
                 </div>
                 <span class="text-gray-200 dark:text-slate-600 text-xs">|</span>
@@ -2932,7 +3236,7 @@ onUnmounted(() => {
                   <UIcon name="i-heroicons-eye-slash" class="w-3 h-3" />
                   숨김
                 </button>
-                <template v-if="checkedSampleIds.size > 0">
+                <template v-if="checkedSampleIds.size > 0 && !authStore.isTester">
                   <span class="text-gray-300 dark:text-slate-600 text-xs">·</span>
                   <UButton
                     :label="`선택 삭제 (${checkedSampleIds.size})`"
@@ -2954,6 +3258,61 @@ onUnmounted(() => {
                   이번 생성: {{ providerLabel[lastGenerationInfo.provider] ?? lastGenerationInfo.provider }}
                   <span v-if="lastGenerationInfo.model" class="font-normal text-indigo-500 dark:text-indigo-400">{{ lastGenerationInfo.model }}</span>
                 </span>
+                <!-- 배치 다양성 지표 -->
+                <UTooltip
+                  v-if="lastDiversity"
+                  text="낮은 유사도 = 다양한 표현. 최대유사도 55% 이상이면 모드붕괴 주의."
+                  :popper="{ placement: 'top' }"
+                >
+                  <span
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium tabular-nums cursor-default whitespace-nowrap"
+                    :class="lastDiversity.maxSimilarity >= 0.55
+                      ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                      : 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300'"
+                  >
+                    <UIcon name="i-heroicons-chart-bar" class="w-3 h-3 shrink-0" />
+                    다양성 distinct-2 {{ (lastDiversity.distinct2 * 100).toFixed(0) }}%
+                    · 평균유사도 {{ (lastDiversity.avgSimilarity * 100).toFixed(0) }}%
+                    · 최대 {{ (lastDiversity.maxSimilarity * 100).toFixed(0) }}%
+                  </span>
+                </UTooltip>
+                <!-- R2: 배치 자연스러움 지표 (배치 평균·추이 감시용, 개별 합불 판단 아님) -->
+                <!-- 임계: ≥90 emerald / 70~89 amber / <70 red -->
+                <UTooltip
+                  v-if="naturalnessSummary"
+                  :text="`자연도·slop — 표면 통계(자동 추정). 배치 추이·참고용이며 개별 합불 판단 기준 아님(Goodhart 주의).\n중간값 ${naturalnessSummary.median} · 최솟값 ${naturalnessSummary.min} · 평균 slop ${naturalnessSummary.mean_slop_hits}개/건`"
+                  :popper="{ placement: 'top' }"
+                >
+                  <span
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium tabular-nums cursor-default whitespace-nowrap"
+                    :class="naturalnessSummary.mean >= 90
+                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                      : naturalnessSummary.mean >= 70
+                        ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                        : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
+                  >
+                    <UIcon name="i-heroicons-beaker" class="w-3 h-3 shrink-0" />
+                    자연도(배치) {{ naturalnessSummary.mean }}
+                    <span class="font-normal opacity-70">/ slop {{ naturalnessSummary.mean_slop_hits }}개</span>
+                  </span>
+                </UTooltip>
+                <!-- Goodhart 주의: 배치 데이터가 있을 때 1회 표시 -->
+                <span
+                  v-if="naturalnessSummary"
+                  class="text-[10px] text-gray-400 dark:text-slate-500 leading-snug"
+                  title="이 지표는 표면 통계(자동 추정)입니다. 배치 추이 감시·참고 용도이며 절대 기준이 아닙니다."
+                >※ 표면 통계·참고용</span>
+                <!-- 환각 탐지 배치 요약 (soft-flag 조기경보 — 재생성 아님) -->
+                <UTooltip
+                  v-if="hallucinationSummary && (hallucinationSummary.high + hallucinationSummary.low) > 0"
+                  :text="`표면 정규식 기반 조기경보 (오탐 가능). 재생성 아님.\nhigh ${hallucinationSummary.high}건 · low ${hallucinationSummary.low}건`"
+                  :popper="{ placement: 'top' }"
+                >
+                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium cursor-default whitespace-nowrap bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                    <UIcon name="i-heroicons-exclamation-triangle" class="w-3 h-3 shrink-0" />
+                    환각 의심 {{ hallucinationSummary.high + hallucinationSummary.low }}건
+                  </span>
+                </UTooltip>
                 <span v-if="samplesUsage" class="text-[10px] text-gray-400 dark:text-slate-500 tabular-nums">
                   ≈ ${{ samplesUsage.cost_usd.toFixed(4) }} (입력 {{ (samplesUsage.prompt_tokens / 1000).toFixed(1) }}k · 출력 {{ (samplesUsage.completion_tokens / 1000).toFixed(1) }}k)
                 </span>
@@ -2967,7 +3326,7 @@ onUnmounted(() => {
             </div>
 
             <!-- 본문 스크롤 영역 (flex-1 min-h-0) -->
-            <div class="flex-1 min-h-0 overflow-y-auto bg-white dark:bg-slate-900">
+            <div class="flex-1 min-h-0 min-w-0 overflow-auto bg-white dark:bg-slate-900">
 
               <!-- 생성 중 -->
               <div v-if="samplesStatus === 'generating' || samplesGenerating" class="flex items-center gap-1.5 px-3 py-2.5">
@@ -3000,7 +3359,7 @@ onUnmounted(() => {
                   <p class="text-xs text-gray-400 dark:text-slate-500">해당 필터에 맞는 예시가 없습니다</p>
                 </div>
                 <!-- 테이블 -->
-                <table v-else class="w-full text-xs border-collapse">
+                <table v-else class="w-full min-w-[36rem] text-xs border-collapse">
                   <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-slate-800">
                     <tr class="h-8">
                       <!-- 체크박스 전체선택 -->
@@ -3046,32 +3405,6 @@ onUnmounted(() => {
                           </span>
                         </span>
                       </th>
-                      <!-- 어조 -->
-                      <th
-                        class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-14 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
-                        @click="toggleSampleSort('tone')"
-                      >
-                        <span class="inline-flex items-center gap-0.5">
-                          어조
-                          <span class="text-gray-400 dark:text-slate-500">
-                            <template v-if="sampleSortKey === 'tone'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
-                            <template v-else>↕</template>
-                          </span>
-                        </span>
-                      </th>
-                      <!-- 초점 -->
-                      <th
-                        class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-16 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
-                        @click="toggleSampleSort('focus')"
-                      >
-                        <span class="inline-flex items-center gap-0.5">
-                          초점
-                          <span class="text-gray-400 dark:text-slate-500">
-                            <template v-if="sampleSortKey === 'focus'">{{ sampleSortAsc ? '↑' : '↓' }}</template>
-                            <template v-else>↕</template>
-                          </span>
-                        </span>
-                      </th>
                       <!-- 제공자 -->
                       <th
                         class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-16 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
@@ -3097,6 +3430,18 @@ onUnmounted(() => {
                             <template v-else>↕</template>
                           </span>
                         </span>
+                      </th>
+                      <!-- 자연도·slop (잠정·표면 통계 — 배치추이용, 개별 합불 판단 아님) -->
+                      <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-28">
+                        <UTooltip text="자연도: 사람이 쓴 후기처럼 자연스럽게 읽히는 정도(0~100). 높을수록 자연스러움. / slop: AI가 흔히 과하게 쓰는 표현이 몇 번 나왔는지. 낮을수록 좋음." :popper="{ placement: 'top' }">
+                          <span class="cursor-default">자연도·slop</span>
+                        </UTooltip>
+                      </th>
+                      <!-- 환각 탐지 (soft-flag) -->
+                      <th class="px-3 text-left font-medium text-gray-600 dark:text-slate-400 whitespace-nowrap border-b border-gray-200 dark:border-slate-700 w-10">
+                        <UTooltip text="표면 정규식 조기경보 (오탐 가능). 재생성 아님." :popper="{ placement: 'top' }">
+                          <span class="cursor-default">환각</span>
+                        </UTooltip>
                       </th>
                       <!-- 액션 -->
                       <th class="px-3 border-b border-gray-200 dark:border-slate-700 w-20" />
@@ -3145,14 +3490,6 @@ onUnmounted(() => {
                       <td class="px-3 py-1.5 whitespace-nowrap align-top">
                         <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 dark:bg-slate-700 text-[10px] text-gray-600 dark:text-slate-300">{{ lengthLabel[sample.length] ?? sample.length }}</span>
                       </td>
-                      <!-- 어조 -->
-                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-[10px] text-blue-700 dark:text-blue-300">{{ toneLabel[sample.tone] ?? sample.tone }}</span>
-                      </td>
-                      <!-- 초점 -->
-                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-900/30 text-[10px] text-emerald-700 dark:text-emerald-300">{{ focusLabel[sample.focus] ?? sample.focus }}</span>
-                      </td>
                       <!-- 제공자 -->
                       <td class="px-3 py-1.5 whitespace-nowrap align-top">
                         <span
@@ -3177,6 +3514,55 @@ onUnmounted(() => {
                           v-else-if="(sample.status ?? 'active') === 'archived'"
                           class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 dark:bg-slate-700 text-[10px] text-gray-500 dark:text-slate-400"
                         >숨김</span>
+                      </td>
+                      <!-- 자연도·slop (R2: 배치 추이 감시용, 개별 합불 아님)
+                           임계: ≥90 emerald / ≥70 amber / <70 red -->
+                      <td class="px-3 py-1.5 align-top">
+                        <template v-if="sample.naturalness != null">
+                          <div class="flex flex-col gap-0.5">
+                            <!-- 자연도 배지 -->
+                            <div class="flex items-center gap-1">
+                              <span
+                                class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium tabular-nums cursor-default whitespace-nowrap"
+                                :class="sample.naturalness >= 90
+                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                  : sample.naturalness >= 70
+                                    ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                    : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'"
+                                title="사람이 쓴 후기처럼 자연스럽게 읽히는 정도(0~100). 높을수록 자연스러움."
+                              >자연도 {{ sample.naturalness }}</span>
+                              <!-- slop 수 배지 (>0 이면 amber, 0이면 생략) -->
+                              <span
+                                v-if="sample.slop_hits != null && sample.slop_hits > 0"
+                                class="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium tabular-nums whitespace-nowrap bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                                title="AI가 흔히 과하게 쓰는 표현이 몇 번 나왔는지. 낮을수록 좋음."
+                              >slop {{ sample.slop_hits }}</span>
+                            </div>
+                            <!-- 상위 slop 표현 (있을 때만) -->
+                            <span
+                              v-if="sample.slop_top && sample.slop_top.length > 0"
+                              class="text-[10px] text-gray-400 dark:text-slate-500 leading-snug max-w-[16rem] whitespace-normal"
+                            >{{ sample.slop_top.join(', ') }}</span>
+                          </div>
+                        </template>
+                        <span v-else class="text-gray-300 dark:text-slate-600">—</span>
+                      </td>
+                      <!-- 환각 탐지 배지 (soft-flag 조기경보 — risk=none이면 미표시) -->
+                      <td class="px-3 py-1.5 whitespace-nowrap align-top">
+                        <UTooltip
+                          v-if="sample.hallucination && sample.hallucination.risk !== 'none'"
+                          :text="`표면 정규식 조기경보 (오탐 가능). 재생성 아님.\n` + (sample.hallucination.flags ?? []).map(f => `${f.type}: ${f.text}`).join('\n')"
+                          :popper="{ placement: 'top' }"
+                        >
+                          <span
+                            class="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] font-medium cursor-default"
+                            :class="sample.hallucination.risk === 'high'
+                              ? 'bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+                              : 'bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400'"
+                          >
+                            <UIcon name="i-heroicons-exclamation-triangle" class="w-3 h-3 shrink-0" />
+                          </span>
+                        </UTooltip>
                       </td>
                       <!-- 액션 버튼 (hover) -->
                       <td class="px-3 py-1.5 whitespace-nowrap align-top">
@@ -3256,6 +3642,46 @@ onUnmounted(() => {
 
               <!-- ── 좌측 패널 (320px 고정) ── -->
               <div class="w-[320px] shrink-0 overflow-y-auto border-r border-gray-100 dark:border-slate-700 flex flex-col gap-2 p-3">
+
+                <!-- LLM 판별기 (잠정·검증전) — 항상 표시. 사람 라벨 전체 대비 4분류 일치율 측정용 -->
+                <div class="rounded border border-amber-200 dark:border-amber-900/40 px-3 py-2 flex flex-col gap-1.5 bg-amber-50/50 dark:bg-amber-900/10">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-[11px] font-semibold text-amber-600 dark:text-amber-400 shrink-0">LLM 판별</span>
+                    <span class="text-[10px] text-gray-400 dark:text-slate-500">잠정·검증전 (사람 라벨 전체 대상)</span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <select
+                      v-model="llmClassifyModel"
+                      class="text-[11px] border border-gray-200 dark:border-slate-600 rounded px-1.5 py-0.5 bg-white dark:bg-slate-700 text-gray-700 dark:text-slate-200 flex-1 min-w-0"
+                      :disabled="llmClassifyRunning"
+                    >
+                      <option value="gpt-5.4-mini">gpt-5.4-mini (저가)</option>
+                      <option value="claude-haiku-4-5-20251001">claude-haiku (저가)</option>
+                      <option value="claude-sonnet-4-6">claude-sonnet</option>
+                      <option value="claude-opus-4-8">claude-opus</option>
+                      <option value="grok-4.3">grok-4.3</option>
+                    </select>
+                    <UButton
+                      label="실행"
+                      size="xs"
+                      color="warning"
+                      variant="solid"
+                      icon="i-heroicons-beaker"
+                      :loading="llmClassifyRunning"
+                      :disabled="llmClassifyRunning"
+                      title="사람 라벨된 리뷰를 LLM으로 4분류 — 잠정(단일 평가자 대비), IAA 검증 전"
+                      @click="runLLMClassify"
+                    />
+                  </div>
+                  <div v-if="llmClassifySummary" class="flex items-center gap-1 text-[11px] text-gray-500 dark:text-slate-400">
+                    <UIcon name="i-heroicons-check-circle" class="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    판별 {{ llmClassifySummary.classified }}건
+                    <span v-if="llmClassifySummary.cost_usd !== null"> · ${{ llmClassifySummary.cost_usd?.toFixed(4) }}</span>
+                  </div>
+                  <div v-if="llmClassifyError" class="flex items-center gap-1 text-[11px] text-red-500">
+                    <UIcon name="i-heroicons-exclamation-circle" class="w-3 h-3 shrink-0" />{{ llmClassifyError }}
+                  </div>
+                </div>
 
                 <!-- 진단 로딩 -->
                 <div v-if="aiDiagnosisStatus === 'loading'" class="flex items-center justify-center py-6">
@@ -3420,13 +3846,21 @@ onUnmounted(() => {
                         :class="activeHumanLabel === 'ad'
                           ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium'
                           : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'"
-                        :title="`광고·AI로 라벨된 리뷰 ${aiDiagnosis.human_counts.ad}건 보기`"
+                        :title="`광고로 라벨된 리뷰 ${aiDiagnosis.human_counts.ad}건 보기`"
                         @click="setHumanLabelFilter('ad')"
                       >광고 {{ aiDiagnosis.human_counts.ad }}</button>
                       <button
                         class="flex items-center gap-1 text-[11px] px-1 py-0.5 rounded transition-colors"
-                        :class="activeHumanLabel === 'unsure'
+                        :class="activeHumanLabel === 'ai'
                           ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium'
+                          : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'"
+                        :title="`AI로 라벨된 리뷰 ${aiDiagnosis.human_counts.ai}건 보기`"
+                        @click="setHumanLabelFilter('ai')"
+                      >AI {{ aiDiagnosis.human_counts.ai }}</button>
+                      <button
+                        class="flex items-center gap-1 text-[11px] px-1 py-0.5 rounded transition-colors"
+                        :class="activeHumanLabel === 'unsure'
+                          ? 'bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium'
                           : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'"
                         :title="`애매로 라벨된 리뷰 ${aiDiagnosis.human_counts.unsure}건 보기`"
                         @click="setHumanLabelFilter('unsure')"
@@ -3524,6 +3958,8 @@ onUnmounted(() => {
                     </div>
                   </div>
 
+                  <!-- (LLM 판별 섹션은 좌측 패널 상단으로 이동 — 항상 표시) -->
+
                   </template><!-- /v-if total_analyzed > 0 -->
 
                 </template>
@@ -3584,7 +4020,7 @@ onUnmounted(() => {
                       v-for="item in aiReviewsItems"
                       :key="item.review_id"
                       class="border border-gray-100 dark:border-slate-700 rounded p-2.5 flex flex-col gap-1.5 bg-white dark:bg-slate-800"
-                      :class="item.human_label === 'human' ? 'border-l-2 border-l-emerald-400' : item.human_label === 'ad' ? 'border-l-2 border-l-red-400' : item.human_label === 'unsure' ? 'border-l-2 border-l-amber-400' : ''"
+                      :class="item.human_label === 'human' ? 'border-l-2 border-l-emerald-400' : item.human_label === 'ad' ? 'border-l-2 border-l-red-400' : item.human_label === 'ai' ? 'border-l-2 border-l-amber-400' : item.human_label === 'unsure' ? 'border-l-2 border-l-slate-400' : ''"
                     >
                       <!-- 헤더: 점수 배지 + 플래그 + 날짜 -->
                       <div class="flex items-center gap-1.5 flex-wrap">
@@ -3604,6 +4040,17 @@ onUnmounted(() => {
                           v-else
                           class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium shrink-0 bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400"
                         >사람추정</span>
+                        <!-- kind 꼬리표 (광고형/AI형) -->
+                        <span
+                          v-if="item.kind === 'ad'"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300"
+                          title="광고형 플래그(광고체·과장) 포함"
+                        >광고형</span>
+                        <span
+                          v-else-if="item.kind === 'ai'"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                          title="AI형 플래그(격식체·템플릿성 등) 포함"
+                        >AI형</span>
                         <!-- 보정 표기: 원점수와 effective가 다를 때 -->
                         <span
                           v-if="item.raw_ai_suspect !== undefined && item.ai_suspect !== null"
@@ -3614,8 +4061,8 @@ onUnmounted(() => {
                         <span
                           v-if="item.human_label"
                           class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0"
-                          :class="item.human_label === 'human' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : item.human_label === 'ad' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300' : 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300'"
-                        >{{ item.human_label === 'human' ? '사람' : item.human_label === 'ad' ? '광고·AI' : '애매' }}</span>
+                          :class="item.human_label === 'human' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : item.human_label === 'ad' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300' : item.human_label === 'ai' ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400'"
+                        >{{ item.human_label === 'human' ? '사람' : item.human_label === 'ad' ? '광고' : item.human_label === 'ai' ? 'AI' : '애매' }}</span>
                         <!-- 감성 -->
                         <span v-if="item.sentiment" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300">
                           {{ item.sentiment === 'positive' ? '긍정' : item.sentiment === 'negative' ? '부정' : '중립' }}
@@ -3647,7 +4094,7 @@ onUnmounted(() => {
 
                       <!-- 라벨 컨트롤 (researcher 이상) -->
                       <div class="flex items-center gap-1 flex-wrap pt-0.5 border-t border-gray-50 dark:border-slate-700/60">
-                        <!-- 3개 버튼 -->
+                        <!-- 4개 버튼: 사람 / 광고 / AI / 애매 -->
                         <button
                           class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-50"
                           :class="item.human_label === 'human'
@@ -3663,14 +4110,23 @@ onUnmounted(() => {
                             ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium'
                             : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-700 dark:hover:text-red-300'"
                           :disabled="labelSavingIds.has(item.review_id)"
-                          :title="item.human_label === 'ad' ? '클릭하면 라벨 해제' : '광고·AI 작성 리뷰'"
+                          :title="item.human_label === 'ad' ? '클릭하면 라벨 해제' : '광고 목적으로 작성된 리뷰 (체험단 등)'"
                           @click="saveReviewLabel(item.review_id, item.human_label === 'ad' ? null : 'ad')"
-                        >광고·AI</button>
+                        >광고</button>
+                        <button
+                          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-50"
+                          :class="item.human_label === 'ai'
+                            ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium'
+                            : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 hover:text-amber-700 dark:hover:text-amber-300'"
+                          :disabled="labelSavingIds.has(item.review_id)"
+                          :title="item.human_label === 'ai' ? '클릭하면 라벨 해제' : 'AI가 생성한 것으로 판단된 리뷰'"
+                          @click="saveReviewLabel(item.review_id, item.human_label === 'ai' ? null : 'ai')"
+                        >AI</button>
                         <button
                           class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-50"
                           :class="item.human_label === 'unsure'
-                            ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium'
-                            : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 hover:text-amber-700 dark:hover:text-amber-300'"
+                            ? 'bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium'
+                            : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 hover:text-slate-700 dark:hover:text-slate-200'"
                           :disabled="labelSavingIds.has(item.review_id)"
                           :title="item.human_label === 'unsure' ? '클릭하면 라벨 해제' : '판단하기 애매한 리뷰'"
                           @click="saveReviewLabel(item.review_id, item.human_label === 'unsure' ? null : 'unsure')"
@@ -3801,6 +4257,8 @@ onUnmounted(() => {
 
           </div>
           <!-- ══ /탭 5: 수집 이력 ══════════════════════════════════════ -->
+
+
 
         </template>
         <!-- /플레이스 선택 시 탭 구조 -->

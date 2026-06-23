@@ -1,5 +1,16 @@
 // SBS 확장 + 차세대 키워드 분석 대시보드용 네이버 검색광고 API 프록시
 
+// R2: 자연스러움 채점기 (순수 함수 + 프로파일)
+import { scoreNaturalness } from './naturalness-score.js';
+import naturalnessProfile from './naturalness-profile.json';
+
+// 환각 탐지기 (soft-flag 조기경보 — 재생성/차단 아님)
+import { detectHallucination, TREATMENT_LEXICON } from './hallucination-detect.js';
+
+// 시술 분포 추출용: TREATMENT_LEXICON + '레이저' 포함한 확장 세트
+// (TREATMENT_LEXICON에 '레이저토닝'·'다이오드레이저' 등 복합어가 있지만 단독 '레이저'는 누락)
+const PROCEDURE_TERMS = new Set([...TREATMENT_LEXICON, '레이저']);
+
 // 정확 매칭 + 접두사 매칭 분리: prefix 매칭만 쓰면 도메인 위조에 취약함
 // (예: https://sbreport.github.io.evil.com 이 startsWith로 통과되는 문제)
 const ALLOWED_ORIGINS = [
@@ -77,6 +88,10 @@ export default {
 
     if (url.pathname === '/api/version' && request.method === 'GET') {
       return handleVersion(request, env, corsHeaders);
+    }
+
+    if (url.pathname === '/api/worker-version' && request.method === 'GET') {
+      return handleWorkerVersion(request, env, corsHeaders);
     }
 
     if (url.pathname === '/api/expand' && request.method === 'POST') {
@@ -173,10 +188,24 @@ export default {
     if (samplesDeleteMatch && request.method === 'POST') {
       return handleDeleteSamples(request, env, corsHeaders, samplesDeleteMatch[1]);
     }
+    const samplesDeleteAllMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/samples\/delete-all$/);
+    if (samplesDeleteAllMatch && request.method === 'POST') {
+      return handleDeleteAllSamples(request, env, corsHeaders, samplesDeleteAllMatch[1]);
+    }
     const samplesMatch = url.pathname.match(/^\/api\/places\/([^/]+)\/samples$/);
     if (samplesMatch && request.method === 'GET') {
       return handleGetSamples(request, env, corsHeaders, samplesMatch[1]);
     }
+    // GET /api/places/review-sprint-sample — 라벨링 스프린트 표본 추출 (researcher 이상)
+    // 주의: 정확히 /api/places/{id} 매칭보다 먼저 위치해야 함
+    if (url.pathname === '/api/places/review-sprint-sample' && request.method === 'GET') {
+      return handleReviewSprintSample(request, env, corsHeaders);
+    }
+    // GET /api/places/review-sprint-stats — 라벨링 스프린트 진행 통계 (researcher 이상)
+    if (url.pathname === '/api/places/review-sprint-stats' && request.method === 'GET') {
+      return handleReviewSprintStats(request, env, corsHeaders);
+    }
+
     // DELETE /api/places/:id — 플레이스 + 연관 데이터 cascade 삭제
     // 주의: 정확히 /api/places/{id} 로 끝나는 것만 매칭(하위 경로 없음)
     const deletePlaceMatch = url.pathname.match(/^\/api\/places\/([^/]+)$/);
@@ -202,6 +231,67 @@ export default {
     const adminRoleMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/role$/);
     if (adminRoleMatch && request.method === 'POST') {
       return handleAdminSetRole(request, env, corsHeaders, adminRoleMatch[1]);
+    }
+    // POST /api/labels/llm-classify — LLM judge 판별 실행 (admin 전용)
+    // 사람 라벨된 리뷰 전체를 codebook 기반 4분류 → review_llm_classifications upsert
+    // 결과는 잠정(단일 평가자 대비) — IAA 검증 전
+    if (url.pathname === '/api/labels/llm-classify' && request.method === 'POST') {
+      return handleLLMClassify(request, env, corsHeaders);
+    }
+
+    // --- 블라인드 테스트 ---
+    // POST   /api/blind-test/pool          — 풀 구성 (admin)
+    // GET    /api/blind-test/pools         — 풀 목록 (researcher/admin)
+    // DELETE /api/blind-test/pools/:pool   — 풀 삭제 (admin)
+    // GET    /api/blind-test/access-code   — 접근코드 조회 (researcher/admin)
+    // GET    /api/blind-test/items         — 아이템 목록 (공개 + 접근코드)
+    // POST   /api/blind-test/ratings       — 평점 제출 (공개 + 접근코드)
+    // GET    /api/blind-test/results       — 집계 결과 (researcher/admin)
+    if (url.pathname === '/api/blind-test/pool' && request.method === 'POST') {
+      return handleBlindTestPool(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/blind-test/pools' && request.method === 'GET') {
+      return handleBlindTestPools(request, env, corsHeaders);
+    }
+    {
+      const m = url.pathname.match(/^\/api\/blind-test\/pools\/([^/]+)$/);
+      if (m && request.method === 'DELETE') {
+        return handleBlindTestPoolDelete(m[1], request, env, corsHeaders);
+      }
+    }
+    if (url.pathname === '/api/blind-test/access-code' && request.method === 'GET') {
+      return handleBlindTestAccessCode(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/blind-test/items' && request.method === 'GET') {
+      return handleBlindTestItems(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/blind-test/ratings' && request.method === 'POST') {
+      return handleBlindTestRatings(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/blind-test/results' && request.method === 'GET') {
+      return handleBlindTestResults(request, env, corsHeaders);
+    }
+
+    // --- IAA (평가자 간 일치도) ---
+    // POST /api/iaa/set     — 세트 생성 (admin)
+    // GET  /api/iaa/sets    — 세트 목록 (researcher)
+    // GET  /api/iaa/items   — 아이템 목록 (공개 + 코드)
+    // POST /api/iaa/labels  — 라벨 제출 (공개 + 코드)
+    // GET  /api/iaa/results — κ 결과 (researcher)
+    if (url.pathname === '/api/iaa/set' && request.method === 'POST') {
+      return handleIaaSet(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/iaa/sets' && request.method === 'GET') {
+      return handleIaaSets(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/iaa/items' && request.method === 'GET') {
+      return handleIaaItems(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/iaa/labels' && request.method === 'POST') {
+      return handleIaaLabels(request, env, corsHeaders);
+    }
+    if (url.pathname === '/api/iaa/results' && request.method === 'GET') {
+      return handleIaaResults(request, env, corsHeaders);
     }
 
     return jsonResponse({ error: 'not found' }, 404, corsHeaders);
@@ -894,8 +984,8 @@ async function getUserFromDB(env, googleSub) {
   const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
   if (adminEmails.includes(row.email)) {
     row.role = 'admin';
-  } else if (row.role === 'admin' || row.role === 'researcher') {
-    // DB에 admin/researcher로 명시된 role 그대로 유지
+  } else if (row.role === 'admin' || row.role === 'researcher' || row.role === 'tester') {
+    // DB에 admin/researcher/tester로 명시된 role 그대로 유지
   } else {
     row.role = 'user';
   }
@@ -982,6 +1072,18 @@ async function handleApiHistory(request, env, corsHeaders) {
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, corsHeaders);
   }
+}
+
+// --- GET /api/worker-version 핸들러 (무인증, CF 배포 메타데이터 반환) ---
+
+function handleWorkerVersion(request, env, corsHeaders) {
+  // CORS 미허용 오리진도 정보 조회 가능하도록 null corsHeaders 허용
+  const headers = corsHeaders ?? {};
+  return jsonResponse({
+    id: env.CF_VERSION_METADATA?.id ?? null,
+    tag: env.CF_VERSION_METADATA?.tag ?? null,
+    timestamp: env.CF_VERSION_METADATA?.timestamp ?? null,
+  }, 200, headers);
 }
 
 // --- GET /api/version 핸들러 ---
@@ -1195,6 +1297,11 @@ async function handleCreatePlace(request, env, corsHeaders) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
+  // tester는 지점 등록 불가 (읽기·예시 생성만 허용)
+  if (authResult.user.role === 'tester') {
+    return jsonResponse({ error: 'forbidden', message: '테스터는 지점 등록을 할 수 없습니다' }, 403, cors);
+  }
+
   let body;
   try {
     body = await request.json();
@@ -1293,6 +1400,7 @@ async function handleCreatePlace(request, env, corsHeaders) {
 
 /**
  * GET /api/places — 등록된 플레이스 목록 조회
+ * tester/admin은 모든 지점 반환, 그 외 자기 소유만 반환.
  */
 async function handleListPlaces(request, env, corsHeaders) {
   const cors = corsHeaders || {};
@@ -1302,13 +1410,30 @@ async function handleListPlaces(request, env, corsHeaders) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
+  const role = authResult.user.role;
+  const isUnrestricted = role === 'admin' || role === 'tester';
+
   try {
-    const { results } = await env.DB.prepare(
-      `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect
-       FROM review_places
-       WHERE user_id = ?
-       ORDER BY created_at DESC`
-    ).bind(authResult.user.id).all();
+    let results;
+    if (isUnrestricted) {
+      // tester/admin: 모든 지점 반환 (소유 필터 미적용)
+      const res = await env.DB.prepare(
+        `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect,
+                (SELECT COUNT(*) FROM place_generated_samples g WHERE g.place_row_id = review_places.id) AS generated_count
+         FROM review_places
+         ORDER BY created_at DESC`
+      ).all();
+      results = res.results;
+    } else {
+      const res = await env.DB.prepare(
+        `SELECT id, place_id, business_type, name, total_reviews, last_collected_at, created_at, auto_collect,
+                (SELECT COUNT(*) FROM place_generated_samples g WHERE g.place_row_id = review_places.id) AS generated_count
+         FROM review_places
+         WHERE user_id = ?
+         ORDER BY created_at DESC`
+      ).bind(authResult.user.id).all();
+      results = res.results;
+    }
 
     return jsonResponse({ places: results ?? [] }, 200, cors);
   } catch (err) {
@@ -1414,6 +1539,7 @@ async function handlePostReviews(request, env, corsHeaders, placeRowId) {
 
 /**
  * GET /api/places/:id/reviews — 리뷰 목록 열람 (페이지네이션)
+ * tester/admin은 소유 불문 전 지점 접근 가능.
  */
 async function handleGetReviews(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
@@ -1423,7 +1549,7 @@ async function handleGetReviews(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
-  // 플레이스 소유 확인
+  // 플레이스 소유 확인 (tester/admin은 소유 우회)
   let placeRow;
   try {
     placeRow = await env.DB.prepare(
@@ -1436,7 +1562,9 @@ async function handleGetReviews(request, env, corsHeaders, placeRowId) {
   if (!placeRow) {
     return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
   }
-  if (placeRow.user_id !== authResult.user.id) {
+  const role = authResult.user.role;
+  const isUnrestricted = role === 'admin' || role === 'tester';
+  if (!isUnrestricted && placeRow.user_id !== authResult.user.id) {
     return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
   }
 
@@ -2195,6 +2323,11 @@ async function handleBackfillPlace(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
+  // tester는 백필(전체 수집) 불가
+  if (authResult.user.role === 'tester') {
+    return jsonResponse({ error: 'forbidden', message: '테스터는 수집 기능을 사용할 수 없습니다' }, 403, cors);
+  }
+
   // 플레이스 소유 확인 + backfill 관련 컬럼 포함
   let placeRow;
   try {
@@ -2250,6 +2383,11 @@ async function handleCollectPlace(request, env, corsHeaders, placeRowId) {
   const authResult = await requireApprovedUser(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // tester는 수집 불가
+  if (authResult.user.role === 'tester') {
+    return jsonResponse({ error: 'forbidden', message: '테스터는 수집 기능을 사용할 수 없습니다' }, 403, cors);
   }
 
   // 플레이스 소유 확인 (handleGetReviews 와 동일 패턴)
@@ -2552,6 +2690,11 @@ async function handleDeletePlace(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
+  // tester는 삭제 불가
+  if (authResult.user.role === 'tester') {
+    return jsonResponse({ error: 'forbidden', message: '테스터는 지점 삭제를 할 수 없습니다' }, 403, cors);
+  }
+
   // 소유 확인 (handleCollectPlace 패턴과 동일)
   let placeRow;
   try {
@@ -2565,7 +2708,8 @@ async function handleDeletePlace(request, env, corsHeaders, placeRowId) {
   if (!placeRow) {
     return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
   }
-  if (placeRow.user_id !== authResult.user.id) {
+  const isAdmin = authResult.user.role === 'admin';
+  if (!isAdmin && placeRow.user_id !== authResult.user.id) {
     return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
   }
 
@@ -2579,8 +2723,8 @@ async function handleDeletePlace(request, env, corsHeaders, placeRowId) {
       env.DB.prepare('DELETE FROM place_insights WHERE place_row_id = ?').bind(placeRowId),
       env.DB.prepare('DELETE FROM place_generated_samples WHERE place_row_id = ?').bind(placeRowId),
       env.DB.prepare('DELETE FROM llm_usage WHERE place_row_id = ?').bind(placeRowId),
-      // user_id 조건 이중 방어 (소유 확인을 이미 했지만 파괴적 작업이므로 한 번 더)
-      env.DB.prepare('DELETE FROM review_places WHERE id = ? AND user_id = ?').bind(placeRowId, authResult.user.id),
+      // 소유자 기준 삭제 (소유 확인 통과 후). admin이 타 계정 지점도 지울 수 있게 실제 소유자 user_id 사용.
+      env.DB.prepare('DELETE FROM review_places WHERE id = ? AND user_id = ?').bind(placeRowId, placeRow.user_id),
     ]);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
@@ -2611,6 +2755,7 @@ async function requireAdmin(request, env) {
 }
 
 // 연구원 게이트: requireApprovedUser 통과 + user.role이 'admin' 또는 'researcher'면 통과.
+// tester는 의도적으로 제외 — tester는 requireTester 게이트를 사용.
 // 통과 시 { user } / 실패 시 { error, status, message }.
 async function requireResearcher(request, env) {
   const authResult = await requireApprovedUser(request, env);
@@ -2618,6 +2763,19 @@ async function requireResearcher(request, env) {
   const role = authResult.user.role;
   if (role !== 'admin' && role !== 'researcher') {
     return { error: 'forbidden', status: 403, message: '연구원(researcher) 이상 권한이 필요합니다' };
+  }
+  return authResult;
+}
+
+// 테스터 게이트: requireApprovedUser 통과 + user.role이 'admin', 'researcher', 'tester'면 통과.
+// 테스터는 소유권 우회가 별도 로직으로 처리됨 (isAdmin || isTester 패턴).
+// 통과 시 { user } / 실패 시 { error, status, message }.
+async function requireTester(request, env) {
+  const authResult = await requireApprovedUser(request, env);
+  if (authResult.error) return authResult;
+  const role = authResult.user.role;
+  if (role !== 'admin' && role !== 'researcher' && role !== 'tester') {
+    return { error: 'forbidden', status: 403, message: '테스터(tester) 이상 권한이 필요합니다' };
   }
   return authResult;
 }
@@ -2643,7 +2801,7 @@ async function handleAdminListUsers(request, env, corsHeaders) {
       ...u,
       role: adminEmails.includes(u.email)
         ? 'admin'
-        : (u.role === 'admin' || u.role === 'researcher' ? u.role : 'user'),
+        : (u.role === 'admin' || u.role === 'researcher' || u.role === 'tester' ? u.role : 'user'),
     }));
 
     return jsonResponse({ users }, 200, cors);
@@ -2781,7 +2939,7 @@ async function handleAdminSetRole(request, env, corsHeaders, targetUserId) {
   }
 
   const newRole = body?.role;
-  const ALLOWED_ROLES = ['user', 'researcher', 'admin'];
+  const ALLOWED_ROLES = ['user', 'researcher', 'admin', 'tester'];
   if (!ALLOWED_ROLES.includes(newRole)) {
     return jsonResponse(
       { error: 'invalid_role', message: `role은 ${ALLOWED_ROLES.join(' | ')} 중 하나여야 합니다` },
@@ -2841,21 +2999,18 @@ async function handleAdminResearchActivity(request, env, corsHeaders) {
 
     const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
 
-    // researcher 또는 admin 역할인 사용자만 필터
-    const researchers = (userRows ?? []).filter(u => {
-      const effectiveRole = adminEmails.includes(u.email) ? 'admin'
-        : (u.role === 'researcher' ? 'researcher' : 'user');
-      return effectiveRole === 'researcher' || effectiveRole === 'admin';
-    }).map(u => ({
+    // status='approved'인 전체 사용자를 포함 (테스터·일반 사용자도 활동·비용 표시)
+    const researchers = (userRows ?? []).map(u => ({
       user_id: u.id,
       name: u.name,
       email: u.email,
       role: adminEmails.includes(u.email) ? 'admin'
-        : (u.role === 'researcher' ? 'researcher' : 'user'),
+        : (u.role === 'researcher' ? 'researcher'
+          : (u.role === 'tester' ? 'tester' : 'user')),
     }));
 
     if (researchers.length === 0) {
-      return jsonResponse({ researchers: [] }, 200, cors);
+      return jsonResponse({ researchers: [], unattributed_cost_usd: 0 }, 200, cors);
     }
 
     // 활동 집계: 각 테이블별로 actor_user_id 기준 GROUP BY
@@ -2901,7 +3056,16 @@ async function handleAdminResearchActivity(request, env, corsHeaders) {
       total_cost_usd: usageMap.get(u.user_id)?.total_cost_usd  ?? 0,
     }));
 
-    return jsonResponse({ researchers: result }, 200, cors);
+    // 미귀속 비용: actor_user_id가 NULL이거나 users에 없는 llm_usage 행의 비용 합계
+    const unattributedRow = await env.DB.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS total
+       FROM llm_usage
+       WHERE actor_user_id IS NULL
+          OR actor_user_id NOT IN (SELECT id FROM users)`
+    ).first();
+    const unattributed_cost_usd = unattributedRow?.total ?? 0;
+
+    return jsonResponse({ researchers: result, unattributed_cost_usd }, 200, cors);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
@@ -3003,6 +3167,141 @@ const SAMPLE_FEW_SHOT_SIZE = 25;
 /** fact pool 상위 키워드 수 */
 const SAMPLE_FACT_POOL_SIZE = 25;
 
+/** 소스 후기 최근성 필터: 이 일수 이내 후기를 우선 사용 */
+const SOURCE_RECENCY_DAYS = 365;
+/** 최근 후기가 이 수 미만이면 기간 제한 없이 전체 사용 (폴백) */
+const SOURCE_RECENCY_MIN = 50;
+
+/**
+ * 담당자명(실장님/원장님 등)을 포함할 샘플 비율 (0~1).
+ * 0.3 = 전체 샘플의 약 30%에만 담당자명 배정. 튜닝 시 여기만 조정.
+ */
+const STAFF_NAME_RATE = 0.3;
+
+// ── 모드붕괴 방지 상수 ─────────────────────────────────────────────────────────
+/** lengthParam 지정 시 본보기 풀이 이 수보다 작으면 인접 길이→전체로 확장 */
+const MIN_EXEMPLAR_POOL = 8;
+/** 이 Jaccard 유사도를 초과하는 샘플 쌍을 '붕괴'로 간주 */
+const SIMILARITY_THRESHOLD = 0.55;
+/** 붕괴 샘플 재생성 최대 패스 수 */
+const MAX_REGEN_PASSES = 1;
+
+/**
+ * 텍스트를 정규화한다 (공백·문장부호·이모티콘 제거, 소문자화).
+ * 유사도 비교용 전처리에 사용.
+ * @param {string} text
+ * @returns {string}
+ */
+function normalizeForSimilarity(text) {
+  return text
+    .replace(/[\s.,!?;:·""''()\[\]{}<>/\\|@#$%^&*+=~`\-—–…♡♥ㅋㅎ^.~]+/gu, '')
+    .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{FE0F}\u{1F000}-\u{1FFFF}]/gu, '')
+    .toLowerCase();
+}
+
+/**
+ * 문자 trigram 집합을 반환한다.
+ * @param {string} s 정규화된 문자열
+ * @returns {Set<string>}
+ */
+function trigramSet(s) {
+  const set = new Set();
+  for (let i = 0; i + 3 <= s.length; i++) {
+    set.add(s.slice(i, i + 3));
+  }
+  return set;
+}
+
+/**
+ * 문자 trigram Jaccard 유사도 계산 (0~1).
+ * 문자열이 너무 짧으면(trigram 없음) 0 반환.
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function trigramJaccard(a, b) {
+  const na = normalizeForSimilarity(a);
+  const nb = normalizeForSimilarity(b);
+  const sa = trigramSet(na);
+  const sb = trigramSet(nb);
+  if (sa.size === 0 && sb.size === 0) return 1; // 둘 다 빈 문자열 → 동일
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let intersection = 0;
+  for (const t of sa) {
+    if (sb.has(t)) intersection++;
+  }
+  const union = sa.size + sb.size - intersection;
+  return intersection / union;
+}
+
+/**
+ * 배치 내 붕괴 샘플 인덱스를 반환한다.
+ * 앞서 등장한 샘플과 유사도 > threshold 인 것을 '붕괴'로 표시.
+ * @param {string[]} bodies 본문 배열
+ * @param {number} threshold
+ * @returns {Set<number>} 붕괴 샘플의 인덱스 집합
+ */
+function detectCollapsedSamples(bodies, threshold) {
+  const collapsed = new Set();
+  for (let i = 1; i < bodies.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (trigramJaccard(bodies[i], bodies[j]) > threshold) {
+        collapsed.add(i);
+        break; // i는 붕괴 확정, 더 비교 불필요
+      }
+    }
+  }
+  return collapsed;
+}
+
+/**
+ * 최종 본문 배열의 배치 다양성 지표를 계산한다.
+ * - distinct2: 정규화된 전체 본문의 문자 bigram 중 고유 비율 (0~1, 높을수록 다양)
+ * - avgSimilarity: 모든 쌍의 trigramJaccard 평균 (0~1, 낮을수록 다양)
+ * - maxSimilarity: 모든 쌍의 trigramJaccard 최대 (0~1, 낮을수록 다양)
+ * count < 2면 null 반환.
+ * @param {string[]} bodies 최종 본문 배열
+ * @returns {{ distinct2: number, avgSimilarity: number, maxSimilarity: number, count: number } | null}
+ */
+function computeBatchDiversity(bodies) {
+  const n = bodies.length;
+  if (n < 2) return null;
+
+  // distinct-2: 전체 본문 합산의 문자 bigram 고유 비율
+  const allBigrams = [];
+  const distinctBigrams = new Set();
+  for (const body of bodies) {
+    const norm = normalizeForSimilarity(body);
+    for (let i = 0; i + 2 <= norm.length; i++) {
+      const bg = norm.slice(i, i + 2);
+      allBigrams.push(bg);
+      distinctBigrams.add(bg);
+    }
+  }
+  const distinct2 = allBigrams.length > 0 ? distinctBigrams.size / allBigrams.length : 0;
+
+  // avgSimilarity / maxSimilarity: 모든 쌍의 trigramJaccard
+  let sumSim = 0;
+  let maxSim = 0;
+  let pairCount = 0;
+  for (let i = 1; i < n; i++) {
+    for (let j = 0; j < i; j++) {
+      const sim = trigramJaccard(bodies[i], bodies[j]);
+      sumSim += sim;
+      if (sim > maxSim) maxSim = sim;
+      pairCount++;
+    }
+  }
+  const avgSimilarity = pairCount > 0 ? sumSim / pairCount : 0;
+
+  return {
+    distinct2:     Math.round(distinct2 * 1000) / 1000,
+    avgSimilarity: Math.round(avgSimilarity * 1000) / 1000,
+    maxSimilarity: Math.round(maxSim * 1000) / 1000,
+    count:         n,
+  };
+}
+
 /**
  * count 개의 스타일 조합을 실측 길이 분포 가중치로 분산 생성.
  * length 축:
@@ -3071,17 +3370,52 @@ function buildStyleAssignments(count, includeLong = false) {
 }
 
 /**
+ * 소스 후기 최근성 컷오프 절 반환.
+ * 해당 지점의 최근 SOURCE_RECENCY_DAYS일 이내 후기가 SOURCE_RECENCY_MIN 개 이상이면
+ * "AND review_date >= date('now','-N days')" 조건 문자열을 반환하고,
+ * 미만이면 빈 문자열(전체 사용, 폴백)을 반환한다.
+ *
+ * 반환값은 SQL 쿼리 문자열에 직접 삽입하는 safe constant이므로 인젝션 위험 없음.
+ *
+ * @param {object} env  Cloudflare Workers 환경 바인딩
+ * @param {string} placeRowId
+ * @returns {Promise<{clause: string, usedCutoff: boolean}>}
+ */
+async function recencyClause(env, placeRowId) {
+  try {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS cnt
+      FROM place_reviews
+      WHERE place_row_id = ?
+        AND review_date >= date('now', '-${SOURCE_RECENCY_DAYS} days')
+    `).bind(placeRowId).first();
+    const cnt = row?.cnt ?? 0;
+    if (cnt >= SOURCE_RECENCY_MIN) {
+      return {
+        clause: `AND review_date >= date('now', '-${SOURCE_RECENCY_DAYS} days')`,
+        usedCutoff: true,
+      };
+    }
+  } catch {
+    // DB 오류 시 안전하게 전체 사용
+  }
+  return { clause: '', usedCutoff: false };
+}
+
+/**
  * fact pool(허용 소재 키워드 목록) 추출.
- * computePlaceQuantitative 의 STOPWORDS + 토큰화 로직을 재사용해 상위 N개 반환.
+ * 빈도순 단어 + 담당자명 엔티티를 함께 반환해 구체성을 높인다.
  * @param {object} env
  * @param {string} placeRowId
  * @param {number} topN
- * @returns {Promise<string[]>} 단어 배열 (빈도 내림차순)
+ * @param {string} [dateClause='']  recencyClause() 결과 (선택)
+ * @returns {Promise<string[]>} 단어 배열 (엔티티 우선, 빈도 내림차순)
  */
-async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
+async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE, dateClause = '') {
   const { results: bodyRows } = await env.DB.prepare(`
     SELECT body FROM place_reviews
     WHERE place_row_id = ? AND body IS NOT NULL AND body != ''
+    ${dateClause}
     ORDER BY collected_at DESC
     LIMIT 1000
   `).bind(placeRowId).all();
@@ -3094,25 +3428,109 @@ async function extractFactPool(env, placeRowId, topN = SAMPLE_FACT_POOL_SIZE) {
     '하고','않고','않아요','없어요','없는','있는','이번','다음','가장','때문','때문에',
     '하나','하는','하는데','해서','해요','해도','했는데','했어','이렇게','저렇게','어떻게',
     '너무나','좀더','더욱','매번','항상','자주','가끔','이미','벌써','항상','절대','역시',
+    // 시술/제품/담당자가 아닌 흔한 일반어 — fact pool 오염 방지
+    '모두','오늘','처음','다른','부분','시간','생각','느낌','정도','이것저것','하나씩','중간중간',
+    '진행','과정','방식','방법','설명','안내','선택','결정','경험','결과','효과','반응',
+    '상태','분들','분위기','느낌이','생각이','것같','것같이','것이라','이라서','라서',
   ]);
+
+  // 일반 칭찬어·필러 — 어느 가게든 쓸 수 있는 흔한 어휘. fact pool에서 제거.
+  // 가게 고유 시술명·메뉴명·사람 이름처럼 구체적인 단어는 여기에 없으므로 통과된다.
+  const GENERIC_FILLER = new Set([
+    '친절','깔끔','청결','만족','추천','최고','정성','꼼꼼','편안','훌륭','완벽','탁월','감동',
+    '좋아요','좋았','좋습니다','좋네요','굿','좋아','좋은','좋고','좋게',
+    '상담','원장','원장님','직원','선생님','실장님','선생','담당','담당자',
+    '시설','분위기','가격','효과','깨끗','방문','예약','진료','병원','의원',
+    '여기','이곳','시술','관리','받았','받고','받아','받은','관리받','받았어요',
+    '서비스','이용','가봤','다녀','다녀왔','왔어요','갔어요','했어요','했습니다',
+    '강추','극추','마음에','마음에들','만족스','만족했','재방문','또왔','또방문',
+    '추천합니다','추천해요','강력추천','항상','계속','앞으로','다음에','또올게요',
+    '처음','오늘','저번','지난','이번에',
+  ]);
+
+  // 빈도 바닥: freq ≥ 2 인 엔티티만 최종 채택 (1회짜리 노이즈 제거)
+  const STAFF_NAME_MIN_FREQ = 2;
+
+  // 담당자명 엔티티 추출: "이름+(실장님|원장님|선생님|쌤|대표님|상담실장)" 패턴
+  // 예: "김실장님", "박원장님", "수연쌤", "지은 상담실장"
+  const STAFF_TITLE_RE = /([가-힣]{1,4})\s*(실장님|원장님|선생님|쌤|대표님|상담실장)/g;
+  // 형용사 관형형(친절한/꼼꼼한 등)이 이름으로 오탐되는 것 방지용 블록셋
+  const BAD_STAFF_NAMES = new Set([
+    '친절한','꼼꼼한','깔끔한','편안한','세심한','자세한','정확한','상냥한','능숙한','깨끗한','시원한','훌륭한',
+    '친절하신','꼼꼼하신','깔끔하신','세심하신','자세하신','친절했던','꼼꼼했던',
+  ]);
+  // 역할어·지시어 블록리스트 — namePart 자체가 역할어/지시어인 경우 제외
+  const STAFF_DESCRIPTOR = new Set([
+    '의사','여의사','남의사','간호사','관리사','피부','데스크','코디','코디네이터','인포',
+    '총괄','대표','부원장','원장','실장','선생','지점','병원','타병원','의원',
+    '상담','담당','직원','분들','여자','여성','남자','남성',
+    '우리','그분','메인','모든','모두','다른','전체','여기','이곳',
+    // 강조 부사·접속어 (이름 아님)
+    '특히','특히나','그리고','또한','바로','정말','진짜','항상','매번',
+  ]);
+  // 동사·접속어로 끝나는 namePart 오탐 차단 — 기존 항목 유지 + 다음 어미 추가
+  const BAD_STAFF_SUFFIX_RE = /(하시고|하셔서|하신|했던|하고|해서|한|하게|하며|하여|시고|셔서|히고|시는|주시는|으시는|시구|으시구|하시구|는데|어요|아요|에요|예요|으며|으신|으셔|셨|셔서|시던|주신|주셨|다는|라서|다고|길래|는지|군요|네요|더라|더라구|았|었|였|해서|했던)$/;
+  // 형용사 어근 포함 오탐 차단 — "친절", "꼼꼼" 등이 namePart에 포함된 경우
+  const BAD_STAFF_ADJECTIVE_RE = /친절|꼼꼼|깔끔|세심|자세|정확|상냥|편안|능숙|훌륭|깨끗/;
+  const staffEntityFreq = new Map();
 
   const wordFreq = new Map();
   for (const row of bodyRows) {
     if (!row.body) continue;
+
+    // 담당자명 엔티티 수집 (원형 보존)
+    let m;
+    STAFF_TITLE_RE.lastIndex = 0;
+    while ((m = STAFF_TITLE_RE.exec(row.body)) !== null) {
+      const namePart = m[1];
+      // 형용사 관형형·일반어가 이름으로 잡힌 오탐 제거
+      if (BAD_STAFF_NAMES.has(namePart) || GENERIC_FILLER.has(namePart) || STOPWORDS.has(namePart)) continue;
+      // 역할어·지시어 블록리스트 (의사/데스크/여자 등 자체가 역할어인 경우)
+      if (STAFF_DESCRIPTOR.has(namePart)) continue;
+      // 동사·접속어 어미로 끝나는 경우 ("절하시고", "주시는" 등) 제거
+      if (BAD_STAFF_SUFFIX_RE.test(namePart)) continue;
+      // 형용사 어근이 namePart 안에 포함된 경우 제거
+      if (BAD_STAFF_ADJECTIVE_RE.test(namePart)) continue;
+      // 길이 제한: 한국 이름은 2~3자 (1자·4자 제외)
+      if (namePart.length < 2 || namePart.length > 3) continue;
+      const entity = m[0].replace(/\s+/g, ''); // 공백 제거해서 정규화
+      staffEntityFreq.set(entity, (staffEntityFreq.get(entity) ?? 0) + 1);
+    }
+
+    // 빈도 단어 수집 (기존 로직)
     const tokens = row.body.split(/[\s.,!?;:·""''()\[\]{}<>/\\|@#$%^&*+=~`\-—–…]+/u);
     for (const token of tokens) {
       const word = token.trim();
       if (word.length < 2) continue;
       if (/^\d+$/.test(word)) continue;
       if (STOPWORDS.has(word)) continue;
+      if (GENERIC_FILLER.has(word)) continue;
       wordFreq.set(word, (wordFreq.get(word) ?? 0) + 1);
     }
   }
 
-  return Array.from(wordFreq.entries())
+  // 엔티티(담당자명)를 우선 배치, 나머지 슬롯을 빈도 단어로 채움
+  // freq ≥ STAFF_NAME_MIN_FREQ 인 엔티티만 채택 (1회짜리 노이즈 제거)
+  const staffEntities = Array.from(staffEntityFreq.entries())
+    .filter(([, freq]) => freq >= STAFF_NAME_MIN_FREQ)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, topN)
     .map(([word]) => word);
+
+  // freqWords도 freq ≥ 2 인 단어만 채택 (1회짜리 오타·노이즈 팩트 제거)
+  const freqWords = Array.from(wordFreq.entries())
+    .filter(([, freq]) => freq >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .map(([word]) => word)
+    .filter(w => !staffEntities.includes(w)); // 중복 제거
+
+  // 엔티티 최대 5개 우선 + 나머지 빈도 단어로 topN 채우기
+  const entitySlots = Math.min(staffEntities.length, 5);
+  const result = [
+    ...staffEntities.slice(0, entitySlots),
+    ...freqWords.slice(0, topN - entitySlots),
+  ];
+
+  return result.slice(0, topN);
 }
 
 /**
@@ -3134,7 +3552,7 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: userPrompt },
       ],
-      temperature: 0.9,
+      temperature: 0.8,
       max_completion_tokens: maxTokens,
     };
 
@@ -3183,7 +3601,7 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: userPrompt },
       ],
-      temperature: 0.9,
+      temperature: 0.8,
       max_completion_tokens: maxTokens,
     };
 
@@ -3225,6 +3643,9 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
   if (provider === 'anthropic') {
     if (!env.ANTHROPIC_API_KEY) throw Object.assign(new Error('Anthropic API 키가 설정되지 않았습니다'), { code: 'no_anthropic_key' });
 
+    // ★ Opus temperature rider: claude-opus-* 모델은 temperature 제외 (deprecated)
+    const isOpusSamples = model.startsWith('claude-opus-');
+
     const anthropicBody = {
       model,
       max_tokens: maxTokens,
@@ -3256,7 +3677,7 @@ async function callLLMForSamples(env, provider, model, { systemPrompt, userPromp
         },
       ],
       tool_choice: { type: 'tool', name: 'emit_samples' },
-      temperature: 0.9,
+      ...(isOpusSamples ? {} : { temperature: 0.8 }),
     };
 
     async function fetchOnceAnthropic() {
@@ -3327,6 +3748,25 @@ function effectiveSuspect(rawAiSuspect, bodyLen, flags) {
     }
   }
   return rawAiSuspect;
+}
+
+// ── AI형/광고형 꼬리표 헬퍼 (읽는 시점 계산, 저장값 변경 없음) ─────────────
+/** 광고 성격 플래그 — 하나라도 있으면 'ad' */
+const AD_KIND_FLAGS = new Set(['광고체', '과장']);
+/** AI 작성 성격 플래그 — 광고형 없고 이것들만 있으면 'ai' */
+const AI_KIND_FLAGS = new Set(['격식체', '템플릿성', '장점나열', '정갈끝이모지', '추상칭찬', '구체성결여']);
+
+/**
+ * 저장된 flags 배열에서 'ad'|'ai'|null 꼬리표를 결정.
+ * 광고형 우선: 광고형 플래그 있으면 'ad', 없고 AI형 플래그만 있으면 'ai', 둘 다 없으면 null.
+ * @param {string[]} flags
+ * @returns {'ad'|'ai'|null}
+ */
+function reviewKind(flags) {
+  if (!Array.isArray(flags)) return null;
+  if (flags.some(f => AD_KIND_FLAGS.has(f))) return 'ad';
+  if (flags.some(f => AI_KIND_FLAGS.has(f))) return 'ai';
+  return null;
 }
 
 /**
@@ -3589,6 +4029,9 @@ AI/광고 의심은 *길게 쓰면서도* 상투적·홍보성·과장된 경우
   if (provider === 'anthropic') {
     if (!env.ANTHROPIC_API_KEY) throw Object.assign(new Error('Anthropic API 키가 설정되지 않았습니다'), { code: 'no_anthropic_key' });
 
+    // ★ Opus temperature rider: claude-opus-* 모델은 temperature 제외 (deprecated)
+    const isOpusAuth = model.startsWith('claude-opus-');
+
     const anthropicBody = {
       model,
       max_tokens: maxTokens,
@@ -3621,7 +4064,7 @@ AI/광고 의심은 *길게 쓰면서도* 상투적·홍보성·과장된 경우
         },
       ],
       tool_choice: { type: 'tool', name: 'emit_analysis' },
-      temperature: 0.1,
+      ...(isOpusAuth ? {} : { temperature: 0.1 }),
     };
 
     async function fetchOnceAnthropic() {
@@ -3658,6 +4101,375 @@ AI/광고 의심은 *길게 쓰면서도* 상투적·홍보성·과장된 경우
   }
 
   throw new Error(`지원하지 않는 provider: ${provider}`);
+}
+
+// =============================================================================
+// Phase 4-2 Step A2 — LLM judge: codebook 기반 4분류 판별기
+// 주의: 다중평가(IAA) 전이라 결과는 *잠정(단일 평가자 대비)* — "검증됨" 주장 금지.
+// =============================================================================
+
+/**
+ * Codebook 기반 LLM 판별기 — 배치 호출.
+ * place_review_labels에 사람 라벨된 리뷰를 4분류(genuine/ad/ai/unsure)하고
+ * review_llm_classifications 테이블에 upsert 저장용 결과를 반환한다.
+ *
+ * ★ Opus temperature rider:
+ *   anthropic provider에서 model이 'claude-opus-'로 시작하면
+ *   temperature 파라미터를 제외한다 (Opus 4.8 deprecated).
+ *
+ * @param {object} env
+ * @param {string} provider  'openai' | 'anthropic' | 'xai'
+ * @param {string} model
+ * @param {{ review_id: string, body: string }[]} items
+ * @returns {Promise<{ results: { review_id: string, llm_label: string, reason: string }[], usage: { prompt_tokens: number, completion_tokens: number } }>}
+ */
+async function classifyReviewLLM(env, provider, model, items) {
+  // Codebook 핵심 규칙을 임베드한 시스템 프롬프트
+  const systemPrompt = `너는 한국어 네이버 플레이스 리뷰를 4분류하는 전문가다.
+아래 Codebook 규칙에 따라 각 리뷰를 정확히 분류하라.
+
+## 4분류 정의
+- genuine: 실제 방문·시술 경험을 본인이 직접 서술. 홍보 의도 없음.
+- ad: 사람이 썼지만 판촉 구조(추천 CTA·지역 타겟·실명 plug)가 핵심.
+- ai: 구체 경험 없이 기계적으로 조립된 일반 칭찬 패턴.
+- unsure: 신호 부족·상충으로 판단 불가.
+
+## 판정 체크리스트 (이 순서로 적용)
+1. 판촉 구조 있음? (지역CTA "경기광주 분 추천" / 담당자 실명 plug / 이벤트 유도)
+   → YES → ad
+
+2. 구체 경험 0 + 표현이 정갈·반복적? ("말랑말랑+촉촉+다음방문기대" 같은 骨格 반복)
+   → YES → ai
+
+3. 오타·구체 디테일·군말·불완전성 있음? (시술명·수치·부위·개인상황·양가감정)
+   → YES → genuine
+
+4. 그 외 (너무 짧아 단서 없음 / 신호 상충)?
+   → unsure (단, 하나라도 뚜렷한 신호 있으면 억지로 unsure 두지 말 것)
+
+## 주의
+- 길고 긍정적이라고 ad가 아님. genuine도 길게 쓴다.
+- ai vs genuine 핵심: 정갈함(no 오타·구체성) vs 불완전성(오타·디테일·군말).
+- unsure 남발 금지. 뚜렷한 신호 하나면 해당 라벨로.
+
+## 출력 규칙
+반드시 다음 JSON 구조만 응답 (다른 텍스트 없이 순수 JSON):
+{
+  "results": [
+    {
+      "review_id": "...",
+      "llm_label": "genuine",
+      "reason": "판단 근거 한 줄 (30자 이내)"
+    }
+  ]
+}
+- llm_label 값은 반드시 genuine | ad | ai | unsure 중 하나.
+- 입력된 모든 review_id에 대해 빠짐없이 결과를 반환할 것.`;
+
+  const reviewsText = items
+    .map((item, i) => `[${i + 1}] review_id=${item.review_id}\n${item.body}`)
+    .join('\n\n');
+  const userPrompt = `다음 ${items.length}개 리뷰를 Codebook 기준으로 4분류하라:\n\n${reviewsText}`;
+
+  const maxTokens = Math.max(800, items.length * 100);
+
+  if (provider === 'openai') {
+    if (!env.OPENAI_API_KEY) throw Object.assign(new Error('OpenAI API 키가 설정되지 않았습니다'), { code: 'no_openai_key' });
+
+    const reqBody = {
+      model,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      temperature: 0.1,
+      max_completion_tokens: maxTokens,
+    };
+
+    async function fetchOnceOpenAIClassify() {
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+        body: JSON.stringify(reqBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`OpenAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('OpenAI 응답에 content가 없습니다');
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.results)) throw new Error('OpenAI 응답 구조 오류: results 배열 없음');
+      return {
+        results: parsed.results,
+        usage: {
+          prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+          completion_tokens: data?.usage?.completion_tokens ?? 0,
+        },
+      };
+    }
+
+    try {
+      return await fetchOnceOpenAIClassify();
+    } catch (firstErr) {
+      if (firstErr instanceof SyntaxError) return await fetchOnceOpenAIClassify();
+      throw firstErr;
+    }
+  }
+
+  if (provider === 'xai') {
+    if (!env.XAI_API_KEY) throw Object.assign(new Error('xAI API 키가 설정되지 않았습니다'), { code: 'no_xai_key' });
+
+    const reqBody = {
+      model,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      temperature: 0.1,
+      max_completion_tokens: maxTokens,
+    };
+
+    async function fetchOnceXAIClassify() {
+      const resp = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.XAI_API_KEY}` },
+        body: JSON.stringify(reqBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`xAI API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('xAI 응답에 content가 없습니다');
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed?.results)) throw new Error('xAI 응답 구조 오류: results 배열 없음');
+      return {
+        results: parsed.results,
+        usage: {
+          prompt_tokens:     data?.usage?.prompt_tokens     ?? 0,
+          completion_tokens: data?.usage?.completion_tokens ?? 0,
+        },
+      };
+    }
+
+    try {
+      return await fetchOnceXAIClassify();
+    } catch (firstErr) {
+      if (firstErr instanceof SyntaxError) return await fetchOnceXAIClassify();
+      throw firstErr;
+    }
+  }
+
+  if (provider === 'anthropic') {
+    if (!env.ANTHROPIC_API_KEY) throw Object.assign(new Error('Anthropic API 키가 설정되지 않았습니다'), { code: 'no_anthropic_key' });
+
+    // ★ Opus temperature rider: claude-opus-* 모델은 temperature 제외 (deprecated)
+    const isOpus = model.startsWith('claude-opus-');
+
+    const anthropicBody = {
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      tools: [
+        {
+          name: 'emit_classifications',
+          description: '리뷰 4분류(genuine/ad/ai/unsure) 결과를 반환한다',
+          input_schema: {
+            type: 'object',
+            properties: {
+              results: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    review_id: { type: 'string' },
+                    llm_label: { type: 'string', enum: ['genuine', 'ad', 'ai', 'unsure'] },
+                    reason:    { type: 'string' },
+                  },
+                  required: ['review_id', 'llm_label', 'reason'],
+                },
+              },
+            },
+            required: ['results'],
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'emit_classifications' },
+      ...(isOpus ? {} : { temperature: 0.1 }),
+    };
+
+    async function fetchOnceAnthropicClassify() {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type':      'application/json',
+          'x-api-key':         env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(anthropicBody),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`Anthropic API 오류 ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const toolBlock = Array.isArray(data?.content)
+        ? data.content.find(b => b.type === 'tool_use' && b.name === 'emit_classifications')
+        : null;
+      if (!toolBlock?.input) throw new Error('Anthropic 응답에 emit_classifications tool_use 블록이 없습니다');
+      const parsed = toolBlock.input;
+      if (!Array.isArray(parsed?.results)) throw new Error('Anthropic 응답 구조 오류: results 배열 없음');
+      return {
+        results: parsed.results,
+        usage: {
+          prompt_tokens:     data?.usage?.input_tokens  ?? 0,
+          completion_tokens: data?.usage?.output_tokens ?? 0,
+        },
+      };
+    }
+
+    return await fetchOnceAnthropicClassify();
+  }
+
+  throw new Error(`지원하지 않는 provider: ${provider}`);
+}
+
+/**
+ * POST /api/labels/llm-classify  (admin 전용)
+ * place_review_labels에 라벨된 리뷰 전체를 classifyReviewLLM으로 분류 →
+ * review_llm_classifications에 upsert 저장.
+ * body: { provider?: string, model?: string }
+ * 결과: { ok: true, classified: number, usage: {...}, cost_usd: number|null }
+ *
+ * 주의: 결과는 *잠정(단일 평가자 대비)* — IAA 검증 전임.
+ */
+async function handleLLMClassify(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  // admin 전용
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // body 파싱
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
+  }
+
+  const VALID_PROVIDERS = ['openai', 'anthropic', 'xai'];
+  const provider = body?.provider ?? 'openai';
+  if (!VALID_PROVIDERS.includes(provider)) {
+    return jsonResponse(
+      { error: 'invalid_provider', message: `provider는 ${VALID_PROVIDERS.join(' | ')} 중 하나여야 합니다` },
+      400,
+      cors
+    );
+  }
+
+  // provider별 API 키 사전 확인
+  const keyCheck = {
+    openai:    { key: env.OPENAI_API_KEY,    code: 'no_openai_key',    msg: 'OpenAI API 키가 설정되지 않았습니다' },
+    anthropic: { key: env.ANTHROPIC_API_KEY, code: 'no_anthropic_key', msg: 'Anthropic API 키가 설정되지 않았습니다' },
+    xai:       { key: env.XAI_API_KEY,       code: 'no_xai_key',       msg: 'xAI API 키가 설정되지 않았습니다' },
+  };
+  const { key: providerKey, code: keyErrorCode, msg: keyErrorMsg } = keyCheck[provider];
+  if (!providerKey) {
+    return jsonResponse({ error: keyErrorCode, message: keyErrorMsg }, 503, cors);
+  }
+
+  const resolvedModel = (typeof body?.model === 'string' && body.model.trim())
+    ? body.model.trim()
+    : PROVIDER_DEFAULT_MODEL[provider];
+
+  // place_review_labels에 라벨된 리뷰 + 본문 로드
+  let labeledRows;
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT prl.review_id, pr.body
+      FROM place_review_labels prl
+      LEFT JOIN place_reviews pr ON pr.id = prl.review_id
+      WHERE prl.human_label IS NOT NULL
+    `).all();
+    labeledRows = results ?? [];
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (labeledRows.length === 0) {
+    return jsonResponse({ ok: true, classified: 0, usage: { prompt_tokens: 0, completion_tokens: 0 }, cost_usd: 0 }, 200, cors);
+  }
+
+  // 배치 처리 (25건씩)
+  const BATCH_SIZE = 25;
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  const classifyResultMap = new Map();
+
+  try {
+    for (let i = 0; i < labeledRows.length; i += BATCH_SIZE) {
+      const batch = labeledRows.slice(i, i + BATCH_SIZE).map(r => ({
+        review_id: r.review_id,
+        body:      r.body ?? '',
+      }));
+      const { results, usage } = await classifyReviewLLM(env, provider, resolvedModel, batch);
+      totalPromptTokens     += usage.prompt_tokens;
+      totalCompletionTokens += usage.completion_tokens;
+      for (const r of results) {
+        classifyResultMap.set(r.review_id, r);
+      }
+    }
+  } catch (err) {
+    return jsonResponse({ error: 'llm_error', message: err.message }, 502, cors);
+  }
+
+  // review_llm_classifications에 upsert
+  const VALID_LLM_LABELS = new Set(['genuine', 'ad', 'ai', 'unsure']);
+  const now = new Date().toISOString();
+  let classified = 0;
+
+  try {
+    for (const row of labeledRows) {
+      const res = classifyResultMap.get(row.review_id);
+      if (!res) continue;
+      const llmLabel = VALID_LLM_LABELS.has(res.llm_label) ? res.llm_label : 'unsure';
+      const reason = typeof res.reason === 'string' ? res.reason.slice(0, 200) : null;
+
+      await env.DB.prepare(`
+        INSERT INTO review_llm_classifications (review_id, model, llm_label, reason, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(review_id, model) DO UPDATE SET
+          llm_label  = excluded.llm_label,
+          reason     = excluded.reason,
+          created_at = excluded.created_at
+      `).bind(row.review_id, resolvedModel, llmLabel, reason, now).run();
+
+      classified++;
+    }
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  const costUsd = computeCostUsd(resolvedModel, totalPromptTokens, totalCompletionTokens);
+
+  return jsonResponse({
+    ok: true,
+    classified,
+    model: resolvedModel,
+    // 결과는 잠정(단일 평가자 대비) — IAA 검증 전
+    note: '잠정(단일 평가자 대비) — IAA 검증 전',
+    usage: { prompt_tokens: totalPromptTokens, completion_tokens: totalCompletionTokens },
+    cost_usd: costUsd,
+  }, 200, cors);
 }
 
 /**
@@ -4158,12 +4970,12 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
     const flag_breakdown = {};
 
     // 사람 검수 집계용
-    const human_counts = { human: 0, ad: 0, unsure: 0 };
-    // AI 일치율 집계 (unsure 제외한 human/ad 라벨만)
+    const human_counts = { human: 0, ad: 0, ai: 0, unsure: 0 };
+    // AI 일치율 집계 (unsure 제외한 human/ad/ai 라벨만)
     let agree_count = 0;
     let compared_count = 0;
     let false_positive = 0;  // AI=suspect, 사람=human
-    let false_negative = 0;  // AI=not-suspect, 사람=ad
+    let false_negative = 0;  // AI=not-suspect, 사람∈{ad,ai}
 
     // GPT 판정 행만 따로 수집 (sample_suspect 용)
     const gptJudgedItems = [];
@@ -4176,6 +4988,7 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       // 사람 라벨 집계 (분류 여부 무관)
       if (row.human_label === 'human') human_counts.human++;
       else if (row.human_label === 'ad') human_counts.ad++;
+      else if (row.human_label === 'ai') human_counts.ai++;
       else if (row.human_label === 'unsure') human_counts.unsure++;
 
       if (row.rule_low_quality === 1) {
@@ -4200,9 +5013,10 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       }
 
       // humanCorrection 적용: 사람 라벨로 suspect 덮어쓰기
+      // human∈{ad,ai} → suspect, human='human' → not-suspect, unsure/없음 → effectiveSuspect
       let isSuspect;
       if (humanCorrection) {
-        if (row.human_label === 'ad') {
+        if (row.human_label === 'ad' || row.human_label === 'ai') {
           isSuspect = true;
         } else if (row.human_label === 'human') {
           isSuspect = false;
@@ -4214,10 +5028,11 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
       }
 
       // AI 일치율 집계 (GPT 판정 행만 — 휴리스틱 추정 제외, 보정 모드 무관 순수 AI 기준)
+      // "의심 정답" = human∈{ad,ai}, "사람 정답" = human='human', unsure 제외
       const aiIsSuspect = eff >= suspectThreshold;
-      if (!isHeuristicOnly && (row.human_label === 'human' || row.human_label === 'ad')) {
+      const humanIsSuspect = row.human_label === 'ad' || row.human_label === 'ai';
+      if (!isHeuristicOnly && (row.human_label === 'human' || row.human_label === 'ad' || row.human_label === 'ai')) {
         compared_count++;
-        const humanIsSuspect = row.human_label === 'ad';
         if (aiIsSuspect === humanIsSuspect) {
           agree_count++;
         } else if (aiIsSuspect && !humanIsSuspect) {
@@ -4290,6 +5105,7 @@ async function handleGetAiDiagnosis(request, env, corsHeaders, placeRowId) {
         review_date:   r.review_date,
         human_label:   r.human_label,
         human_note:    r.human_note,
+        kind:          reviewKind(r.flags),
       }));
 
     // pending_all = GPT 미판정 전체 건수 (사람추정 + 미분석 + 휴리스틱 추정)
@@ -4497,8 +5313,8 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
   if (!Number.isFinite(size) || size < 1) size = 30;
   size = Math.min(100, size);
 
-  // 사람 라벨 필터 (human|ad|unsure)
-  const VALID_HUMAN_LABELS = ['human', 'ad', 'unsure'];
+  // 사람 라벨 필터 (human|ad|ai|unsure)
+  const VALID_HUMAN_LABELS = ['human', 'ad', 'ai', 'unsure'];
   const humanLabelFilter = urlObj.searchParams.get('humanLabel') ?? null;
   if (humanLabelFilter !== null && !VALID_HUMAN_LABELS.includes(humanLabelFilter)) {
     return jsonResponse(
@@ -4556,7 +5372,7 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         // humanCorrection 적용
         let isSuspect;
         if (humanCorrection) {
-          if (r.human_label === 'ad') isSuspect = true;
+          if (r.human_label === 'ad' || r.human_label === 'ai') isSuspect = true;
           else if (r.human_label === 'human') isSuspect = false;
           else isSuspect = eff >= suspectThreshold;
         } else {
@@ -4600,6 +5416,7 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         heuristic_score: r.heuristic_score ?? null,
         human_label:     r.human_label ?? null,
         human_note:      r.human_note ?? null,
+        kind:            reviewKind(r.flags_parsed),
       }));
 
       return jsonResponse({ total, page, size, items }, 200, cors);
@@ -4667,6 +5484,7 @@ async function handleGetAiReviews(request, env, corsHeaders, placeRowId) {
         heuristic_score: r.heuristic_score ?? null,
         human_label:     r.human_label ?? null,
         human_note:      r.human_note ?? null,
+        kind:            reviewKind(flags_parsed),
       };
     });
 
@@ -4719,7 +5537,7 @@ async function handleSetReviewLabel(request, env, corsHeaders, placeRowId, revie
     return jsonResponse({ error: 'invalid_json', message: 'Request body must be valid JSON' }, 400, cors);
   }
 
-  const VALID_LABELS = ['human', 'ad', 'unsure'];
+  const VALID_LABELS = ['human', 'ad', 'ai', 'unsure'];
   const label = body?.label ?? null;
   const note = typeof body?.note === 'string' ? body.note.trim().slice(0, 500) : null;
 
@@ -4773,15 +5591,188 @@ async function handleSetReviewLabel(request, env, corsHeaders, placeRowId, revie
   }
 }
 
+// =============================================================================
+// Phase 4 — 구조적 휴머나이저 (생성 후 미세 불완전성 주입)
+// =============================================================================
+
 /**
- * POST /api/places/:id/generate-samples  (researcher 이상)
+ * 휴머나이즈 강도별 파라미터 상수 테이블.
+ * - rate       : 리뷰당 적용 여부 확률 (0=꺼짐, 1=전체)
+ * - maxEdits   : 리뷰당 총 편집 상한 (가독성 캡)
+ * - spaceMergeMax : 띄어쓰기 붙이기를 최대 N군데 적용
+ * - commaProb  : 쉼표→공백/줄바꿈 치환 확률 (쉼표 하나당 독립 시행)
+ * - typoProb   : 구어 변형 오타 적용 확률
+ */
+const HUMANIZE_LEVEL_PARAMS = {
+  off:    { rate: 0,   maxEdits: 0, spaceMergeMax: 0, commaProb: 0,   typoProb: 0    },
+  light:  { rate: 0.5, maxEdits: 2, spaceMergeMax: 1, commaProb: 0.6, typoProb: 0.2  },
+  medium: { rate: 0.8, maxEdits: 3, spaceMergeMax: 2, commaProb: 0.7, typoProb: 0.3  },
+  strong: { rate: 1.0, maxEdits: 5, spaceMergeMax: 4, commaProb: 0.8, typoProb: 0.45 },
+};
+
+/**
+ * 'auto' 모드용 가중 랜덤 강도 선정.
+ * 분포: light 40% · medium 35% · off 15% · strong 10%
+ * strong 과다 방지를 위해 의도적으로 낮게 설정.
+ * @returns {'off'|'light'|'medium'|'strong'}
+ */
+function pickAutoHumanizeLevel() {
+  const r = Math.random();
+  if (r < 0.40) return 'light';
+  if (r < 0.75) return 'medium';
+  if (r < 0.90) return 'off';
+  return 'strong';
+}
+
+/**
+ * 알려진 캐주얼 구어 변형 맵 (첫 매치 1개만 치환).
+ * 문장 의미를 바꾸지 않는 표기 변형만 포함.
+ */
+const HUMANIZE_TYPO_MAP = [
+  ['좋아요', '조아요'],
+  ['너무', '넘'],
+  ['받았어요', '받았어용'],
+  ['감사합니다', '감사함다'],
+  ['같아요', '같아용'],
+  ['왔어요', '왔어용'],
+];
+
+/**
+ * LLM이 생성한 리뷰 본문에 사람 글 특유의 미세 불완전성을 확률적으로 주입한다.
+ * - 이모지/이모티콘 추가 금지. 종결어미 변경 금지. 가독성 유지 필수.
+ * @param {string} text 원본 생성 본문
+ * @param {'off'|'light'|'medium'|'strong'} level 강도 (기본 'medium')
+ * @returns {string} 후처리된 본문
+ */
+function humanizeBody(text, level = 'medium') {
+  const params = HUMANIZE_LEVEL_PARAMS[level] ?? HUMANIZE_LEVEL_PARAMS.medium;
+  if (params.maxEdits === 0) return text;
+
+  let result = text;
+  let editCount = 0;
+
+  // ── 1. 쉼표 줄이기 ──────────────────────────────────────────────────────
+  // 사람은 쉼표를 거의 쓰지 않음 → ", " 를 공백 또는 줄바꿈으로 확률 치환
+  if (editCount < params.maxEdits) {
+    result = result.replace(/, /g, (match) => {
+      if (editCount >= params.maxEdits) return match;
+      if (Math.random() < params.commaProb) {
+        editCount++;
+        // 줄바꿈이 이미 있는 텍스트엔 공백, 아니면 50% 확률로 줄바꿈
+        return Math.random() < 0.5 ? ' ' : '\n';
+      }
+      return match;
+    });
+  }
+
+  // ── 2. 띄어쓰기 붙이기 (여러 군데 가능) ────────────────────────────────
+  // spaceMergeMax 회까지 반복. 매번 다른 한글 어절 경계 무작위 선택, 중복 방지.
+  if (editCount < params.maxEdits && params.spaceMergeMax > 0) {
+    // 현재 result 기준 모든 어절 경계 수집
+    const collectSpacePositions = (str) => {
+      const positions = [];
+      const spacePattern = /([가-힣]+) ([가-힣])/g;
+      let m;
+      while ((m = spacePattern.exec(str)) !== null) {
+        positions.push(m.index + m[1].length);
+      }
+      return positions;
+    };
+
+    const usedOffsets = new Set(); // 이미 처리한 원본 위치 추적
+    let mergesDone = 0;
+
+    while (mergesDone < params.spaceMergeMax && editCount < params.maxEdits) {
+      // 매 반복마다 현재 result를 기준으로 위치 재수집
+      const positions = collectSpacePositions(result).filter(p => !usedOffsets.has(p));
+      if (positions.length === 0) break;
+
+      const pos = positions[Math.floor(Math.random() * positions.length)];
+      usedOffsets.add(pos); // 처리 전 원본 오프셋 기록
+      result = result.slice(0, pos) + result.slice(pos + 1);
+      editCount++;
+      mergesDone++;
+      // 공백 제거로 이후 위치가 1씩 당겨지므로 usedOffsets의 기존 값 보정 불필요
+      // (positions를 매 반복마다 새로 수집하므로 자연히 처리됨)
+    }
+  }
+
+  // ── 3. 가벼운 오타 (구어 변형) ──────────────────────────────────────────
+  // 안전 맵에서 첫 매치 1개만 치환
+  if (editCount < params.maxEdits && Math.random() < params.typoProb) {
+    for (const [from, to] of HUMANIZE_TYPO_MAP) {
+      if (result.includes(from)) {
+        result = result.replace(from, to); // 첫 번째 매치만 replace
+        editCount++;
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 지점 실제 후기에서 시술 분포를 추출한다.
+ *
+ * - place_reviews.body 최대 1000건 로드.
+ * - PROCEDURE_TERMS 각 시술어별 포함 리뷰 수 카운트(같은 리뷰 내 동일 시술어는 1회).
+ * - noneRate = 어떤 시술어도 없는 리뷰 비율.
+ * - count >= 2 인 시술만 반환(희귀 오탐 제거), 빈도 내림차순.
+ *
+ * @param {object} env   Cloudflare Workers 환경 바인딩
+ * @param {string|number} placeRowId  review_places.id
+ * @param {string} [dateClause='']  recencyClause() 결과 (선택)
+ * @returns {{ noneRate: number, procedures: Array<{name: string, count: number}> }}
+ */
+async function extractProcedureDistribution(env, placeRowId, dateClause = '') {
+  const { results } = await env.DB.prepare(
+    `SELECT body FROM place_reviews WHERE place_row_id = ? AND body IS NOT NULL ${dateClause} LIMIT 1000`
+  ).bind(placeRowId).all();
+
+  const rows = results ?? [];
+  const total = rows.length;
+  if (total === 0) return { noneRate: 1, procedures: [] };
+
+  // 시술어별 등장 리뷰 수 집계
+  const counts = new Map(); // term → count
+  let noneCount = 0;
+
+  for (const row of rows) {
+    const body = row.body;
+    let hasProcedure = false;
+    for (const term of PROCEDURE_TERMS) {
+      if (body.includes(term)) {
+        counts.set(term, (counts.get(term) ?? 0) + 1);
+        hasProcedure = true;
+        // 같은 시술어를 동일 리뷰에서 중복 카운트하지 않으므로 continue 불필요
+        // (이미 Map.set으로 1회 카운트됨)
+      }
+    }
+    if (!hasProcedure) noneCount++;
+  }
+
+  const noneRate = noneCount / total;
+
+  // count >= 2 인 시술만 포함, 빈도 내림차순
+  const procedures = [...counts.entries()]
+    .filter(([, c]) => c >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }));
+
+  return { noneRate, procedures };
+}
+
+/**
+ * POST /api/places/:id/generate-samples  (researcher/tester 이상)
  * fact pool 추출 → few-shot 표본 선정 → 스타일 조합 → GPT 생성 → DB 저장 → 반환.
+ * tester는 소유권 우회(전 지점 접근).
  */
 async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
 
-  // researcher 이상 (admin 포함)
-  const authResult = await requireResearcher(request, env);
+  // researcher/tester 이상 (admin 포함)
+  const authResult = await requireTester(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
@@ -4816,9 +5807,13 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: keyErrorCode, message: keyErrorMsg }, 503, cors);
   }
 
-  const model = (typeof body?.model === 'string' && body.model.trim())
-    ? body.model.trim()
-    : PROVIDER_DEFAULT_MODEL[provider];
+  // model 검증: MODEL_PRICING에 등록돼 있고 provider와 짝이 맞아야 함
+  const PROVIDER_MODEL_PREFIX = { openai: 'gpt-', anthropic: 'claude-', xai: 'grok-' };
+  const requestedModel = (typeof body?.model === 'string' && body.model.trim()) ? body.model.trim() : null;
+  const isValidModel = requestedModel
+    && MODEL_PRICING[requestedModel] !== undefined
+    && requestedModel.startsWith(PROVIDER_MODEL_PREFIX[provider]);
+  const model = isValidModel ? requestedModel : PROVIDER_DEFAULT_MODEL[provider];
 
   // count 파싱 (기본 10, clamp 1~30)
   let count = body?.count ?? 10;
@@ -4828,7 +5823,19 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   // includeLong 파싱 (기본 false — long 길이 제외)
   const includeLong = body?.includeLong === true;
 
-  // 플레이스 소유 확인 (admin은 전체 접근, researcher는 자기 지점만)
+  // length 파싱: 'auto' | 'short' | 'medium' | 'long' (기본 'auto')
+  const VALID_LENGTHS = ['auto', 'short', 'medium', 'long'];
+  const lengthParam = VALID_LENGTHS.includes(body?.length) ? body.length : 'auto';
+
+  // includeNames 파싱: boolean (기본 true)
+  const includeNames = body?.includeNames !== false;
+
+  // humanizeLevel 파싱: 'off' | 'light' | 'medium' | 'strong' | 'auto' (기본 'medium')
+  // 'auto'는 샘플마다 pickAutoHumanizeLevel()로 랜덤 강도를 선정한다.
+  const VALID_HUMANIZE_LEVELS = ['off', 'light', 'medium', 'strong', 'auto'];
+  const humanizeLevel = VALID_HUMANIZE_LEVELS.includes(body?.humanizeLevel) ? body.humanizeLevel : 'medium';
+
+  // 플레이스 소유 확인 (admin/tester는 전체 접근, researcher는 자기 지점만)
   let placeRow;
   try {
     placeRow = await env.DB.prepare(
@@ -4843,197 +5850,376 @@ async function handleGenerateSamples(request, env, corsHeaders, placeRowId) {
   }
 
   const isAdmin = authResult.user.role === 'admin';
-  if (!isAdmin && placeRow.user_id !== authResult.user.id) {
+  const isTester = authResult.user.role === 'tester';
+  if (!isAdmin && !isTester && placeRow.user_id !== authResult.user.id) {
     return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
   }
+
+  // ── 소스 후기 최근성 컷오프 결정 (세 소스 공통 적용) ──────────────────────────
+  // 최근 SOURCE_RECENCY_DAYS일 이내 후기가 SOURCE_RECENCY_MIN 개 이상이면 기간 제한,
+  // 미만이면 전체 사용(신규·한산 지점 폴백).
+  const { clause: srcDateClause, usedCutoff: srcCutoff } = await recencyClause(env, placeRowId);
+  console.log(`[generate-samples] place=${placeRowId} recency_cutoff=${srcCutoff} clause="${srcDateClause}"`);
 
   // fact pool 추출
   let factPool;
   try {
-    factPool = await extractFactPool(env, placeRowId, SAMPLE_FACT_POOL_SIZE);
+    factPool = await extractFactPool(env, placeRowId, SAMPLE_FACT_POOL_SIZE, srcDateClause);
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
-  // few-shot 표본 선정: 최신순 절반 + 랜덤 분산 절반 → 호평 편향 완화
-  // AI/광고 추정 리뷰 배제 (ai_suspect >= 60 또는 human_label = 'ad' 제외)
-  let fewShotReviews;
+  // ── 시술 분포 추출 (지점 실제 후기 기반) ──────────────────────────────────
+  // noneRate: 무시술 후기 비율 / procedures: count>=2 시술, 빈도순
+  let procDist = { noneRate: 1, procedures: [] };
   try {
-    const halfSize  = Math.ceil(SAMPLE_FEW_SHOT_SIZE / 2);
-    const otherHalf = SAMPLE_FEW_SHOT_SIZE - halfSize;
+    procDist = await extractProcedureDistribution(env, placeRowId, srcDateClause);
+  } catch {
+    // 분포 추출 실패 시 전부 null(무시술)로 폴백 — 생성은 계속
+  }
 
-    // 정제 쿼리 (AI/광고 추정 배제)
-    // length >= 12: 짧고 자연스러운 실제 리뷰(실측 29%)가 few-shot에 포함되도록 완화
-    // ("굿", "좋아요" 같은 2~11자 극초단문은 여전히 제외)
-    const { results: recentRows } = await env.DB.prepare(`
+  // ── 배치 시술 추첨 (count개 슬롯 각각) ──────────────────────────────────
+  // Math.random() < noneRate → null(무시술)
+  // 아니면 procedures를 count 가중으로 1개 샘플링
+  const { noneRate: _noneRate, procedures: _procedures } = procDist;
+  const _totalProcCount = _procedures.reduce((s, p) => s + p.count, 0);
+  function sampleProcedure() {
+    if (_procedures.length === 0 || Math.random() < _noneRate) return null;
+    let r = Math.random() * _totalProcCount;
+    for (const p of _procedures) {
+      r -= p.count;
+      if (r <= 0) return p.name;
+    }
+    return _procedures[_procedures.length - 1].name;
+  }
+  const itemProcedures = Array.from({ length: count }, () => sampleProcedure());
+
+  // ── 스타일 본보기 풀: 각 생성 샘플의 말투·길이·호흡 레퍼런스 ──
+  // 우선순위: (a) human_label='human' → (b) 광고/AI 아닌 것(라벨없음 포함), length>=20
+  //           → (c) length>=20 아무거나
+  let styleExamples;
+  try {
+    // 부정 후기 키워드 — 이 단어가 body에 포함된 리뷰는 본보기 후보에서 제외
+    // (부정적 말투가 생성물에 전염되는 것 방지)
+    const NEGATIVE_RE = /별로|최악|불친절|환불|실망|아깝|비추|짜증|그닥|돈만|불만|최악|별로예요|후회|최악이|별로임|실망임|돈낭비|다시는/;
+
+    // (a) 사람 라벨 확정 리뷰 (긍정만)
+    const { results: humanRows } = await env.DB.prepare(`
       SELECT r.body
       FROM place_reviews r
-      LEFT JOIN place_review_analysis a ON a.review_id = r.id
-      LEFT JOIN place_review_labels   l ON l.review_id = r.id
+      LEFT JOIN place_review_labels l ON l.review_id = r.id
       WHERE r.place_row_id = ?
         AND r.body IS NOT NULL
-        AND length(r.body) >= 12
-        AND COALESCE(l.human_label, '') != 'ad'
-        AND (a.ai_suspect IS NULL OR a.ai_suspect < 60)
-      ORDER BY r.review_date DESC
-      LIMIT ?
-    `).bind(placeRowId, halfSize).all();
-
-    // 나머지 절반: 전체 pool에서 랜덤 선택 (시점·길이 분산)
-    // RANDOM()은 SQLite에서 지원되며 Cloudflare D1에서도 동작
-    const { results: randomRows } = await env.DB.prepare(`
-      SELECT r.body
-      FROM place_reviews r
-      LEFT JOIN place_review_analysis a ON a.review_id = r.id
-      LEFT JOIN place_review_labels   l ON l.review_id = r.id
-      WHERE r.place_row_id = ?
-        AND r.body IS NOT NULL
-        AND length(r.body) >= 12
-        AND COALESCE(l.human_label, '') != 'ad'
-        AND (a.ai_suspect IS NULL OR a.ai_suspect < 60)
+        AND length(r.body) >= 20
+        AND l.human_label = 'human'
+        ${srcDateClause}
       ORDER BY RANDOM()
       LIMIT ?
-    `).bind(placeRowId, otherHalf).all();
+    `).bind(placeRowId, count * 5).all();
 
-    // 중복 제거 (랜덤 절반에서 최신절반이 이미 포함된 경우)
-    const seenBodies = new Set((recentRows ?? []).map(r => r.body));
-    const uniqueRandom = (randomRows ?? []).filter(r => !seenBodies.has(r.body));
+    styleExamples = (humanRows ?? []).filter(r => !NEGATIVE_RE.test(r.body));
 
-    fewShotReviews = [...(recentRows ?? []), ...uniqueRandom];
-
-    // fallback: 정제 쿼리 결과가 0건이면 기존 방식(length >= 12만)으로 재조회
-    // 미분석 지점(분석 결과 없음)에서 예시 생성이 깨지지 않도록 안전장치
-    if (fewShotReviews.length === 0) {
-      const { results: fallbackRecent } = await env.DB.prepare(`
-        SELECT body
-        FROM place_reviews
-        WHERE place_row_id = ?
-          AND body IS NOT NULL
-          AND length(body) >= 12
-        ORDER BY review_date DESC
-        LIMIT ?
-      `).bind(placeRowId, halfSize).all();
-
-      const { results: fallbackRandom } = await env.DB.prepare(`
-        SELECT body
-        FROM place_reviews
-        WHERE place_row_id = ?
-          AND body IS NOT NULL
-          AND length(body) >= 12
+    // (b) 광고·AI 아닌 것 (라벨 없음 포함), length>=20 으로 보충 (긍정만)
+    if (styleExamples.length < count) {
+      const needed = count * 5 - styleExamples.length;
+      const seenA = new Set(styleExamples.map(r => r.body));
+      const { results: cleanRows } = await env.DB.prepare(`
+        SELECT r.body
+        FROM place_reviews r
+        LEFT JOIN place_review_labels l ON l.review_id = r.id
+        WHERE r.place_row_id = ?
+          AND r.body IS NOT NULL
+          AND length(r.body) >= 20
+          AND COALESCE(l.human_label, '') NOT IN ('ad', 'ai')
+          ${srcDateClause}
         ORDER BY RANDOM()
         LIMIT ?
-      `).bind(placeRowId, otherHalf).all();
+      `).bind(placeRowId, needed).all();
+      styleExamples = [
+        ...styleExamples,
+        ...(cleanRows ?? []).filter(r => !seenA.has(r.body) && !NEGATIVE_RE.test(r.body)),
+      ];
+    }
 
-      const fallbackSeen = new Set((fallbackRecent ?? []).map(r => r.body));
-      const fallbackUniqueRandom = (fallbackRandom ?? []).filter(r => !fallbackSeen.has(r.body));
-      fewShotReviews = [...(fallbackRecent ?? []), ...fallbackUniqueRandom];
+    // (c) fallback: length>=20 아무거나 (긍정만)
+    if (styleExamples.length < count) {
+      const needed = count * 2 - styleExamples.length;
+      const seenB = new Set(styleExamples.map(r => r.body));
+      const { results: anyRows } = await env.DB.prepare(`
+        SELECT body
+        FROM place_reviews
+        WHERE place_row_id = ?
+          AND body IS NOT NULL
+          AND length(body) >= 20
+          ${srcDateClause}
+        ORDER BY RANDOM()
+        LIMIT ?
+      `).bind(placeRowId, needed).all();
+      styleExamples = [
+        ...styleExamples,
+        ...(anyRows ?? []).filter(r => !seenB.has(r.body) && !NEGATIVE_RE.test(r.body)),
+      ];
     }
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
-  if (fewShotReviews.length === 0) {
+  if (styleExamples.length === 0) {
     return jsonResponse(
-      { error: 'no_sample', message: '분석할 12자 이상 리뷰가 없습니다' },
+      { error: 'no_sample', message: '스타일 본보기로 쓸 20자 이상 리뷰가 없습니다' },
       400,
       cors
     );
   }
 
-  // 스타일 조합 생성
+  // ── (a-1) length 파라미터에 따른 본보기 필터 + 풀 자동 확장 ────────────────
+  // 'auto': 자연 분포 / 그 외: 해당 구간 본보기 우선 필터링.
+  // 필터 후 풀이 MIN_EXEMPLAR_POOL 미만이면 인접 길이 → 전체로 단계적 확장.
+  // 목표: 한 본보기가 배치를 지배하는 씨앗 독점 차단.
+  const LENGTH_CHAR_RANGES = { short: [0, 29], medium: [30, 80], long: [81, Infinity] };
+  let filteredExamples = styleExamples;
+  if (lengthParam !== 'auto') {
+    const [lo, hi] = LENGTH_CHAR_RANGES[lengthParam];
+    const rangeFiltered = styleExamples.filter(r => r.body.length >= lo && r.body.length <= hi);
+    if (rangeFiltered.length >= MIN_EXEMPLAR_POOL) {
+      filteredExamples = rangeFiltered;
+    } else if (rangeFiltered.length > 0) {
+      // 인접 길이까지 확장: 대상 길이 ±1단계 포함
+      const LENGTH_ORDER = ['short', 'medium', 'long'];
+      const targetIdx = LENGTH_ORDER.indexOf(lengthParam);
+      const adjacentKeys = LENGTH_ORDER.filter((_, i) => Math.abs(i - targetIdx) <= 1);
+      const adjFiltered = styleExamples.filter(r => {
+        return adjacentKeys.some(k => {
+          const [al, ah] = LENGTH_CHAR_RANGES[k];
+          return r.body.length >= al && r.body.length <= ah;
+        });
+      });
+      filteredExamples = adjFiltered.length >= MIN_EXEMPLAR_POOL ? adjFiltered : styleExamples;
+    } else {
+      // 해당 길이 본보기 전혀 없으면 전체 풀 사용
+      filteredExamples = styleExamples;
+    }
+  }
+
+  // ── (a-2) 배치 내 distinct 본보기 배정 ──────────────────────────────────────
+  // 풀≥count: modulo 재사용 없이 distinct 배정 (피셔-예이츠 셔플 후 순서대로).
+  // 풀<count: 어쩔 수 없이 모듈로 재사용. facts로 차별화.
+  const shuffledExamples = [...filteredExamples].sort(() => Math.random() - 0.5);
+  // 각 샘플 i에 배정할 본보기: 풀이 충분하면 distinct, 아니면 modulo.
+  function getExemplarForIdx(i) {
+    if (shuffledExamples.length >= count) {
+      return shuffledExamples[i]; // distinct
+    }
+    return shuffledExamples[i % shuffledExamples.length]; // modulo 재사용
+  }
+
+  // 스타일 조합은 길이 배정 목적으로만 생성 (tone/focus는 n/a 처리)
+  // lengthParam이 'auto'가 아니면 해당 길이로 모든 styleAssignment.length를 고정
   const styleAssignments = buildStyleAssignments(count, includeLong);
+  if (lengthParam !== 'auto') {
+    styleAssignments.forEach(a => { a.length = lengthParam; });
+  }
 
-  // 공용 프롬프트 구성
-  const styleLine = (s, i) =>
-    `${i + 1}번: length=${s.length} / tone=${s.tone} / focus=${s.focus}`;
+  // length 힌트 문자열 (프롬프트 각 항목에 삽입 — 출력 길이 목표 유지용)
+  const LENGTH_HINTS = { short: '짧게 한 줄(~30자)', medium: '중간 길이(30~80자)', long: '장문(80~150자)' };
 
-  const systemPrompt = `너는 실제 방문자가 직접 쓴 것 같은 한국어 리뷰를 생성한다. 광고스럽거나 AI가 쓴 티가 나면 실패다. 연구용 합성 데이터이며 관리자 전용이다.
+  // ── 변형 기반 프롬프트 구성 (가드레일 2개 포함) ──
+  const systemPrompt = `너는 한국어 리뷰 작성 보조 도구다. 아래 규칙을 엄격히 따른다.
+
+[역할]
+각 요청마다 "말투 본보기 리뷰" 1개가 주어진다. 그 리뷰의 말투·문장 길이·호흡·구조를 흉내내되, 내용은 완전히 새로 지어라. 내용의 중심은 "내가 겪은 것" — 받은 결과·변화, 몸으로 느낀 감각, 예약·대기·주차 같은 생활 디테일이다. 시술명·메뉴·담당자명은 [허용 사실] 목록 안에서만 가져온다.
+긍정적이고 만족한 후기만 생성. 불만·부정·가격 불만 내용 절대 금지.
+
+[가드레일 i — 천편일률·장황함 방지 (단어 금지가 아니라 반복·길이 관리)]
+- "친절", "만족", "꼼꼼", "깔끔" 같은 칭찬어는 실제 후기에도 매우 흔하니 자연스럽게 써도 된다. 시술명·메뉴도 자유롭게 불러라([허용 사실] 범위). "또 올게요"·"다음에 또" 같은 자연스러운 마무리도 괜찮다. 단어 자체를 피하려 애쓰지 마라.
+- 핵심 제약 둘: (1) 한 후기를 칭찬어만으로 길게 늘리지 마라. 짧으면 단순 칭찬 한두 마디로 끝내도 좋다(실제 후기 다수가 그렇다). 길게 쓸 거면 반드시 겪은 구체 하나를 담아라 — 결과·변화(며칠 뒤 어땠는지), 몸의 느낌, 예약·대기·주차 같은 디테일. (2) 여러 샘플이 같은 칭찬 표현·감탄 패턴을 복붙하듯 똑같이 반복하지 마라(배치 다양성).
+- 알맹이 없는 추상 연결어로 길이만 채우지 마라: "흐름이 이어져서", "동선이 짧아서", "막힘 없이", "부담 없이", "설명이 끊기지 않게" 류.
+- 진료 과정 중계 금지(중요): 실제 손님은 "피부 상태를 부위별로 짚어주셨다", "시술 전에 하나하나 설명해주셨다", "상태를 보면서 얘기해주셨다" 같은 *의사가 해준 진료 과정*을 거의 쓰지 않는다(실제 후기 실측). 시술자가 무엇을 해줬는지 중계하지 말고, 내가 무엇을 겪고 어떻게 느꼈는지를 써라.
+
+[가드레일 ii — 말투 본보기 충실 재현]
+- 각 샘플에 지정된 "말투 본보기" 리뷰의 말투·길이·호흡·구조를 그대로 따라라. 본보기가 짧으면 짧게. 본보기가 캐주얼하면 캐주얼하게.
+- 오타·미완결·구어적 특성도 그대로 살려라. 원본보다 더 매끄럽게 다듬지 마라.
+- 종결어미는 '~어요'만 반복하지 말고 음슴체('~함', '~음')·구어체를 섞어라. 쉼표 대신 줄바꿈이나 물결(~)을 활용하라.
 
 [절대 금지]
-- 본문에 업체 이름·지점명을 절대 쓰지 마라. 실제 방문자는 자기 리뷰에 가게 풀네임을 안 쓴다. 지칭이 필요하면 "여기", "이곳", "이 병원", "이 집" 정도만 사용.
-- "친절했습니다", "꼼꼼하게", "안심이 됐습니다", "만족스러웠습니다" 같은 추상 칭찬만 나열 금지. 반드시 아래 fact pool의 구체 항목 1~2개를 자연스럽게 녹여라.
-- 광고체·홍보체 문장("강력 추천!", "최고의 선택!") 금지.
-- 별점·평점 언급 금지(네이버 별점 폐지됨).
-- 모든 예시가 동일한 구조나 문장 패턴으로 시작/끝나지 않게 다양하게.
-- 장점을 줄줄이 나열하지 마라. 한두 가지 경험·한 장면에만 집중해서 풀어써라. 실제 사람은 인상 깊었던 한두 가지만 말하지, 모든 걸 평가하지 않는다.
-  나쁜 예(AI 티): "깨끗하고 친절하고 상담도 잘해주고 시설도 좋았어요" (장점 나열)
-  좋은 예(사람): "상담받을 때 부담 안 주셔서 좋았어요" (한 가지 집중)
-- "전체적으로 만족", "추천합니다", "또 가고 싶어요" 같은 정리·총평 문장으로 끝맺지 마라. 실제 리뷰는 결론 없이 끝나기도 한다.
-- "정말", "너무", "완벽", "최고" 같은 과장 형용사와 "~해서 좋았어요"의 반복 패턴을 피하라.
+- 업체명·지점명을 쓰지 마라.
+- [허용 사실] 목록에 없는 시술명·메뉴명·담당자 이름을 지어내지 마라.
+- 구체적 가격·금액(예: "5만원", "82500원"), 정확한 용량·횟수·샷수(예: "600샷", "2cc", "3회차")를 지어내지 마라. 이런 검증 가능한 수치는 실제와 다르면 *없는 사실*이 된다. — 단, 주관적 경험("며칠 지나니까", "금방 끝남", "몇 번 받았는데")처럼 *대략적·체감* 표현은 괜찮다. 정확한 숫자는 [허용 사실]에 있을 때만.
+- 말투 본보기와 내용이 거의 같은 문장을 그대로 내지 마라. 내용은 반드시 바꿔야 한다.
+- 각 후기는 서로 다른 소재·경험을 담아라. 막을 것은 *같은 칭찬 표현·감탄 패턴*이 여러 편에 똑같이 반복되는 것이지, 시술명 같은 사실어(예: "보톡스")가 여러 편에 등장하는 것은 자연스러우니 허용한다.
 
-[격식체 절대 금지 — 가장 흔한 AI 실수]
-"~습니다 / ~였습니다 / ~됩니다" 같은 격식체 종결을 절대 쓰지 마라. 실제 모바일 리뷰는 거의 다 해요체·구어체다.
-  나쁜 예(AI 티): "상담을 꼼꼼하게 해주셔서 신뢰가 갔습니다."
-  좋은 예(사람): "상담 꼼꼼하게 해주셔서 믿음 갔어요"
-
-[감정 다양성 — 호평 일색 금지]
-생성하는 묶음 전체를 호평으로만 채우지 마라. 일부는 중립적이거나 사소한 아쉬움(예: "대기가 조금 있었다", "주차가 애매하다" 등)을 자연스럽게 담아라. 단, fact pool이나 실제 리뷰 표본에 근거가 있을 때만 아쉬움을 넣을 것 — 근거 없는 가짜 불만은 금지. 전부 칭찬 일색이면 광고처럼 보여 실패다.
-
-[구체성 필수]
-fact pool(허용 소재)에 있는 구체 항목(시술명, 메뉴명, 직원 호칭, 특징어 등)을 1~2개 자연스럽게 녹여라. fact pool에 없는 메뉴·상품·시술명을 지어내지 말 것.
-
-[실제 말투 모사 — 핵심]
-아래 제공되는 실제 리뷰 예시들의 어투·문장 호흡·구어체를 모사하라. 실제 사람은:
-- 한두 가지에 집중하고 나머지는 생략한다
-- 해요체·구어체를 쓴다 ("~했어요", "~좋아요", "~더라구요", "~인 것 같아요", "~거 같음", "~해주세요")
-- 가끔 짧게 끊거나 말이 완결되지 않기도 한다
-- 문장이 너무 매끄럽지 않고 날것이다
-
-[너무 완벽하게 쓰지 마라 — 정갈함의 역설]
-아래 참고로 주는 실제 리뷰들을 봐라. 띄어쓰기도 가끔 틀리고, 문장이 매끄럽지 않고, 끝이 안 정리된 채 끊기기도 한다. 너도 그렇게 써라:
-- 모든 문장을 완결하지 마라. 주어를 생략하거나 중간에 툭 끊겨도 된다.
-- 띄어쓰기·맞춤법이 완벽할 필요 없다. 모바일로 가볍게 흘려 쓴 느낌.
-- 접속사로 매끄럽게 잇지 말고, 그냥 나열하듯 이어 써도 된다.
-너무 정갈하고 매끄러우면 그게 바로 AI 티다.
-
-[이모지·기호 — 거의 쓰지 마라]
-대부분의 리뷰엔 이모지·기호를 넣지 마라. 정말 감정이 격할 때(아주 만족했거나 아쉬웠을 때)만 드물게 ㅋㅋ, ㅎㅎ, ! 정도가 나올 수 있다. 담백한 만족 문장 끝에 ㅋㅋ나 !를 장식처럼 붙이지 마라 — 그게 가장 AI 같다. 예를 들어 "피부톤이 밝아졌어요 ㅋㅋ"나 "밝아졌어요!"처럼 차분한 만족에 기호를 붙이면 어색하다.
-
-[길이 엄수]
-- short: 1문장, ~30자. 딱 한 마디. 더 길게 쓰지 마라.
-- medium: 1~2문장, 30~70자 정도. 핵심 + 짧은 부연 (끝을 정리 안 해도 됨).
-
-[불완전성 허용]
-끝을 정리하지 않고 끝나도 된다. 모든 문장이 완결될 필요 없다. 실제 리뷰는 결론 없이 뚝 끊기기도 한다.
-
-[focus 정의 — 지정된 focus 측면을 중심으로 작성]
-- outcome: 핵심 경험·결과. 식당=음식 맛, 병원=시술 결과·효과, 카페=음료·디저트
-- service: 직원 응대·상담·친절
-- space: 시설·청결·분위기·인테리어
-- price: 가격·가성비·이벤트·혜택
-- revisit: 재방문 의사·주변 추천
-
-[업종 맥락 유지]
-업종(business_type) 맥락을 지킬 것. 병원 리뷰에 음식 맛 언급, 식당 리뷰에 시술 언급 같은 소재 혼입 금지.
+[허용]
+- [허용 사실] 목록 안의 항목(시술명·메뉴명·담당자명·특징어)은 자유롭게 사용.
+- 목록이 비어 있으면 사실을 새로 지어내지 말고, 본보기 말투·구조만 살려 내용을 추상적으로 변형.
+- 상황·기분·군말 같은 '사람 냄새' 표현은 자유롭게 추가.
 
 [출력 형식]
-반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }
-표본 리뷰와 완전히 동일한 문장 복사 금지. 소재·톤·맥락은 참고 가능.`;
+반드시 JSON 객체만: { "samples": [ { "index": 번호, "body": "리뷰 본문" } ] }`;
 
-  const factPoolText = factPool.length > 0
-    ? `[허용 소재(fact pool) — 본문에 자연스럽게 녹일 수 있는 실제 소재 목록]\n${factPool.join(', ')}`
-    : '[허용 소재(fact pool)]\n(리뷰 본문 없음 — 업종 일반 상식 범위 내에서만 작성)';
+  // ── (a-3) 담당자명 희소 배정 + 주 fact 중복 방지 ──────────────────────────
+  // factPool을 담당자명(staffNames)과 그 외 사실(otherFacts)로 분리.
+  // 담당자명은 전체 샘플의 STAFF_NAME_RATE(≈30%)에만, 이름마다 최대 1회 배정.
+  // otherFacts는 샘플 간 주 fact(첫 번째로 배정되는 fact)를 공유하지 않도록 강제.
+  // ★ 시술어는 이제 추첨(itemProcedures)이 담당하므로 otherFacts에서 제거.
+  //   → otherFacts = 시설·특징·분위기 등 비-시술 사실만.
+  const STAFF_NAME_RE = /(실장님|원장님|선생님|쌤|대표님|상담실장)$/;
+  const staffNames = factPool.filter(f => STAFF_NAME_RE.test(f));
+  // 비-시술 판단: 어떤 PROCEDURE_TERMS 항목도 포함하지 않으면 비-시술
+  const isProcedureFact = (f) => { for (const t of PROCEDURE_TERMS) { if (f.includes(t)) return true; } return false; };
+  const otherFacts = factPool.filter(f => !STAFF_NAME_RE.test(f) && !isProcedureFact(f));
 
-  const fewShotText = fewShotReviews.length > 0
-    ? `[실제 리뷰 예시 — 어투·문장 호흡·구어체 참고용. 문장 그대로 복사 금지]\n${fewShotReviews.map((r, i) => `(${i + 1}) ${r.body}`).join('\n')}`
-    : '[실제 리뷰 예시: 없음]';
+  // ★이름 제외(includeNames=false)면 전역 [허용 사실] 목록에서도 담당자명을 빼고
+  // 명시적으로 실명 금지를 지시한다. (per-item 미배정만으론 LLM이 허용목록·본보기의 이름을 갖다 씀 → 버그 수정)
+  const visibleFacts = includeNames ? factPool : otherFacts;
+  const nameOffNote = includeNames
+    ? ''
+    : '\n[담당자 이름 제외: "○○원장님"·"○○실장님" 같은 특정 실명을 쓰지 말 것. 이름 없는 generic 호칭(원장님/실장님/선생님)만 사용. 본보기에 실명이 있어도 따라 쓰지 말 것.]';
+  const factPoolText = visibleFacts.length > 0
+    ? `[허용 사실 — 시술명·메뉴·특징어${includeNames ? '·담당자명' : ''}. 이 목록 안에서만 구체적 사실을 사용할 것]\n${visibleFacts.join(', ')}${nameOffNote}`
+    : `[허용 사실: 없음 — 구체적 사실을 새로 지어내지 말 것]${nameOffNote}`;
 
-  const stylesText = styleAssignments.map(styleLine).join('\n');
+  // 이름을 받을 샘플 수: includeNames=false이면 0, 아니면 있는 이름 개수와 rate 기준 수 중 작은 값
+  const nameQuota = includeNames
+    ? Math.min(staffNames.length, Math.ceil(count * STAFF_NAME_RATE))
+    : 0;
 
-  const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 직접 쓰지 말 것]
+  // count개 인덱스 중 nameQuota개를 무작위로 골라 named 샘플 집합 구성
+  const allIndices = Array.from({ length: count }, (_, i) => i);
+  const shuffledIndices = [...allIndices].sort(() => Math.random() - 0.5);
+  const nameSampleIdx = new Set(shuffledIndices.slice(0, nameQuota));
+
+  // named 샘플에 배정할 이름 순서 (셔플, 중복 없이 순서대로 1개씩)
+  const shuffledStaffNames = [...staffNames].sort(() => Math.random() - 0.5);
+
+  // otherFacts 배정용: 샘플 간 겹침 최소화
+  const shuffledOtherFacts = [...otherFacts].sort(() => Math.random() - 0.5);
+  const assignedFactSet = new Set(); // 배치 내 이미 배정된 fact 추적
+  const assignedPrimaryFacts = new Set(); // 주 fact(첫 번째 배정 fact) 중복 방지
+
+  let namedCount = 0; // 이름 배정 카운터
+
+  /**
+   * 환각 방지: 본보기 구체 수치 마스킹.
+   * 말투·구조는 유지하되, 가격·용량·횟수 등 검증 가능한 구체 수치를 제거해
+   * 모델이 본보기 수치를 그대로 베껴 환각 리뷰를 생성하는 것을 막는다.
+   *
+   * 제거 대상:
+   *   1. 가격: "8만원", "82,500원", "3천원" 등 (숫자 + 원/만원/천원)
+   *   2. 용량·횟수·단위: "2cc", "600샷", "3회차", "50mg", "3개월" 등
+   *   3. 독립된 큰 숫자(3자리 이상): 앞 두 패턴에서 걸러지지 않은 가격류 수치
+   *
+   * @param {string} text 원본 본보기 본문
+   * @returns {string} 수치가 제거된 본보기 본문
+   */
+  function maskExemplarSpecifics(text) {
+    let t = text;
+    // 1. 범위 가격: "2~3만원", "1~3만원" 같은 X~Y단위 패턴 (1보다 먼저 처리)
+    t = t.replace(/\d+\s*~\s*\d+\s*(원|만원|천원)/g, '');
+    // 2. 가격 (숫자 + 원/만원/천원)
+    t = t.replace(/\d[\d,]*\s*(원|만원|천원)/g, '');
+    // 3. 용량·횟수·단위 (숫자 + cc|ml|샷|바이알|mg|회차|회|%|개월|주|번)
+    t = t.replace(/\d+\s*(cc|ml|샷|바이알|mg|회차|회|%|개월|주|번)/g, '');
+    // 4. 독립된 3자리 이상 숫자 (앞 규칙에서 남은 가격류)
+    t = t.replace(/\b\d{3,}\b/g, '');
+    // 5. 이름 제외(includeNames=false)면 본보기의 담당자 실명도 제거(직함만 남김).
+    //    본보기 실제 후기에 든 실명(예: "박채이 실장님")을 LLM이 베껴오는 잔여 누수 차단.
+    if (!includeNames) {
+      const NAME_DESC = /^(의사|여의사|간호사|관리사|데스크|코디|인포|총괄|대표|부원장|지점|병원|상담|담당|직원|분들|여자|여성|남자|우리|그분|메인|모든|모두|다른|여기|이곳|그리고|그래서|그런데|근데|진짜|정말|항상|특히)$/;
+      const NAME_VSUF = /(시는|주시는|시구|는데|어요|아요|으며|으신|셨|다는|라서|해서|했던|하시고|하셔서|하고|하신|시고|셔서|아서|어서|았고|었고)$/;
+      t = t.replace(/([가-힣]{2,3})\s*(원장님|실장님|선생님|쌤|대표님|상담실장)/g, (full, name, title) =>
+        (NAME_DESC.test(name) || NAME_VSUF.test(name)) ? full : title);
+    }
+    // 연속 공백 정리 (줄바꿈 보존)
+    t = t.replace(/[^\S\n]{2,}/g, ' ').trim();
+    return t;
+  }
+
+  /**
+   * 샘플 i에 대한 itemLine 문자열을 생성하는 내부 헬퍼.
+   * @param {number} i 샘플 인덱스 (0-based)
+   * @param {object} style styleAssignments[i]
+   * @param {string} exampleText 본보기 본문 (마스킹 전 원본)
+   * @param {string|null} conflictHint 재생성 시 충돌 본문 힌트 (null이면 최초 생성)
+   * @param {boolean} resetAssigned 재생성 시 assigned 추적 무시 여부
+   * @param {string|null} itemProcedure 추첨된 시술명 (null이면 무시술 후기)
+   */
+  function buildItemLine(i, style, exampleText, conflictHint = null, resetAssigned = false, itemProcedure = null) {
+    // 환각 방지: 프롬프트에 넣기 전 본보기 구체 수치 마스킹
+    const maskedExample = maskExemplarSpecifics(exampleText);
+    // otherFacts 중 이 본보기에 없고, 주 fact 중복 아닌 것 우선
+    const notInExample = shuffledOtherFacts.filter(f => !exampleText.includes(f));
+    const freshOther = notInExample.filter(f =>
+      !assignedFactSet.has(f) && !assignedPrimaryFacts.has(f)
+    );
+    const usedButNotPrimary = notInExample.filter(f =>
+      assignedFactSet.has(f) && !assignedPrimaryFacts.has(f)
+    );
+    const fallbackOther = notInExample.filter(f => assignedFactSet.has(f));
+    // 주 fact 선택 우선순위: 완전히 새 것 > 이미 쓰였지만 주 fact는 아닌 것 > 전체 폴백
+    const primaryCandidates = [...freshOther, ...usedButNotPrimary, ...fallbackOther];
+
+    let pickedFacts;
+    if (nameSampleIdx.has(i) && namedCount < shuffledStaffNames.length) {
+      // named 샘플: 이름 1개 + otherFacts 1개(있으면)
+      const assignedName = shuffledStaffNames[namedCount++];
+      const primaryPick = primaryCandidates.slice(0, 1);
+      pickedFacts = [assignedName, ...primaryPick];
+      if (primaryPick.length > 0) assignedPrimaryFacts.add(primaryPick[0]);
+    } else {
+      // 일반 샘플: otherFacts 1~2개(이름 없음)
+      const primaryPick = primaryCandidates.slice(0, 1);
+      const secondaryCandidates = notInExample.filter(f =>
+        !assignedFactSet.has(f) && f !== primaryPick[0]
+      );
+      const secondaryPick = secondaryCandidates.slice(0, 1);
+      pickedFacts = [...primaryPick, ...secondaryPick];
+      if (primaryPick.length > 0) assignedPrimaryFacts.add(primaryPick[0]);
+    }
+
+    if (!resetAssigned) {
+      pickedFacts.forEach(f => assignedFactSet.add(f));
+    }
+
+    const factsStr = pickedFacts.length > 0
+      ? pickedFacts.filter(Boolean).join(', ')
+      : '(없음 — 본보기 말투·구조만 살려 변형)';
+
+    // 길이 힌트: lengthParam 지정 시 목표 길이 명시 (본보기가 달라도 길이 목표 유지)
+    const lengthHint = (lengthParam !== 'auto' && LENGTH_HINTS[lengthParam])
+      ? ` [목표 길이: ${LENGTH_HINTS[lengthParam]}]`
+      : '';
+
+    // 재생성 시 충돌 힌트 추가
+    const conflictNote = conflictHint
+      ? ` [주의: 아래 문장들과 도입·문장구조를 반드시 다르게 써라: ${conflictHint}]`
+      : '';
+
+    // 시술 앵커: 추첨 결과에 따라 시술 중심 또는 무시술 일반 경험 지시
+    const procedureAnchor = itemProcedure
+      ? ` [이 후기의 시술: ${itemProcedure} — 이 시술 받은 경험 중심으로. (다른 시술명은 쓰지 말 것.)]`
+      : ` [이 후기는 특정 시술보다 서비스·분위기·응대·접근성 등 일반 경험 중심으로. (특정 시술명 억지로 넣지 말 것.)]`;
+
+    return `[${i + 1}] 말투 본보기: "${maskedExample}" / 이번 리뷰에 담을 사실(구체 내용만, 칭찬어 금지): ${factsStr}${lengthHint}${procedureAnchor} → 본보기 말투·길이 유지, 내용은 완전히 새로${conflictNote}`;
+  }
+
+  const itemLines = styleAssignments.map((style, i) => {
+    const example = getExemplarForIdx(i);
+    return buildItemLine(i, style, example.body, null, false, itemProcedures[i]);
+  }).join('\n\n');
+
+  const userPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 절대 쓰지 말 것]
 업체명: ${placeRow.name ?? ''}
 업종: ${placeRow.business_type || '미분류'}
 
 ${factPoolText}
 
-${fewShotText}
-
-[생성할 리뷰 목록]
-${stylesText}
+[생성 요청 목록 — 각 번호마다 말투 본보기가 다름]
+주의: 상투적 칭찬어(친절·꼼꼼·깔끔·가성비 등) 반복 금지. 각 후기는 서로 다른 시술·소재. 알맹이 없는 과정 묘사("흐름이 이어져서", "동선이 짧아서") 금지. 본보기가 짧으면 짧게.
+${itemLines}
 
 위 ${styleAssignments.length}개 리뷰를 생성해서 JSON으로 응답하시오.`;
 
-  // LLM 호출 (provider 분기)
+  // LLM 호출 (provider 분기) — 1차 생성
   let gptSamples;
   let samplesUsage = { prompt_tokens: 0, completion_tokens: 0 };
   try {
@@ -5052,6 +6238,68 @@ ${stylesText}
     return jsonResponse({ error: 'llm_error', message: err.message }, 502, cors);
   }
 
+  // ── (b) 배치 다양성 측정 + 붕괴 샘플 1회 재생성 ────────────────────────────
+  // 1차 생성 본문 배열 추출 (index 순서 기준)
+  const orderedBodies = styleAssignments.map((_, i) => {
+    const item = gptSamples.find(s => s.index === i + 1) ?? gptSamples[i];
+    return item?.body ?? '';
+  });
+
+  // trigram Jaccard로 붕괴 감지
+  const collapsedIndices = detectCollapsedSamples(orderedBodies, SIMILARITY_THRESHOLD);
+
+  if (collapsedIndices.size > 0) {
+    // 붕괴 샘플에 대해 재생성 프롬프트 구성
+    const regenLines = [];
+    for (const ci of collapsedIndices) {
+      // 앞선 정상 샘플들 중 이 샘플과 유사한 것들 힌트로 제공
+      const conflictBodies = [];
+      for (let j = 0; j < ci; j++) {
+        if (trigramJaccard(orderedBodies[ci], orderedBodies[j]) > SIMILARITY_THRESHOLD) {
+          conflictBodies.push(`"${orderedBodies[j].slice(0, 40)}..."`);
+        }
+      }
+      const conflictHint = conflictBodies.join(' / ');
+      // 다른 본보기 선택 (풀에서 가능한 한 기존과 다른 것)
+      const altExemplarIdx = (ci + Math.floor(shuffledExamples.length / 2)) % shuffledExamples.length;
+      const altExemplar = shuffledExamples[altExemplarIdx] ?? getExemplarForIdx(ci);
+      regenLines.push(buildItemLine(ci, styleAssignments[ci], altExemplar.body, conflictHint, true, itemProcedures[ci]));
+    }
+
+    const regenUserPrompt = `[업체 정보 — 맥락 참고용. 본문에 업체명·지점명을 절대 쓰지 말 것]
+업체명: ${placeRow.name ?? ''}
+업종: ${placeRow.business_type || '미분류'}
+
+${factPoolText}
+
+[재생성 요청 — 기존 생성 결과와 너무 유사해 다시 작성이 필요한 번호만]
+주의: 상투적 칭찬어(친절·꼼꼼·깔끔·가성비 등) 반복 금지. 각 후기는 서로 다른 시술·소재. 본보기가 짧으면 짧게.
+${regenLines.join('\n\n')}
+
+위 번호의 리뷰만 새로 생성해서 JSON으로 응답하시오. (응답 형식 동일: { "samples": [ { "index": 번호, "body": "..." } ] })`;
+
+    try {
+      const regenResult = await callLLMForSamples(env, provider, model, {
+        systemPrompt,
+        userPrompt: regenUserPrompt,
+        count: collapsedIndices.size,
+      });
+      // 재생성분으로 교체 (index 매칭)
+      for (const regenItem of regenResult.gptSamples) {
+        const origIdx = gptSamples.findIndex(s => s.index === regenItem.index);
+        if (origIdx !== -1) {
+          gptSamples[origIdx] = regenItem;
+        }
+      }
+      samplesUsage = {
+        prompt_tokens:     samplesUsage.prompt_tokens     + regenResult.usage.prompt_tokens,
+        completion_tokens: samplesUsage.completion_tokens + regenResult.usage.completion_tokens,
+      };
+    } catch {
+      // 재생성 실패는 best-effort — 1차 결과 그대로 사용
+    }
+  }
+
   const generatedAt = new Date().toISOString();
 
   const samplesCostUsd = computeCostUsd(model, samplesUsage.prompt_tokens, samplesUsage.completion_tokens);
@@ -5066,13 +6314,29 @@ ${stylesText}
     const gptItem = gptSamples.find(s => s.index === i + 1) ?? gptSamples[i];
     if (!gptItem?.body) continue;
 
+    // ── 구조적 휴머나이저 후처리 ──────────────────────────────────────────
+    // humanizeLevel별 rate 확률 통과 시 humanizeBody(text, level) 적용.
+    // 'off'이면 rate=0이므로 항상 원본 반환.
+    // 'auto'이면 샘플마다 pickAutoHumanizeLevel()로 강도를 선정한다.
+    // effLevel은 항상 HUMANIZE_LEVEL_PARAMS의 실제 키(off/light/medium/strong)이므로
+    // 'auto'가 HUMANIZE_LEVEL_PARAMS 조회에 직접 들어가지 않는다.
+    const effLevel = humanizeLevel === 'auto' ? pickAutoHumanizeLevel() : humanizeLevel;
+    const hlParams = HUMANIZE_LEVEL_PARAMS[effLevel] ?? HUMANIZE_LEVEL_PARAMS.medium;
+    const finalBody = Math.random() < hlParams.rate
+      ? humanizeBody(gptItem.body, effLevel)
+      : gptItem.body;
+
     const sampleId = crypto.randomUUID();
+    // style_length: 실제 생성 결과 길이로 계산 (short<30 / medium<80 / long)
+    const bodyLen = finalBody.length;
+    const actualLength = bodyLen < 30 ? 'short' : bodyLen < 80 ? 'medium' : 'long';
+    // style_tone / style_focus: 허구 라벨 대신 정직한 'n/a' 저장
     samples.push({
       id:       sampleId,
-      body:     gptItem.body,
-      length:   style.length,
-      tone:     style.tone,
-      focus:    style.focus,
+      body:     finalBody,
+      length:   actualLength,
+      tone:     'n/a',
+      focus:    'n/a',
       status:   'active',
       provider,
       model,
@@ -5082,7 +6346,7 @@ ${stylesText}
         INSERT INTO place_generated_samples
           (id, place_row_id, body, style_length, style_tone, style_focus, model, provider, created_at, status, actor_user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-      `).bind(sampleId, placeRowId, gptItem.body, style.length, style.tone, style.focus, model, provider, generatedAt, authResult.user.id)
+      `).bind(sampleId, placeRowId, finalBody, actualLength, 'n/a', 'n/a', model, provider, generatedAt, authResult.user.id)
     );
   }
 
@@ -5101,12 +6365,17 @@ ${stylesText}
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
+  // 최종 본문 배열로 배치 다양성 계산 (모드붕괴 재생성 후 확정된 본문 기준)
+  const finalBodies = samples.map(s => s.body);
+  const diversity = computeBatchDiversity(finalBodies);
+
   return jsonResponse({
     place_name:   placeRow.name ?? '',
     provider,
     model,
     generated_at: generatedAt,
     samples,
+    diversity,
     usage: {
       prompt_tokens:     samplesUsage.prompt_tokens,
       completion_tokens: samplesUsage.completion_tokens,
@@ -5116,19 +6385,20 @@ ${stylesText}
 }
 
 /**
- * GET /api/places/:id/samples  (researcher 이상)
+ * GET /api/places/:id/samples  (researcher/tester 이상)
  * 저장된 생성 예시 최근순 반환.
+ * tester는 소유권 우회(전 지점 접근).
  */
 async function handleGetSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
 
-  // researcher 이상 (admin 포함)
-  const authResult = await requireResearcher(request, env);
+  // researcher/tester 이상 (admin 포함)
+  const authResult = await requireTester(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
 
-  // 플레이스 존재 + 소유 확인 (admin은 전체, researcher는 자기 지점만)
+  // 플레이스 존재 + 소유 확인 (admin/tester는 전체, researcher는 자기 지점만)
   let placeRow;
   try {
     placeRow = await env.DB.prepare(
@@ -5144,7 +6414,8 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
 
   {
     const isAdmin = authResult.user.role === 'admin';
-    if (!isAdmin && placeRow.user_id !== authResult.user.id) {
+    const isTester = authResult.user.role === 'tester';
+    if (!isAdmin && !isTester && placeRow.user_id !== authResult.user.id) {
       return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
     }
   }
@@ -5179,17 +6450,78 @@ async function handleGetSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
   }
 
-  return jsonResponse({ samples: results }, 200, cors);
+  // ── R2: 자연스러움 점수 즉석 계산 (저장/마이그 없음) ──────────────────────
+  // 배치 추이 감시용 지표. 개별 합격/불합격 판단에 쓰지 말 것.
+
+  // 환각 탐지용 팩트풀: 전체 배열(allowedFacts)과 담당자명 필터(allowedStaffNames) 분리 (요청당 1회)
+  let allowedStaffNames = [];
+  let allowedFacts = [];
+  if (results.length > 0) {
+    try {
+      const factPoolArr = await extractFactPool(env, placeRowId);
+      allowedFacts = factPoolArr; // treatment 검사용 — 팩트풀 원본 전체
+      const STAFF_TITLE_SUFFIX_RE = /(원장님|실장님|선생님|쌤|대표님|상담실장)$/;
+      allowedStaffNames = factPoolArr.filter(e => STAFF_TITLE_SUFFIX_RE.test(e));
+    } catch (_) {
+      // 탐지기는 soft-flag 조기경보 — 팩트풀 오류가 샘플 조회를 막지 않도록
+    }
+  }
+
+  const scoredSamples = results.map(s => {
+    const scored = scoreNaturalness(s.body ?? '', naturalnessProfile);
+    const halResult = detectHallucination(s.body ?? '', allowedStaffNames, allowedFacts);
+    return {
+      ...s,
+      naturalness:  Math.round(scored.naturalness),
+      slop_hits:    scored.slop.hits.length,
+      slop_top:     scored.slop.hits.slice(0, 3).map(h => h.ngram),
+      hallucination: {
+        risk:  halResult.risk,
+        flags: halResult.flags.slice(0, 5).map(f => ({ type: f.type, text: f.text })),
+      },
+    };
+  });
+
+  // 배치 요약 (빈 목록 엣지 처리)
+  let naturalness_summary = null;
+  if (scoredSamples.length > 0) {
+    const scores = scoredSamples.map(s => s.naturalness);
+    const slopHits = scoredSamples.map(s => s.slop_hits);
+    const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const sorted = [...scores].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 === 0
+      ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+      : sorted[mid];
+    const min = sorted[0];
+    const meanSlopHits = parseFloat((slopHits.reduce((a, b) => a + b, 0) / slopHits.length).toFixed(2));
+    naturalness_summary = {
+      count:          scoredSamples.length,
+      mean:           Math.round(mean),
+      median,
+      min,
+      mean_slop_hits: meanSlopHits,
+    };
+  }
+
+  // 환각 탐지 배치 요약
+  const hallucination_summary = scoredSamples.length > 0 ? {
+    high: scoredSamples.filter(s => s.hallucination.risk === 'high').length,
+    low:  scoredSamples.filter(s => s.hallucination.risk === 'low').length,
+  } : null;
+
+  return jsonResponse({ samples: scoredSamples, naturalness_summary, hallucination_summary }, 200, cors);
 }
 
 /**
- * POST /api/places/:id/samples/:sampleId/status  (researcher 이상)
+ * POST /api/places/:id/samples/:sampleId/status  (researcher/tester 이상)
  * 생성 예시 평가 라벨 변경: active | kept | archived
+ * tester는 소유권 우회(전 지점 접근).
  */
 async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, sampleId) {
   const cors = corsHeaders || {};
 
-  const authResult = await requireResearcher(request, env);
+  const authResult = await requireTester(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
@@ -5207,7 +6539,7 @@ async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, s
     return jsonResponse({ error: 'invalid_status', message: 'status는 active | kept | archived 중 하나여야 합니다' }, 400, cors);
   }
 
-  // 플레이스 소유 확인 (admin은 전체, researcher는 자기 지점만)
+  // 플레이스 소유 확인 (admin/tester는 전체, researcher는 자기 지점만)
   let placeOwnerRow;
   try {
     placeOwnerRow = await env.DB.prepare(
@@ -5223,7 +6555,8 @@ async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, s
 
   {
     const isAdmin = authResult.user.role === 'admin';
-    if (!isAdmin && placeOwnerRow.user_id !== authResult.user.id) {
+    const isTester = authResult.user.role === 'tester';
+    if (!isAdmin && !isTester && placeOwnerRow.user_id !== authResult.user.id) {
       return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
     }
   }
@@ -5254,13 +6587,14 @@ async function handleUpdateSampleStatus(request, env, corsHeaders, placeRowId, s
 }
 
 /**
- * POST /api/places/:id/samples/delete  (researcher 이상)
+ * POST /api/places/:id/samples/delete  (researcher/tester 이상)
  * 생성 예시 다중 삭제. body: { "ids": ["uuid1", ...] }
+ * tester는 소유권 우회(전 지점 접근).
  */
 async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
   const cors = corsHeaders || {};
 
-  const authResult = await requireResearcher(request, env);
+  const authResult = await requireTester(request, env);
   if (authResult.error) {
     return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
   }
@@ -5282,7 +6616,7 @@ async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
     return jsonResponse({ error: 'too_many_ids', message: '한 번에 최대 100개까지 삭제 가능합니다' }, 400, cors);
   }
 
-  // 플레이스 소유 확인 (admin은 전체, researcher는 자기 지점만)
+  // 플레이스 소유 확인 (admin/tester는 전체, researcher는 자기 지점만)
   let placeOwnerRow;
   try {
     placeOwnerRow = await env.DB.prepare(
@@ -5298,7 +6632,8 @@ async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
 
   {
     const isAdmin = authResult.user.role === 'admin';
-    if (!isAdmin && placeOwnerRow.user_id !== authResult.user.id) {
+    const isTester = authResult.user.role === 'tester';
+    if (!isAdmin && !isTester && placeOwnerRow.user_id !== authResult.user.id) {
       return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
     }
   }
@@ -5309,6 +6644,54 @@ async function handleDeleteSamples(request, env, corsHeaders, placeRowId) {
     const result = await env.DB.prepare(
       `DELETE FROM place_generated_samples WHERE id IN (${placeholders}) AND place_row_id = ?`
     ).bind(...ids, placeRowId).run();
+    deleted = result.meta?.changes ?? 0;
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  return jsonResponse({ ok: true, deleted }, 200, cors);
+}
+
+/**
+ * POST /api/places/:id/samples/delete-all  (researcher/tester 이상)
+ * 해당 지점의 생성 예시 전량 삭제.
+ * admin/tester는 모든 지점, researcher는 본인 소유 지점만.
+ */
+async function handleDeleteAllSamples(request, env, corsHeaders, placeRowId) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireTester(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  // 플레이스 소유 확인 (admin/tester는 전체, researcher는 자기 지점만)
+  let placeOwnerRow;
+  try {
+    placeOwnerRow = await env.DB.prepare(
+      'SELECT id, user_id FROM review_places WHERE id = ?'
+    ).bind(placeRowId).first();
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  if (!placeOwnerRow) {
+    return jsonResponse({ error: 'place_not_found', message: '등록된 플레이스를 찾을 수 없습니다' }, 404, cors);
+  }
+
+  {
+    const isAdmin = authResult.user.role === 'admin';
+    const isTester = authResult.user.role === 'tester';
+    if (!isAdmin && !isTester && placeOwnerRow.user_id !== authResult.user.id) {
+      return jsonResponse({ error: 'forbidden', message: '해당 플레이스에 대한 권한이 없습니다' }, 403, cors);
+    }
+  }
+
+  let deleted = 0;
+  try {
+    const result = await env.DB.prepare(
+      'DELETE FROM place_generated_samples WHERE place_row_id = ?'
+    ).bind(placeRowId).run();
     deleted = result.meta?.changes ?? 0;
   } catch (err) {
     return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
@@ -5599,9 +6982,11 @@ async function handleGetReport(request, env, corsHeaders, placeRowId) {
 
 /** USD per 1M tokens. model 키로 확장 가능. */
 const MODEL_PRICING = {
-  'gpt-5.4-mini':               { input: 0.75, output: 4.50 },
-  'grok-4.3':                   { input: 1.25, output: 2.50 },
-  'claude-haiku-4-5-20251001':  { input: 1.00, output: 5.00 },
+  'gpt-5.4-mini':               { input: 0.75, output:  4.50 },
+  'grok-4.3':                   { input: 1.25, output:  2.50 },
+  'claude-haiku-4-5-20251001':  { input: 1.00, output:  5.00 },
+  'claude-sonnet-4-6':          { input: 3.00, output: 15.00 },
+  'claude-opus-4-8':            { input: 5.00, output: 25.00 },
 };
 
 /** provider별 기본 모델 */
@@ -5718,6 +7103,1106 @@ ${reviewsText}`;
     }
     throw firstErr;
   }
+}
+
+// --- 라벨링 스프린트 ---
+
+/**
+ * GET /api/places/review-sprint-sample?limit=200  (researcher 이상)
+ * 26개 지점 × 본문 길이 구간(~30 / 30~80 / 80~)으로 골고루 층화 표본 추출.
+ * 이미 라벨된 review_id 및 명백한 저품질(body 2자 이하) 제외.
+ */
+async function handleReviewSprintSample(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  const url = new URL(request.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '200', 10), 500);
+
+  try {
+    // 전체 지점 목록
+    const { results: places } = await env.DB.prepare(
+      `SELECT id, name, place_id FROM review_places ORDER BY id`
+    ).all();
+
+    if (!places || places.length === 0) {
+      return jsonResponse({ total: 0, items: [] }, 200, cors);
+    }
+
+    // 길이 구간 3개
+    const BUCKETS = [
+      { key: 'short',  minLen: 0,  maxLen: 29  },
+      { key: 'medium', minLen: 30, maxLen: 79  },
+      { key: 'long',   minLen: 80, maxLen: 9999 },
+    ];
+
+    const placeCount = places.length;
+    const bucketCount = BUCKETS.length;
+    // 지점당 각 구간에서 뽑을 목표: ceil(limit / (지점수 * 구간수))
+    const perSlot = Math.max(1, Math.ceil(limit / (placeCount * bucketCount)));
+
+    const collected = [];
+
+    for (const place of places) {
+      for (const bucket of BUCKETS) {
+        const rows = await env.DB.prepare(`
+          SELECT pr.id AS review_id, pr.body, pr.review_date
+          FROM place_reviews pr
+          LEFT JOIN place_review_labels prl ON prl.review_id = pr.id
+          WHERE pr.place_row_id = ?
+            AND prl.review_id IS NULL
+            AND LENGTH(COALESCE(pr.body, '')) > 2
+            AND LENGTH(COALESCE(pr.body, '')) >= ?
+            AND LENGTH(COALESCE(pr.body, '')) <= ?
+          ORDER BY RANDOM()
+          LIMIT ?
+        `).bind(place.id, bucket.minLen, bucket.maxLen, perSlot).all();
+
+        for (const row of (rows.results ?? [])) {
+          collected.push({
+            review_id:   row.review_id,
+            body:        row.body,
+            place_row_id: place.id,
+            place_name:  place.name || place.place_id,
+            length_bucket: bucket.key,
+            body_length: (row.body || '').length,
+            review_date: row.review_date,
+          });
+        }
+      }
+    }
+
+    // 전체를 섞고 limit 수만큼 반환
+    for (let i = collected.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [collected[i], collected[j]] = [collected[j], collected[i]];
+    }
+    const items = collected.slice(0, limit);
+
+    return jsonResponse({ total: items.length, items }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+/**
+ * GET /api/places/review-sprint-stats  (researcher 이상)
+ * 전체 라벨링 진행 통계: 총 라벨 수, 분류별 합계, 지점별 소계.
+ */
+async function handleReviewSprintStats(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  try {
+    // 전체 라벨 건수
+    const totalRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM place_review_labels`
+    ).first();
+    const total = totalRow?.cnt ?? 0;
+
+    // 분류별
+    const { results: labelRows } = await env.DB.prepare(
+      `SELECT human_label, COUNT(*) AS cnt FROM place_review_labels GROUP BY human_label`
+    ).all();
+
+    const by_label = { human: 0, ad: 0, ai: 0, unsure: 0 };
+    for (const r of (labelRows ?? [])) {
+      if (r.human_label in by_label) by_label[r.human_label] = r.cnt;
+    }
+
+    // 지점별
+    const { results: placeRows } = await env.DB.prepare(`
+      SELECT rp.id, rp.name, rp.place_id,
+             COUNT(prl.review_id) AS labeled_count
+      FROM review_places rp
+      LEFT JOIN place_review_labels prl ON prl.place_row_id = rp.id
+      GROUP BY rp.id
+      ORDER BY labeled_count DESC
+    `).all();
+
+    const by_place = (placeRows ?? []).map(r => ({
+      place_row_id:  r.id,
+      place_name:    r.name || r.place_id,
+      labeled_count: r.labeled_count ?? 0,
+    }));
+
+    return jsonResponse({ total, by_label, by_place }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+// ============================================================
+// 블라인드 테스트 (blind_test_items / blind_test_ratings)
+// ============================================================
+
+// 공개 엔드포인트용 접근코드 검증 헬퍼.
+// 반환: null(통과) | Response(에러)
+function checkBlindTestCode(code, env, corsHeaders) {
+  if (!env.BLIND_TEST_ACCESS_CODE) {
+    return jsonResponse({ error: 'not_configured' }, 503, corsHeaders);
+  }
+  if (code !== env.BLIND_TEST_ACCESS_CODE) {
+    return jsonResponse({ error: 'bad_code' }, 401, corsHeaders);
+  }
+  return null;
+}
+
+// POST /api/blind-test/pool — 평가 풀 구성 (admin 전용)
+async function handleBlindTestPool(request, env, corsHeaders) {
+  const auth = await requireAdmin(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  let body;
+  try { body = await request.json(); } catch { body = {}; }
+
+  // n_real/n_gen = 평가자당 테스트 건수. 풀은 2배수 생성.
+  const n_real = Number(body.n_real ?? 15);
+  const n_gen  = Number(body.n_gen  ?? 15);
+  const poolReal = n_real * 2;
+  const poolGen  = n_gen  * 2;
+  const place_row_id = body.place_row_id ?? null;
+  const gen_since    = body.gen_since    ?? null;
+
+  // real 추출: human_label='human' 우선, 부족하면 라벨 없는 것으로 보충
+  // place_row_id 미지정 시 생성물 있는 지점만 대상
+  const placeFilterReal = place_row_id
+    ? `AND pr.place_row_id = '${place_row_id}'`
+    : `AND pr.place_row_id IN (SELECT DISTINCT place_row_id FROM place_generated_samples WHERE status NOT IN ('deleted','hidden'))`;
+  const realRows = await env.DB.prepare(`
+    SELECT pr.id, pr.body
+    FROM place_reviews pr
+    LEFT JOIN place_review_labels prl ON prl.review_id = pr.id
+    WHERE length(pr.body) BETWEEN 15 AND 200
+      ${placeFilterReal}
+    ORDER BY CASE WHEN prl.human_label = 'human' THEN 0 ELSE 1 END, RANDOM()
+    LIMIT ?
+  `).bind(poolReal).all();
+
+  // gen 추출: status 'deleted'/'hidden' 제외
+  const placeFilterGen = place_row_id ? `AND place_row_id = '${place_row_id}'` : '';
+  const genSinceFilter = gen_since ? `AND created_at > '${gen_since}'` : '';
+  const genRows = await env.DB.prepare(`
+    SELECT id, body
+    FROM place_generated_samples
+    WHERE status NOT IN ('deleted', 'hidden')
+      AND length(body) BETWEEN 15 AND 200
+      ${placeFilterGen}
+      ${genSinceFilter}
+    ORDER BY RANDOM()
+    LIMIT ?
+  `).bind(poolGen).all();
+
+  const realItems = realRows.results ?? [];
+  const genItems  = genRows.results  ?? [];
+
+  if (realItems.length === 0 && genItems.length === 0) {
+    return jsonResponse({ error: 'no_data', message: '조건에 맞는 데이터가 없습니다' }, 404, corsHeaders);
+  }
+
+  const pool = 'pool_' + crypto.randomUUID().slice(0, 8);
+  const now  = new Date().toISOString();
+
+  // 배치 INSERT (blind_test_items)
+  const stmt = env.DB.prepare(
+    `INSERT INTO blind_test_items (id, pool, source, ref_id, body, created_at, active)
+     VALUES (?, ?, ?, ?, ?, ?, 1)`
+  );
+  const batch = [
+    ...realItems.map(r => stmt.bind(crypto.randomUUID(), pool, 'real', r.id, r.body, now)),
+    ...genItems.map(r  => stmt.bind(crypto.randomUUID(), pool, 'gen',  r.id, r.body, now)),
+  ];
+  await env.DB.batch(batch);
+
+  // blind_test_pools 메타 1행 INSERT
+  await env.DB.prepare(
+    `INSERT INTO blind_test_pools (pool, per_rater_real, per_rater_gen, created_at) VALUES (?, ?, ?, ?)`
+  ).bind(pool, n_real, n_gen, now).run();
+
+  return jsonResponse({
+    pool,
+    pool_real:      realItems.length,
+    pool_gen:       genItems.length,
+    per_rater_real: n_real,
+    per_rater_gen:  n_gen,
+    total:          realItems.length + genItems.length,
+  }, 200, corsHeaders);
+}
+
+// GET /api/blind-test/pools — 풀별 집계 목록 (researcher/admin)
+async function handleBlindTestPools(request, env, corsHeaders) {
+  const auth = await requireResearcher(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  try {
+    // 풀별 아이템 집계
+    const itemsRes = await env.DB.prepare(`
+      SELECT pool,
+             MIN(created_at) AS created_at,
+             SUM(CASE WHEN source = 'real' THEN 1 ELSE 0 END) AS n_real,
+             SUM(CASE WHEN source = 'gen'  THEN 1 ELSE 0 END) AS n_gen,
+             COUNT(*) AS total_items
+      FROM blind_test_items
+      GROUP BY pool
+      ORDER BY MIN(created_at) DESC
+    `).all();
+
+    const pools = itemsRes.results ?? [];
+
+    if (pools.length === 0) {
+      return jsonResponse({ pools: [] }, 200, corsHeaders);
+    }
+
+    // 풀별 평가 집계 (total_ratings, raters)
+    const ratingsRes = await env.DB.prepare(`
+      SELECT bti.pool,
+             COUNT(btr.id)              AS total_ratings,
+             COUNT(DISTINCT btr.rater_label) AS raters
+      FROM blind_test_items bti
+      LEFT JOIN blind_test_ratings btr ON btr.item_id = bti.id
+      GROUP BY bti.pool
+    `).all();
+
+    const ratingsMap = new Map(
+      (ratingsRes.results ?? []).map(r => [r.pool, { total_ratings: r.total_ratings ?? 0, raters: r.raters ?? 0 }])
+    );
+
+    const result = pools.map(p => ({
+      pool:          p.pool,
+      created_at:    p.created_at,
+      n_real:        p.n_real ?? 0,
+      n_gen:         p.n_gen  ?? 0,
+      total_items:   p.total_items ?? 0,
+      total_ratings: ratingsMap.get(p.pool)?.total_ratings ?? 0,
+      raters:        ratingsMap.get(p.pool)?.raters        ?? 0,
+    }));
+
+    return jsonResponse({ pools: result }, 200, corsHeaders);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, corsHeaders);
+  }
+}
+
+// GET /api/blind-test/items?code=&pool=&nickname= — 아이템 목록 (공개 + 접근코드)
+async function handleBlindTestItems(request, env, corsHeaders) {
+  const url      = new URL(request.url);
+  const code     = url.searchParams.get('code') ?? '';
+  const codeErr  = checkBlindTestCode(code, env, corsHeaders);
+  if (codeErr) return codeErr;
+
+  let pool     = url.searchParams.get('pool')     ?? '';
+  const nickname = (url.searchParams.get('nickname') ?? '').trim();
+
+  // pool 미지정이면 가장 최근 pool 사용
+  if (!pool) {
+    const poolRow = await env.DB.prepare(
+      `SELECT pool FROM blind_test_items ORDER BY created_at DESC LIMIT 1`
+    ).first();
+    if (!poolRow) {
+      return jsonResponse({ error: 'no_pool', message: '등록된 풀이 없습니다' }, 404, corsHeaders);
+    }
+    pool = poolRow.pool;
+  }
+
+  // 닉네임 없으면 구버전 호환: 풀 전체 셔플 반환
+  if (!nickname) {
+    const rows = await env.DB.prepare(
+      `SELECT id, body FROM blind_test_items WHERE pool = ? AND active = 1`
+    ).bind(pool).all();
+    const items = rows.results ?? [];
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return jsonResponse({ pool, items }, 200, corsHeaders);
+  }
+
+  // per_rater 조회 (blind_test_pools)
+  const poolMeta = await env.DB.prepare(
+    `SELECT per_rater_real, per_rater_gen FROM blind_test_pools WHERE pool = ?`
+  ).bind(pool).first();
+
+  // 구 풀(blind_test_pools 행 없음) → 풀 전체 반환 폴백
+  if (!poolMeta) {
+    const rows = await env.DB.prepare(
+      `SELECT id, body FROM blind_test_items WHERE pool = ? AND active = 1`
+    ).bind(pool).all();
+    const items = rows.results ?? [];
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return jsonResponse({ pool, items }, 200, corsHeaders);
+  }
+
+  const perReal = poolMeta.per_rater_real;
+  const perGen  = poolMeta.per_rater_gen;
+
+  // 기존 배정 조회 — 재접속 시 동일 세트 반환
+  const existing = await env.DB.prepare(
+    `SELECT item_ids FROM blind_test_assignments WHERE pool = ? AND nickname = ?`
+  ).bind(pool, nickname).first();
+
+  let assignedIds;
+  if (existing) {
+    assignedIds = JSON.parse(existing.item_ids);
+  } else {
+    // 신규 배정: source별 무작위 선정
+    const realPick = await env.DB.prepare(
+      `SELECT id FROM blind_test_items WHERE pool = ? AND source = 'real' AND active = 1 ORDER BY RANDOM() LIMIT ?`
+    ).bind(pool, perReal).all();
+    const genPick = await env.DB.prepare(
+      `SELECT id FROM blind_test_items WHERE pool = ? AND source = 'gen' AND active = 1 ORDER BY RANDOM() LIMIT ?`
+    ).bind(pool, perGen).all();
+
+    assignedIds = [
+      ...(realPick.results ?? []).map(r => r.id),
+      ...(genPick.results  ?? []).map(r => r.id),
+    ];
+
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `INSERT INTO blind_test_assignments (pool, nickname, item_ids, created_at) VALUES (?, ?, ?, ?)`
+    ).bind(pool, nickname, JSON.stringify(assignedIds), now).run();
+  }
+
+  // 배정된 id로 body 조회
+  if (assignedIds.length === 0) {
+    return jsonResponse({ pool, items: [] }, 200, corsHeaders);
+  }
+  const ph = assignedIds.map(() => '?').join(',');
+  const bodyRows = await env.DB.prepare(
+    `SELECT id, body FROM blind_test_items WHERE id IN (${ph})`
+  ).bind(...assignedIds).all();
+
+  const items = bodyRows.results ?? [];
+  // Fisher-Yates 셔플 (source 절대 미포함 — id·body만)
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+
+  return jsonResponse({ pool, items }, 200, corsHeaders);
+}
+
+// POST /api/blind-test/ratings — 평점 제출 (공개 + 접근코드)
+async function handleBlindTestRatings(request, env, corsHeaders) {
+  let body;
+  try { body = await request.json(); } catch { body = {}; }
+
+  const code = body.code ?? '';
+  const codeErr = checkBlindTestCode(code, env, corsHeaders);
+  if (codeErr) return codeErr;
+
+  const nickname = (body.nickname ?? '').trim();
+  if (!nickname) {
+    return jsonResponse({ error: 'bad_request', message: 'nickname이 비어있습니다' }, 400, corsHeaders);
+  }
+
+  const ratings = Array.isArray(body.ratings) ? body.ratings : [];
+  if (ratings.length === 0) {
+    return jsonResponse({ error: 'bad_request', message: 'ratings 배열이 비어있습니다' }, 400, corsHeaders);
+  }
+
+  // 유효한 item_id 집합 조회 (존재하지 않는 항목 skip용)
+  const itemIds = ratings.map(r => r.item_id).filter(Boolean);
+  if (itemIds.length === 0) {
+    return jsonResponse({ saved: 0, skipped: ratings.length }, 200, corsHeaders);
+  }
+
+  const placeholders = itemIds.map(() => '?').join(',');
+  const existRows = await env.DB.prepare(
+    `SELECT id FROM blind_test_items WHERE id IN (${placeholders})`
+  ).bind(...itemIds).all();
+  const existSet = new Set((existRows.results ?? []).map(r => r.id));
+
+  const now  = new Date().toISOString();
+  const stmt = env.DB.prepare(
+    `INSERT OR IGNORE INTO blind_test_ratings (id, item_id, rater_label, rating, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+
+  const batch = [];
+  let skipped = 0;
+  for (const r of ratings) {
+    const rating = Number(r.rating);
+    // rating이 1~5 정수가 아니거나 item_id가 없으면 skip
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5 || !existSet.has(r.item_id)) {
+      skipped++;
+      continue;
+    }
+    batch.push(stmt.bind(
+      crypto.randomUUID(),
+      r.item_id,
+      nickname,
+      rating,
+      r.note ?? null,
+      now
+    ));
+  }
+
+  if (batch.length > 0) {
+    await env.DB.batch(batch);
+  }
+
+  // ─── 채점 결과 + 해답 (제출 후 공개) ────────────────────────────────────────
+  // 유효 점수(1~5)인 항목만 대상으로 한다.
+  const validRatings = ratings.filter(r => {
+    const v = Number(r.rating);
+    return Number.isInteger(v) && v >= 1 && v <= 5 && r.item_id;
+  });
+
+  let summary = { total: 0, correct: 0, correct_human: 0, correct_ai: 0, abstain: 0, wrong: 0 };
+  let reveal = [];
+
+  if (validRatings.length > 0) {
+    const validIds = validRatings.map(r => r.item_id);
+    const ph2 = validIds.map(() => '?').join(',');
+    const sourceRows = await env.DB.prepare(
+      `SELECT id, source FROM blind_test_items WHERE id IN (${ph2})`
+    ).bind(...validIds).all();
+    const sourceMap = {};
+    for (const row of (sourceRows.results ?? [])) {
+      sourceMap[row.id] = row.source;
+    }
+
+    let correct_human = 0, correct_ai = 0, abstain = 0;
+    for (const r of validRatings) {
+      const source = sourceMap[r.item_id];
+      if (!source) continue; // 이상값 제외
+      const rating = Number(r.rating);
+      reveal.push({ item_id: r.item_id, source, rating });
+      if (rating === 3) {
+        abstain++;
+      } else if ((rating >= 4 && source === 'real') || (rating <= 2 && source === 'gen')) {
+        correct_human += (source === 'real') ? 1 : 0;
+        correct_ai    += (source === 'gen')  ? 1 : 0;
+      }
+    }
+    const total = reveal.length;
+    const correct = correct_human + correct_ai;
+    const wrong = total - correct - abstain;
+    summary = { total, correct, correct_human, correct_ai, abstain, wrong };
+  }
+
+  return jsonResponse({ saved: batch.length, skipped, summary, reveal }, 200, corsHeaders);
+}
+
+// DELETE /api/blind-test/pools/:pool — 풀 삭제 (admin 전용)
+async function handleBlindTestPoolDelete(pool, request, env, corsHeaders) {
+  const auth = await requireAdmin(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  // ratings 먼저 삭제 (FK 제약 고려)
+  const ratingsResult = await env.DB.prepare(
+    `DELETE FROM blind_test_ratings WHERE item_id IN (SELECT id FROM blind_test_items WHERE pool = ?)`
+  ).bind(pool).run();
+
+  const itemsResult = await env.DB.prepare(
+    `DELETE FROM blind_test_items WHERE pool = ?`
+  ).bind(pool).run();
+
+  // 배정 및 풀 메타 삭제
+  await env.DB.prepare(
+    `DELETE FROM blind_test_assignments WHERE pool = ?`
+  ).bind(pool).run();
+
+  await env.DB.prepare(
+    `DELETE FROM blind_test_pools WHERE pool = ?`
+  ).bind(pool).run();
+
+  return jsonResponse({
+    deleted_items:    itemsResult.meta?.changes ?? 0,
+    deleted_ratings:  ratingsResult.meta?.changes ?? 0,
+  }, 200, corsHeaders);
+}
+
+async function handleBlindTestAccessCode(request, env, corsHeaders) {
+  const auth = await requireResearcher(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  return jsonResponse({ code: env.BLIND_TEST_ACCESS_CODE ?? null }, 200, corsHeaders);
+}
+
+async function handleBlindTestResults(request, env, corsHeaders) {
+  const auth = await requireResearcher(request, env);
+  if (auth.error) return jsonResponse({ error: auth.error, message: auth.message }, auth.status, corsHeaders);
+
+  const url  = new URL(request.url);
+  const pool = url.searchParams.get('pool') ?? '';
+
+  // source별 평점 목록 조회
+  const poolFilter = pool ? `AND bti.pool = '${pool}'` : '';
+  const rows = await env.DB.prepare(`
+    SELECT bti.source, btr.rating, btr.rater_label
+    FROM blind_test_ratings btr
+    JOIN blind_test_items bti ON bti.id = btr.item_id
+    WHERE 1=1 ${poolFilter}
+  `).all();
+
+  const allRatings = rows.results ?? [];
+
+  // source별 분리
+  const realRatings = allRatings.filter(r => r.source === 'real').map(r => r.rating);
+  const genRatings  = allRatings.filter(r => r.source === 'gen').map(r => r.rating);
+  const raters = new Set(allRatings.map(r => r.rater_label)).size;
+
+  function summarize(arr) {
+    const n = arr.length;
+    if (n === 0) return { n: 0, mean: null, dist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } };
+    const sum  = arr.reduce((a, b) => a + b, 0);
+    const mean = Math.round((sum / n) * 1000) / 1000;
+    const dist = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const v of arr) { if (dist[v] !== undefined) dist[v]++; }
+    return { n, mean, dist };
+  }
+
+  const real = summarize(realRatings);
+  const gen  = summarize(genRatings);
+  const mean_diff = (real.mean !== null && gen.mean !== null)
+    ? Math.round((real.mean - gen.mean) * 1000) / 1000
+    : null;
+
+  // Mann-Whitney U 검정 (동점 평균순위 처리, 정규근사)
+  const mw = mannWhitneyU(realRatings, genRatings);
+
+  return jsonResponse({
+    pool: pool || null,
+    real,
+    gen,
+    mean_diff,
+    raters,
+    mann_whitney: mw,
+  }, 200, corsHeaders);
+}
+
+// Mann-Whitney U 검정 (순수 JS, 동점 평균순위 처리, 타이 보정 포함)
+// 반환: { U, z, p_approx, note }
+function mannWhitneyU(x, y) {
+  const nx = x.length;
+  const ny = y.length;
+
+  if (nx === 0 || ny === 0) {
+    return { U: null, z: null, p_approx: null, note: '데이터 부족으로 계산 불가' };
+  }
+
+  // 전체 통합 후 평균 순위 부여
+  const combined = [
+    ...x.map(v => ({ v, g: 'x' })),
+    ...y.map(v => ({ v, g: 'y' })),
+  ].sort((a, b) => a.v - b.v);
+
+  const n = combined.length;
+  const rank = new Array(n);
+  let i = 0;
+  while (i < n) {
+    let j = i;
+    while (j < n && combined[j].v === combined[i].v) j++;
+    const avgRank = (i + 1 + j) / 2; // 1-indexed 평균
+    for (let k = i; k < j; k++) rank[k] = avgRank;
+    i = j;
+  }
+
+  // 그룹별 순위합
+  let Rx = 0;
+  for (let k = 0; k < n; k++) {
+    if (combined[k].g === 'x') Rx += rank[k];
+  }
+
+  const Ux = Rx - (nx * (nx + 1)) / 2;
+  const Uy = nx * ny - Ux;
+  const U  = Math.min(Ux, Uy);
+
+  // 타이 보정 variance
+  // 타이 그룹 크기 계산
+  let tieCorrection = 0;
+  let ti = 0;
+  while (ti < n) {
+    let tj = ti;
+    while (tj < n && combined[tj].v === combined[ti].v) tj++;
+    const t = tj - ti;
+    if (t > 1) tieCorrection += (t * t * t - t);
+    ti = tj;
+  }
+  const varU = (nx * ny / 12) * ((n + 1) - tieCorrection / (n * (n - 1)));
+  const muU  = (nx * ny) / 2;
+
+  let z = null;
+  let p_approx = null;
+
+  if (varU > 0) {
+    z = Math.round(((U - muU) / Math.sqrt(varU)) * 1000) / 1000;
+    // 양측 p 정규 근사: p ≈ 2 * Φ(-|z|)
+    p_approx = Math.round(2 * normalCDF(-Math.abs(z)) * 10000) / 10000;
+  }
+
+  const note = (nx < 20 || ny < 20)
+    ? '표본이 적어 p값은 참고용(정규근사 오차 큼)'
+    : '정규근사 (n≥20 기준 충족)';
+
+  return { U, z, p_approx, note };
+}
+
+// 표준정규분포 CDF 근사 (Abramowitz & Stegun, 최대오차 7.5e-8)
+function normalCDF(x) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989422820 * Math.exp(-x * x / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.7814779 + t * (-1.8212560 + t * 1.3302744))));
+  return x >= 0 ? 1 - p : p;
+}
+
+// ============================================================
+// IAA (평가자 간 일치도) 엔드포인트
+// ============================================================
+
+/**
+ * POST /api/iaa/set  (admin 전용)
+ * body: { n=60 }
+ * 층화 표본(지점 × 길이구간)으로 place_reviews에서 n건 추출해 iaa_items에 저장.
+ * 반환: { set_id, count }
+ */
+async function handleIaaSet(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireAdmin(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  let body;
+  try { body = await request.json(); } catch { body = {}; }
+  const n = Math.max(1, Math.min(parseInt(body?.n ?? 60, 10) || 60, 500));
+
+  // 전체 지점 목록
+  const { results: places } = await env.DB.prepare(
+    `SELECT id FROM review_places ORDER BY id`
+  ).all();
+
+  if (!places || places.length === 0) {
+    return jsonResponse({ error: 'no_places', message: '등록된 지점이 없습니다' }, 404, cors);
+  }
+
+  const BUCKETS = [
+    { minLen: 10,  maxLen: 49  },
+    { minLen: 50,  maxLen: 149 },
+    { minLen: 150, maxLen: 400 },
+  ];
+
+  const placeCount  = places.length;
+  const bucketCount = BUCKETS.length;
+  const perSlot     = Math.max(1, Math.ceil(n / (placeCount * bucketCount)));
+
+  const collected = [];
+
+  for (const place of places) {
+    for (const bucket of BUCKETS) {
+      const { results: rows } = await env.DB.prepare(`
+        SELECT id, body
+        FROM place_reviews
+        WHERE place_row_id = ?
+          AND LENGTH(COALESCE(body, '')) >= ?
+          AND LENGTH(COALESCE(body, '')) <= ?
+        ORDER BY RANDOM()
+        LIMIT ?
+      `).bind(place.id, bucket.minLen, bucket.maxLen, perSlot).all();
+
+      for (const row of (rows ?? [])) {
+        collected.push({ review_id: row.id, body: row.body });
+      }
+    }
+  }
+
+  // 전체 셔플 → n건 절단 (중복 review_id 제거)
+  for (let i = collected.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [collected[i], collected[j]] = [collected[j], collected[i]];
+  }
+  const seen = new Set();
+  const items = [];
+  for (const item of collected) {
+    if (!seen.has(item.review_id) && items.length < n) {
+      seen.add(item.review_id);
+      items.push(item);
+    }
+  }
+
+  if (items.length === 0) {
+    return jsonResponse({ error: 'no_reviews', message: '조건에 맞는 리뷰가 없습니다' }, 404, cors);
+  }
+
+  const set_id   = 'iaa_' + crypto.randomUUID().slice(0, 8);
+  const now      = new Date().toISOString();
+  const insertStmt = env.DB.prepare(
+    `INSERT INTO iaa_items (id, set_id, review_id, body, created_at) VALUES (?, ?, ?, ?, ?)`
+  );
+
+  const batch = items.map(item =>
+    insertStmt.bind(crypto.randomUUID(), set_id, item.review_id, item.body, now)
+  );
+  await env.DB.batch(batch);
+
+  return jsonResponse({ set_id, count: items.length }, 200, cors);
+}
+
+/**
+ * GET /api/iaa/sets  (researcher 이상)
+ * 세트 목록 + 메타(아이템 수, 평가자 수, 라벨 수).
+ * 반환: { sets:[{ set_id, created_at, item_count, annotator_count, label_count }] }
+ */
+async function handleIaaSets(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT
+        i.set_id,
+        MIN(i.created_at) AS created_at,
+        COUNT(DISTINCT i.id) AS item_count,
+        COUNT(DISTINCT l.annotator) AS annotator_count,
+        COUNT(l.id) AS label_count
+      FROM iaa_items i
+      LEFT JOIN iaa_labels l ON l.set_id = i.set_id
+      GROUP BY i.set_id
+      ORDER BY created_at DESC
+    `).all();
+
+    return jsonResponse({ sets: results ?? [] }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+/**
+ * GET /api/iaa/items?code=&set=  (공개 + 접근코드)
+ * set 미지정 시 최근 세트 사용. 셔플 후 반환.
+ * 반환: { set_id, items:[{ review_id, body }] }
+ */
+async function handleIaaItems(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const url  = new URL(request.url);
+  const code = url.searchParams.get('code') ?? '';
+  const codeErr = checkBlindTestCode(code, env, corsHeaders);
+  if (codeErr) return codeErr;
+
+  let set_id = url.searchParams.get('set') ?? '';
+
+  if (!set_id) {
+    const row = await env.DB.prepare(
+      `SELECT set_id FROM iaa_items ORDER BY created_at DESC LIMIT 1`
+    ).first();
+    if (!row) {
+      return jsonResponse({ error: 'no_set', message: '등록된 세트가 없습니다' }, 404, cors);
+    }
+    set_id = row.set_id;
+  }
+
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT review_id, body FROM iaa_items WHERE set_id = ?`
+    ).bind(set_id).all();
+
+    const items = results ?? [];
+    // Fisher-Yates 셔플
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+
+    return jsonResponse({ set_id, items }, 200, cors);
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+}
+
+/**
+ * POST /api/iaa/labels  (공개 + 접근코드)
+ * body: { code, nickname, set, labels:[{ review_id, label, note? }] }
+ * label∈{genuine,ad,ai,unsure} 외 skip. INSERT OR IGNORE.
+ * 반환: { saved, skipped }
+ */
+async function handleIaaLabels(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  let body;
+  try { body = await request.json(); } catch { body = {}; }
+
+  const code = body.code ?? '';
+  const codeErr = checkBlindTestCode(code, env, corsHeaders);
+  if (codeErr) return codeErr;
+
+  const nickname = (body.nickname ?? '').trim();
+  if (!nickname) {
+    return jsonResponse({ error: 'bad_request', message: 'nickname이 비어있습니다' }, 400, cors);
+  }
+
+  const set_id = (body.set ?? '').trim();
+  if (!set_id) {
+    return jsonResponse({ error: 'bad_request', message: 'set이 비어있습니다' }, 400, cors);
+  }
+
+  const VALID_LABELS = new Set(['genuine', 'ad', 'ai', 'unsure']);
+  const labels = Array.isArray(body.labels) ? body.labels : [];
+
+  const now  = new Date().toISOString();
+  const stmt = env.DB.prepare(
+    `INSERT OR IGNORE INTO iaa_labels (id, set_id, review_id, annotator, label, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+
+  const batch = [];
+  let skipped = 0;
+
+  for (const entry of labels) {
+    const review_id = (entry.review_id ?? '').trim();
+    const label     = (entry.label ?? '').trim();
+    if (!review_id || !VALID_LABELS.has(label)) {
+      skipped++;
+      continue;
+    }
+    batch.push(stmt.bind(
+      crypto.randomUUID(),
+      set_id,
+      review_id,
+      nickname,
+      label,
+      entry.note ?? null,
+      now
+    ));
+  }
+
+  if (batch.length > 0) {
+    try {
+      await env.DB.batch(batch);
+    } catch (err) {
+      return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+    }
+  }
+
+  return jsonResponse({ saved: batch.length, skipped }, 200, cors);
+}
+
+/**
+ * GET /api/iaa/results?set=  (researcher 이상)
+ * Fleiss' κ + 쌍별 Cohen's κ + raw_agreement + class_dist.
+ * 반환: { set, n_reviews_multi, annotators, fleiss_kappa, interpretation,
+ *         pairwise, raw_agreement, class_dist, note? }
+ */
+async function handleIaaResults(request, env, corsHeaders) {
+  const cors = corsHeaders || {};
+
+  const authResult = await requireResearcher(request, env);
+  if (authResult.error) {
+    return jsonResponse({ error: authResult.error, message: authResult.message }, authResult.status, cors);
+  }
+
+  const url   = new URL(request.url);
+  let set_id  = url.searchParams.get('set') ?? '';
+
+  // set 미지정 시 최근 세트
+  if (!set_id) {
+    try {
+      const row = await env.DB.prepare(
+        `SELECT set_id FROM iaa_items ORDER BY created_at DESC LIMIT 1`
+      ).first();
+      if (row) set_id = row.set_id;
+    } catch (err) {
+      return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+    }
+  }
+
+  if (!set_id) {
+    return jsonResponse({ error: 'no_set', message: '등록된 세트가 없습니다' }, 404, cors);
+  }
+
+  let labelRows;
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT review_id, annotator, label FROM iaa_labels WHERE set_id = ?`
+    ).bind(set_id).all();
+    labelRows = results ?? [];
+  } catch (err) {
+    return jsonResponse({ error: 'db_error', message: err.message }, 500, cors);
+  }
+
+  // --- 기본값 (데이터 부족) ---
+  const CATEGORIES = ['genuine', 'ad', 'ai', 'unsure'];
+
+  // annotator별 라벨 수 집계
+  const annotatorCountMap = new Map();
+  for (const row of labelRows) {
+    annotatorCountMap.set(row.annotator, (annotatorCountMap.get(row.annotator) ?? 0) + 1);
+  }
+  const annotators = [...annotatorCountMap.entries()].map(([name, count]) => ({ name, count }));
+
+  // review_id별 { annotator -> label } 맵 구성
+  const reviewMap = new Map(); // review_id -> Map<annotator, label>
+  for (const row of labelRows) {
+    if (!reviewMap.has(row.review_id)) reviewMap.set(row.review_id, new Map());
+    reviewMap.get(row.review_id).set(row.annotator, row.label);
+  }
+
+  // 2명 이상 라벨한 리뷰만 분석 대상
+  const multiReviews = [...reviewMap.entries()].filter(([, m]) => m.size >= 2);
+  const N = multiReviews.length;
+
+  // class_dist: 전체 라벨 분포
+  const classDist = { genuine: 0, ad: 0, ai: 0, unsure: 0 };
+  for (const row of labelRows) {
+    if (row.label in classDist) classDist[row.label]++;
+  }
+
+  // 데이터 부족
+  if (annotators.length < 2 || N < 1) {
+    return jsonResponse({
+      set: set_id,
+      n_reviews_multi: N,
+      annotators,
+      fleiss_kappa: null,
+      interpretation: null,
+      pairwise: [],
+      raw_agreement: null,
+      class_dist: classDist,
+      note: '분석 대상 리뷰 부족 (평가자 2명 이상, 공통 리뷰 1건 이상 필요)',
+    }, 200, cors);
+  }
+
+  // ─── Fleiss' κ (가변 평가자 수 버전) ─────────────────────────────────────────
+  // P̄ = 평균(P_i),  P_e = Σ_c p_c²
+  // P_i = (Σ_c n_ic² − n_i) / (n_i(n_i − 1))
+  // p_c = (Σ_i n_ic) / (Σ_i n_i)
+  // κ = (P̄ − P_e) / (1 − P_e)
+
+  let sumPi        = 0;
+  let totalLabels  = 0;               // Σ_i n_i
+  const catTotal   = new Map(CATEGORIES.map(c => [c, 0])); // Σ_i n_ic per category
+
+  for (const [, annotMap] of multiReviews) {
+    const ni = annotMap.size;
+    // 이 리뷰의 카테고리별 카운트
+    const catCount = new Map(CATEGORIES.map(c => [c, 0]));
+    for (const label of annotMap.values()) {
+      if (catCount.has(label)) catCount.set(label, catCount.get(label) + 1);
+    }
+
+    // P_i
+    let sumSq = 0;
+    for (const c of CATEGORIES) sumSq += catCount.get(c) ** 2;
+    const Pi = (sumSq - ni) / (ni * (ni - 1));
+    sumPi      += Pi;
+    totalLabels += ni;
+
+    for (const c of CATEGORIES) {
+      catTotal.set(c, catTotal.get(c) + catCount.get(c));
+    }
+  }
+
+  const Pbar = sumPi / N;
+  // p_c = catTotal_c / totalLabels
+  let Pe = 0;
+  for (const c of CATEGORIES) {
+    const pc = catTotal.get(c) / totalLabels;
+    Pe += pc * pc;
+  }
+
+  let fleiss_kappa = null;
+  if (1 - Pe !== 0) {
+    fleiss_kappa = Math.round(((Pbar - Pe) / (1 - Pe)) * 10000) / 10000;
+  }
+
+  // Landis-Koch 해석
+  function interpretKappa(k) {
+    if (k === null) return null;
+    if (k < 0)   return 'poor (우연보다 낮음)';
+    if (k < 0.2) return 'slight (매우 약함)';
+    if (k < 0.4) return 'fair (약함)';
+    if (k < 0.6) return 'moderate (보통)';
+    if (k < 0.8) return 'substantial (상당함)';
+    return 'almost perfect (거의 완전 일치)';
+  }
+  const interpretation = interpretKappa(fleiss_kappa);
+
+  // ─── 쌍별 Cohen's κ ──────────────────────────────────────────────────────────
+  const annotatorList = annotators.map(a => a.name);
+  const pairwise = [];
+
+  for (let ai = 0; ai < annotatorList.length; ai++) {
+    for (let bi = ai + 1; bi < annotatorList.length; bi++) {
+      const A = annotatorList[ai];
+      const B = annotatorList[bi];
+
+      // 둘 다 라벨한 리뷰
+      const shared = [];
+      for (const [, annotMap] of reviewMap) {
+        if (annotMap.has(A) && annotMap.has(B)) {
+          shared.push({ la: annotMap.get(A), lb: annotMap.get(B) });
+        }
+      }
+
+      const pairN = shared.length;
+      if (pairN === 0) {
+        pairwise.push({ a: A, b: B, kappa: null, n: 0 });
+        continue;
+      }
+
+      // 관측 일치 Po
+      let agree = 0;
+      const countA = new Map(CATEGORIES.map(c => [c, 0]));
+      const countB = new Map(CATEGORIES.map(c => [c, 0]));
+      for (const { la, lb } of shared) {
+        if (la === lb) agree++;
+        if (countA.has(la)) countA.set(la, countA.get(la) + 1);
+        if (countB.has(lb)) countB.set(lb, countB.get(lb) + 1);
+      }
+      const Po = agree / pairN;
+
+      // 기대 일치 Pe = Σ_c (nA_c/n) * (nB_c/n)
+      let pairPe = 0;
+      for (const c of CATEGORIES) {
+        pairPe += (countA.get(c) / pairN) * (countB.get(c) / pairN);
+      }
+
+      let pairKappa = null;
+      if (1 - pairPe !== 0) {
+        pairKappa = Math.round(((Po - pairPe) / (1 - pairPe)) * 10000) / 10000;
+      }
+
+      pairwise.push({ a: A, b: B, kappa: pairKappa, n: pairN });
+    }
+  }
+
+  // ─── raw_agreement ────────────────────────────────────────────────────────────
+  // 다중 라벨 리뷰 중 모든 평가자 라벨이 동일한 비율
+  let fullAgree = 0;
+  for (const [, annotMap] of multiReviews) {
+    const vals = [...annotMap.values()];
+    if (vals.every(v => v === vals[0])) fullAgree++;
+  }
+  const raw_agreement = Math.round((fullAgree / N) * 10000) / 10000;
+
+  return jsonResponse({
+    set: set_id,
+    n_reviews_multi: N,
+    annotators,
+    fleiss_kappa,
+    interpretation,
+    pairwise,
+    raw_agreement,
+    class_dist: classDist,
+  }, 200, cors);
 }
 
 // --- 시그니처 ---
