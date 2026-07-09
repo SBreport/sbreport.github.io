@@ -31,3 +31,6 @@ dist-dry/
 # macOS가 폴더마다 자동 생성하는 잡파일
 .DS_Store
 **/.DS_Store
+
+# Local Netlify folder
+.netlify

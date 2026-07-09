@@ -1,0 +1,7 @@
+# sbsupport.netlify.app — 베타 안내 페이지 배포 설정
+# 이 파일이 Netlify UI의 base directory 설정(옛 경로 deploy/sbs-notice)을 덮어씀.
+# 2026-06-23 deploy/ → share/ 개명 이후 UI 설정이 낡아 빌드가 실패하던 것을 여기서 고정.
+[build]
+  base = "share/sbs-notice"
+  publish = "."
+  command = ""
