@@ -19,6 +19,7 @@ _세션/
 pc_serp_*.html
 Program.lnk
 .gstack/
+.playwright-mcp/
 
 # 의존성·빌드 산출물 (Cloudflare/Nuxt가 자동 생성 — git 포함 금지)
 node_modules/
